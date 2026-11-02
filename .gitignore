@@ -1,0 +1,15 @@
+node_modules
+dist
+.astro
+.wrangler
+.env
+.dev.vars
+*.local
+.DS_Store
+# Made by `prisma generate` (the build script runs it).
+src/generated
+
+# Live platform docs fetched by `npm run platform -- docs`.
+.platform/
+src/crm/routeTree.gen.ts
+.claude/

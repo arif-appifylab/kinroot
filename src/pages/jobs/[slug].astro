@@ -1,0 +1,70 @@
+---
+/**
+ * One job. Rendered on the server from `GET /site-api/jobs/:slug`; a closed or
+ * unknown job answers a real 404, a database outage a 503. The description is plain text, rendered as
+ * paragraphs (never as HTML). An open job carries `JobPosting` structured
+ * data (src/lib/seo.ts) for job search.
+ */
+import NotFound from '../../components/NotFound.astro';
+import Base from '../../layouts/Base.astro';
+import {formatDate} from '../../lib/format';
+import {jobJsonLd} from '../../lib/seo';
+import type {Job} from '../../lib/types';
+import {backend, read} from '../../server/backend';
+import {pageContext} from '../../server/page';
+
+const slug = Astro.params.slug ?? '';
+// In PARALLEL: the job does not depend on the visitor.
+const [{site, viewer, abilities}, answer] = await Promise.all([
+  pageContext(Astro.request, Astro.response),
+  backend(Astro.request)
+    .jobs[':slug'].$get({param: {slug}})
+    .catch(() => null),
+]);
+const found = answer?.ok ? await read<{job: Job}>(Promise.resolve(answer)) : null;
+const job = found?.job ?? null;
+// 404 only when the job really is not there: a database outage is a 503 (try
+// again later), never a "this page does not exist" that search engines drop.
+const missing = !job && answer?.status === 404;
+if (!job) {
+  Astro.response.status = missing ? 404 : 503;
+  if (!missing) Astro.response.headers.set('Retry-After', '60');
+}
+const paragraphs = job?.description.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean) ?? [];
+const label = (t: string) => t.replace('-', ' ').replace(/^\w/, c => c.toUpperCase());
+---
+
+{
+  job ? (
+    <Base site={site} viewer={viewer} title={job.title} description={`${job.title} at ${job.company}, ${job.location}.`} jsonLd={jobJsonLd(job)}>
+      <main id="main" tabindex="-1" class="wrap narrow section">
+        <p><a href="/jobs/">← All jobs</a></p>
+        <p class="eyebrow">{job.company}</p>
+        <h1>{job.title}</h1>
+        <p class="job-tags">
+          <span class="chip">{label(job.type)}</span>
+          {job.remote && <span class="chip chip-tag">Remote</span>}
+          <span class="muted">{job.location} · Posted {formatDate(job.createdAt)}</span>
+        </p>
+        <div class="prose">{paragraphs.map(p => <p>{p}</p>)}</div>
+        <div class="actions">
+          <a class="button" href={job.applyUrl} rel="noopener noreferrer" target="_blank">Apply</a>
+          {abilities.manageJobs && <a class="button ghost" href="/dashboard/jobs">Manage jobs</a>}
+        </div>
+      </main>
+    </Base>
+  ) : missing ? (
+    <Base site={site} viewer={viewer} title="Page not found" noindex>
+      <NotFound site={site} />
+    </Base>
+  ) : (
+    <Base site={site} viewer={viewer} title="Not available right now" noindex>
+      <main id="main" tabindex="-1" class="wrap narrow section center">
+        <p class="eyebrow">Job board</p>
+        <h1>This job is not available right now</h1>
+        <p class="lede">Something went wrong on our side. Try again in a minute.</p>
+        <p><a class="button" href="/jobs/">All jobs</a></p>
+      </main>
+    </Base>
+  )
+}

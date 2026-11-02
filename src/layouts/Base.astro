@@ -1,0 +1,298 @@
+---
+/**
+ * Header, footer and <head> for every page. The page fetches the brand (`site`)
+ * and the visitor (`viewer`) with `pageContext` and passes them in, so the
+ * layout never makes an API call of its own.
+ *
+ * Sign-in pages live under `/account/*` on this site (prerendered); the
+ * dashboard is `/dashboard`. Plain `<a href>` to both.
+ *
+ * Navigation between public pages is CLIENT-SIDE (`<ClientRouter />`): real
+ * server-rendered pages (best for search), swapped in without a reload and
+ * prefetched first (astro.config.mjs). Page scripts run on `astro:page-load`
+ * (performance.md "Scripts with the ClientRouter"); the portal has no router, so
+ * it is a full load. Only links to PRERENDERED pages carry `data-astro-prefetch` (fetched on hover;
+ * the header nav as soon as it is on screen). Pages rendered per visit
+ * (`/jobs/*`, `/dashboard`) answer `no-store`: a prefetch of them is thrown away.
+ *
+ * Structured data (JSON-LD, src/lib/seo.ts): the home page gets `WebSite` +
+ * `Organization`; a page passes its own in `jsonLd` (a post, a job).
+ */
+import '../styles/global.css';
+
+import {ClientRouter} from 'astro:transitions';
+
+import BrandMark from '../components/BrandMark.astro';
+import {NAV, SITE, withName} from '../content/site';
+import type {Site, Viewer} from '../lib/types';
+import {initials} from '../lib/format';
+import {absoluteUrl, type JsonLd, jsonLdText, siteJsonLd} from '../lib/seo';
+import {config} from '../platform/config';
+
+interface Props {
+  site: Site | null;
+  viewer: Viewer;
+  /** The page's own name; the tab shows "<title> · <site>". Omit on home. */
+  title?: string;
+  /** The meta description (~150 characters). Default: `SITE.description`. */
+  description?: string;
+  /** A social card image, 1200×630: a `/path` on this site or an https URL. */
+  image?: string | null;
+  /** Text for the social image (`og:image:alt`). */
+  imageAlt?: string;
+  /** `article` on a blog post (adds its dates), `website` elsewhere. */
+  type?: 'website' | 'article';
+  publishedAt?: Date;
+  updatedAt?: Date;
+  /**
+   * A PRERENDERED page (`export const prerender = true`): built once, served
+   * as a static file, so it knows no visitor. The header then renders the
+   * signed-out view and the browser fills in the visitor (`/site-api/me`) and
+   * a renamed site (`/site-api/site`) after load.
+   */
+  isStatic?: boolean;
+  /** Keep the page out of search results (account pages, private pages). */
+  noindex?: boolean;
+  /** The page URL carries a secret (a reset or confirmation token): send no Referer. */
+  secretInUrl?: boolean;
+  /** The page's own structured data (src/lib/seo.ts): `postJsonLd(…)`, `jobJsonLd(…)`. */
+  jsonLd?: JsonLd;
+}
+
+const {
+  site,
+  viewer,
+  title,
+  description: pageDescription,
+  image,
+  imageAlt,
+  type = 'website',
+  publishedAt,
+  updatedAt,
+  isStatic = false,
+  noindex = false,
+  secretInUrl = false,
+  jsonLd,
+} = Astro.props;
+const name = site?.name ?? 'My site';
+const fullTitle = title ? `${title} · ${name}` : name;
+const description = pageDescription ?? withName(SITE.description, name);
+const path = Astro.url.pathname;
+/** Every page URL ends with `/`: prerendered pages are served there (`/about` redirects to `/about/`). */
+const withSlash = (p: string) => (p.endsWith('/') ? p : `${p}/`);
+// One URL per page for search engines: the path without its query (filters, paging).
+const canonical = noindex || secretInUrl ? null : absoluteUrl(withSlash(path));
+const socialImage = image ? absoluteUrl(image) : null;
+const active = (href: string) => (href === '/' ? path === '/' : withSlash(path).startsWith(withSlash(href)));
+// Back to this page after signing in. A PATH only (`safeNext` refuses anything else).
+const back = encodeURIComponent(path.startsWith('/account') ? '/dashboard' : `${path}${isStatic ? '' : Astro.url.search}`);
+// The editor Preview's gateway drops cookies: the server never sees the session
+// there, so every page fills the visitor in in the browser, like a prerendered one.
+const hydrate = isStatic || (config.preview && viewer.state !== 'user');
+// The home page tells search engines the site's name; other pages bring their own.
+const indexable = !noindex && !secretInUrl;
+const structured = indexable
+  ? [...(path === '/' ? [siteJsonLd({name, logo: site?.logo}, description, SITE.lang)] : []), ...(jsonLd ? [jsonLd] : [])]
+  : [];
+---
+
+<!doctype html>
+<html lang={SITE.lang}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    {canonical && <link rel="canonical" href={canonical} />}
+    {noindex && <meta name="robots" content="noindex" />}
+    {secretInUrl && <meta name="referrer" content="no-referrer" />}
+    <meta property="og:site_name" content={name} />
+    <meta property="og:type" content={type} />
+    <meta property="og:title" content={title ?? name} />
+    <meta property="og:description" content={description} />
+    {canonical && <meta property="og:url" content={canonical} />}
+    {socialImage && <meta property="og:image" content={socialImage} />}
+    {socialImage && imageAlt && <meta property="og:image:alt" content={imageAlt} />}
+    {type === 'article' && publishedAt && <meta property="article:published_time" content={publishedAt.toISOString()} />}
+    {type === 'article' && updatedAt && <meta property="article:modified_time" content={updatedAt.toISOString()} />}
+    <meta name="twitter:card" content={socialImage ? 'summary_large_image' : 'summary'} />
+    <meta name="twitter:title" content={title ?? name} />
+    <meta name="twitter:description" content={description} />
+    {socialImage && <meta name="twitter:image" content={socialImage} />}
+    <meta name="color-scheme" content="light dark" />
+    {site?.favIcon ? <link rel="icon" href={site.favIcon} /> : <link rel="icon" href="/favicon.svg" type="image/svg+xml" />}
+    <link rel="alternate" type="application/rss+xml" title={`${name} blog`} href="/rss.xml" />
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+    {structured.map(data => <script type="application/ld+json" set:html={jsonLdText(data)} />)}
+    {/* Client navigation: a click swaps the next page in without a reload (prefetched on hover). The
+        portal has no router, so a link to it is a normal page load. Page scripts run on `astro:page-load`. */}
+    <ClientRouter />
+  </head>
+  <body data-viewer={viewer.state} data-static={hydrate ? '1' : undefined}>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap site-header-inner">
+        <a href="/" class="brand" data-astro-prefetch>
+          <BrandMark site={site} />
+          <span class="brand-name" data-brand-text="{name}" data-built-name={name}>{name}</span>
+        </a>
+        <nav class="site-nav" aria-label="Main">
+          {NAV.map(item => (
+            <a
+              href={item.href}
+              class:list={{active: active(item.href)}}
+              data-astro-prefetch={item.prefetch === false ? undefined : 'viewport'}>
+              {item.label}
+            </a>
+          ))}
+          <a
+            href="/dashboard"
+            class:list={{active: active('/dashboard')}}
+            data-user-only
+            hidden={viewer.state !== 'user'}>
+            Dashboard
+          </a>
+        </nav>
+        <div class="session" data-session>
+          {viewer.state === 'user' ? (
+            <>
+              <span class="viewer" title={viewer.name ?? ''}>
+                <span class="avatar-fallback" aria-hidden="true">
+                  {initials(viewer.name ?? '')}
+                </span>
+              </span>
+              <button class="button link small-button" type="button" data-logout>
+                Sign out
+              </button>
+            </>
+          ) : (
+            <>
+              <a class="button link small-button" href={`/account/login/?next=${back}`} data-astro-prefetch>
+                Sign in
+              </a>
+              <a class="button small-button" href={`/account/register/?next=${back}`} data-astro-prefetch>
+                Create account
+              </a>
+            </>
+          )}
+        </div>
+      </div>
+    </header>
+
+    <slot />
+
+    <footer class="site-footer">
+      <div class="wrap site-footer-inner">
+        <div class="footer-brand">
+          <a href="/" class="brand" data-astro-prefetch>
+            <BrandMark site={site} />
+            <span class="footer-brand-name" data-brand-text="{name}">{name}</span>
+          </a>
+          <p data-brand-text={SITE.description}>{withName(SITE.description, name)}</p>
+        </div>
+        <nav class="footer-col" aria-label="Footer">
+          <p class="footer-title">Explore</p>
+          <ul>
+            {NAV.map(item => (
+              <li>
+                <a href={item.href} data-astro-prefetch={item.prefetch === false ? undefined : ''}>
+                  {item.label}
+                </a>
+              </li>
+            ))}
+            <li>
+              <a href="/rss.xml">RSS</a>
+            </li>
+          </ul>
+        </nav>
+        <nav class="footer-col" aria-label="Account">
+          <p class="footer-title">Account</p>
+          <ul>
+            <li data-guest-only hidden={viewer.state === 'user'}>
+              <a href={`/account/login/?next=${back}`} data-astro-prefetch>Sign in</a>
+            </li>
+            <li data-guest-only hidden={viewer.state === 'user'}>
+              <a href={`/account/register/?next=${back}`} data-astro-prefetch>Create account</a>
+            </li>
+            <li data-user-only hidden={viewer.state !== 'user'}>
+              <a href="/dashboard">Dashboard</a>
+            </li>
+            <li>
+              <a href="/account/forgot/" data-astro-prefetch>Forgot your password?</a>
+            </li>
+          </ul>
+        </nav>
+      </div>
+      <div class="wrap site-footer-bottom">
+        <span data-brand-text="© {year} {name}">© {new Date().getUTCFullYear()} {name}</span>
+      </div>
+    </footer>
+
+    <script>
+      import {logout, refreshSession} from '../platform/browser';
+      import {hydrateStaticPage} from '../platform/static-page';
+      import {notifyPaymentOpener} from '../lib/checkout-session';
+
+      // Every button shows when it is busy (AGENTS.md "Buttons and forms").
+      const busy = (button: HTMLButtonElement, label?: string) => {
+        button.disabled = true;
+        button.setAttribute('aria-busy', 'true');
+        if (label) button.textContent = label;
+      };
+
+      // Each page, the first load and every client navigation (ClientRouter): the body is new.
+      document.addEventListener('astro:page-load', () => {
+        // Back from the payment provider INSIDE the payment window: tell the checkout page, close.
+        notifyPaymentOpener();
+        if (document.body.dataset.static === '1') void hydrateStaticPage();
+
+        // The server saw an expired access token but a refresh cookie: refresh
+        // ONCE in the browser (the server never rotates it), then re-render signed in.
+        if (document.body.dataset.viewer === 'returning') {
+          const key = 'site:refreshed';
+          let first = true;
+          try {
+            first = !sessionStorage.getItem(key);
+            sessionStorage.setItem(key, '1');
+          } catch {
+            // Storage blocked: no way to remember the reload, so never reload
+            // (it would repeat on every load). The visitor signs in again.
+            first = false;
+          }
+          if (first) void refreshSession().then(ok => ok && window.location.reload());
+        } else {
+          try {
+            sessionStorage.removeItem('site:refreshed');
+          } catch {
+            // Storage blocked: nothing to clear.
+          }
+        }
+
+        document.querySelectorAll<HTMLButtonElement>('[data-logout]').forEach(button =>
+          button.addEventListener('click', () => {
+            busy(button, 'Signing out…');
+            void logout();
+          })
+        );
+      });
+
+      // Once for the document (it stays across navigations):
+
+      // A search / filter form (GET) navigates: show its button busy until the next page.
+      document.addEventListener('submit', event => {
+        const form = event.target;
+        if (event.defaultPrevented || !(form instanceof HTMLFormElement)) return;
+        if (form.method.toLowerCase() !== 'get') return;
+        if (event.submitter instanceof HTMLButtonElement) busy(event.submitter);
+      });
+      // Back/forward restores a page from memory (a full load's bfcache): give its buttons back.
+      window.addEventListener('pageshow', event => {
+        if (!event.persisted) return;
+        document.querySelectorAll<HTMLButtonElement>('button[aria-busy="true"]').forEach(button => {
+          button.disabled = false;
+          button.removeAttribute('aria-busy');
+        });
+      });
+    </script>
+  </body>
+</html>

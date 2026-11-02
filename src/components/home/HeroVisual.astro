@@ -1,0 +1,82 @@
+---
+/**
+ * The home hero's picture: a small browser-framed dashboard, drawn in HTML and
+ * CSS (home.css, `.hv-*`) so it follows the theme. Decorative: the whole thing
+ * is `aria-hidden`; its labels come from `HOME.visual` in `src/content/site.ts`.
+ */
+import {HOME} from '../../content/site';
+import Icon from './Icon.astro';
+
+interface Props {
+  /** The site name, shown in the mock sidebar. */
+  name: string;
+}
+
+const {name} = Astro.props;
+const v = HOME.visual;
+// A gentle upward line for the mini chart (x 0–300, y 0–100, lower is higher).
+const points = [
+  [0, 78], [25, 72], [50, 74], [75, 62], [100, 65], [125, 54], [150, 57],
+  [175, 44], [200, 47], [225, 36], [250, 30], [275, 33], [300, 20],
+];
+const line = points.map(([x, y]) => `${x},${y}`).join(' ');
+const area = `0,100 ${line} 300,100`;
+---
+
+<div class="hv" aria-hidden="true">
+  <div class="hv-bar">
+    <span class="hv-dots"><i></i><i></i><i></i></span>
+    <span class="hv-url"><Icon name="lock" size={12} />/dashboard</span>
+  </div>
+  <div class="hv-body">
+    <aside class="hv-side">
+      <div class="hv-brand">
+        <span class="hv-logo"></span>
+        <span class="hv-brand-name" data-brand-text="{name}">{name}</span>
+      </div>
+      <ul>
+        {v.nav.map((item, i) => <li class:list={{active: i === 0}}><span class="hv-nav-dot"></span>{item}</li>)}
+      </ul>
+    </aside>
+    <div class="hv-main">
+      <div class="hv-head">
+        <span class="hv-title">{v.title}</span>
+        <span class="hv-avatar"></span>
+      </div>
+      <div class="hv-stats">
+        {
+          v.stats.map(stat => (
+            <div class="hv-stat">
+              <span class="hv-stat-label">{stat.label}</span>
+              <span class="hv-stat-value">{stat.value}</span>
+              <span class="hv-stat-trend">{stat.trend}</span>
+            </div>
+          ))
+        }
+      </div>
+      <div class="hv-chart">
+        <span class="hv-chart-label">{v.chart}</span>
+        <svg viewBox="0 0 300 100" preserveAspectRatio="none" focusable="false">
+          <line class="hv-grid" x1="0" y1="25" x2="300" y2="25" />
+          <line class="hv-grid" x1="0" y1="50" x2="300" y2="50" />
+          <line class="hv-grid" x1="0" y1="75" x2="300" y2="75" />
+          <polygon class="hv-area" points={area} />
+          <polyline class="hv-line" points={line} vector-effect="non-scaling-stroke" />
+        </svg>
+      </div>
+      <div class="hv-table">
+        {
+          v.rows.map(row => (
+            <div class="hv-row">
+              <span class="hv-row-name">
+                <span class="hv-row-icon" />
+                {row.name}
+              </span>
+              <span class:list={['hv-chip', `hv-chip-${row.tone}`]}>{row.status}</span>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </div>
+</div>

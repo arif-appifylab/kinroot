@@ -1,0 +1,238 @@
+---
+/**
+ * Sign in. PRERENDERED (a file, no server work). The usual way is a 6-digit code
+ * emailed to the account (`/site-api/auth/code`, then `/code/verify`): no password
+ * needed, and the site's admin signs in this way. "Use a password instead" posts to
+ * `/site-api/auth/login` for an account that set one. `?next=<path>` is where to go
+ * afterwards (checked: same-site paths only). With two-step sign-in on, the first
+ * step answers a challenge and the authenticator step
+ * (`/site-api/auth/login/two-factor`) finishes it; `?mfa=<challenge>` opens that
+ * step directly (a one-click sign-in from the dashboard, owner.ts). `?notice=` explains
+ * why the visitor landed here (a dashboard link that expired).
+ */
+import Base from '../../layouts/Base.astro';
+import {staticContext} from '../../server/page';
+
+export const prerender = true;
+
+const {site, viewer} = await staticContext(Astro.request);
+---
+
+<Base site={site} viewer={viewer} isStatic noindex title="Sign in">
+  <main id="main" tabindex="-1" class="wrap auth-wrap section">
+    <div class="card auth-card">
+      <h1 id="login-title">Sign in</h1>
+      <p class="notice notice-error" id="login-notice" role="alert" hidden></p>
+
+      <!-- 1. The usual way: a code by email (no password needed). -->
+      <form id="email-form" class="auth-form" novalidate>
+        <p class="muted" id="email-lead">Enter your email and we'll send you a 6-digit code. No password needed.</p>
+        <div class="field">
+          <label for="login-email">Email</label>
+          <input id="login-email" name="email" type="email" autocomplete="username" inputmode="email" placeholder="name@example.com" />
+        </div>
+        <p class="notice" data-form-status hidden></p>
+        <button class="button" type="submit">Email me a code</button>
+      </form>
+
+      <!-- 2. The emailed code. -->
+      <form id="email-code-form" class="auth-form" novalidate hidden>
+        <p class="muted" id="email-code-lead" aria-live="polite"></p>
+        <div class="field">
+          <label for="email-code">Code from the email</label>
+          <input id="email-code" name="code" type="text" autocomplete="one-time-code" inputmode="numeric" maxlength="7" spellcheck="false" />
+        </div>
+        <p class="notice" data-form-status hidden></p>
+        <button class="button" type="submit">Sign in</button>
+        <p class="auth-links">
+          <button class="button link" type="button" id="code-resend">Send a new code</button>
+          <span aria-hidden="true">·</span>
+          <button class="button link" type="button" id="code-other-email">Use another email</button>
+        </p>
+      </form>
+
+      <!-- Or a password, for an account that set one. -->
+      <form id="login-form" class="auth-form" novalidate hidden>
+        <div class="field">
+          <label for="login-password-email">Email</label>
+          <input id="login-password-email" name="email" type="email" autocomplete="username" inputmode="email" placeholder="name@example.com" />
+        </div>
+        <div class="field">
+          <label for="login-password">Password</label>
+          <div class="pw-input">
+            <input id="login-password" name="password" type="password" autocomplete="current-password" />
+            <button class="pw-reveal" type="button" data-reveal-password aria-controls="login-password" aria-pressed="false" aria-label="Show password" hidden>Show</button>
+          </div>
+        </div>
+        <p class="notice" data-form-status hidden></p>
+        <button class="button" type="submit">Sign in</button>
+      </form>
+
+      <!-- Two-step sign-in: the authenticator code, after a password, an emailed code or one click. -->
+      <form id="code-form" class="auth-form" novalidate hidden>
+        <p class="muted">Open your authenticator app and enter the 6-digit code for this site. Lost your phone? Enter one of your recovery codes instead.</p>
+        <div class="field">
+          <label for="login-code">Code</label>
+          <input id="login-code" name="code" type="text" autocomplete="one-time-code" inputmode="numeric" maxlength="20" spellcheck="false" />
+        </div>
+        <p class="notice" data-form-status hidden></p>
+        <button class="button" type="submit">Continue</button>
+      </form>
+
+      <p class="auth-links" id="login-links">
+        <button class="button link" type="button" id="use-password">Use a password instead</button>
+        <button class="button link" type="button" id="use-code" hidden>Email me a code instead</button>
+        <span aria-hidden="true">·</span>
+        <a href="/account/forgot/">Forgot your password?</a>
+        <span aria-hidden="true">·</span>
+        <a href="/account/register/" data-keep-next>Create an account</a>
+      </p>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import {nextPath, signedIn} from '../../lib/account';
+  import {bindForm, postJson} from '../../lib/form';
+  import {bindPasswordReveal} from '../../lib/password-checks';
+  import {AUTH_RULES, rules} from '../../lib/rules';
+  import {siteFetch} from '../../platform/browser';
+
+  // Client navigation (ClientRouter): a bundled script runs once, so this page's code runs on
+  // every `astro:page-load` (the first load, each navigation, back/forward) while it is this page.
+  document.addEventListener('astro:page-load', () => {
+    if (!document.querySelector('#email-form')) return;
+    bindPasswordReveal(document);
+    const NOTICES: Record<string, string> = {
+      'owner-link': 'That sign-in link has expired or was already used. Open the portal again from the dashboard, or sign in below.',
+      suspended: 'This account is suspended. Contact the site owner.',
+    };
+
+    const params = new URLSearchParams(window.location.search);
+    const next = nextPath();
+    const notice = params.get('notice');
+    const $ = <T extends HTMLElement>(id: string) => document.querySelector<T>(`#${id}`)!;
+    const noticeBox = $('login-notice');
+    if (notice && NOTICES[notice]) {
+      noticeBox.textContent = NOTICES[notice];
+      noticeBox.hidden = false;
+    }
+    document.querySelectorAll<HTMLAnchorElement>('[data-keep-next]').forEach(a => {
+      a.href = `${a.pathname}?next=${encodeURIComponent(next)}`;
+    });
+
+    const emailForm = $<HTMLFormElement>('email-form');
+    const emailCodeForm = $<HTMLFormElement>('email-code-form');
+    const loginForm = $<HTMLFormElement>('login-form');
+    const codeForm = $<HTMLFormElement>('code-form');
+    const forms = [emailForm, emailCodeForm, loginForm, codeForm];
+    let challenge = '';
+    let email = '';
+
+    function show(form: HTMLFormElement, title: string, focus: string) {
+      for (const f of forms) f.hidden = f !== form;
+      $('login-title').textContent = title;
+      $('use-password').hidden = form !== emailForm;
+      $('use-code').hidden = form !== loginForm;
+      $('login-links').hidden = form === codeForm || form === emailCodeForm;
+      $<HTMLInputElement>(focus).focus();
+    }
+
+    /** Two-step sign-in: keep the challenge in memory only, ask for the authenticator code. */
+    function askTwoFactor(value: string) {
+      challenge = value;
+      noticeBox.hidden = true;
+      show(codeForm, 'Enter your code', 'login-code');
+    }
+
+    /** After a one-click sign-in from the dashboard when two-step sign-in is on (`?mfa=`, 5 minutes). */
+    const mfa = params.get('mfa');
+    if (mfa) {
+      history.replaceState(history.state, '', window.location.pathname + (params.get('next') ? `?next=${encodeURIComponent(next)}` : ''));
+      askTwoFactor(mfa);
+    } else {
+      void signedIn().then(yes => yes && window.location.replace(next));
+    }
+
+    const done = (data: {next?: unknown} | null | undefined) => ({ok: true as const, redirect: typeof data?.next === 'string' ? data.next : next});
+
+    async function sendCode(address: string) {
+      const {result} = await postJson(siteFetch, '/site-api/auth/code', {email: address, next});
+      if (result.ok) {
+        email = address;
+        $('email-code-lead').textContent = `If ${address} has an account here, we sent it a 6-digit code. It works for 10 minutes. Check your spam folder if it isn't there.`;
+      }
+      return result;
+    }
+
+    bindForm(emailForm, {
+      rules: {email: AUTH_RULES.email},
+      pendingLabel: 'Sending…',
+      async submit(values) {
+        const result = await sendCode(String(values.email).trim());
+        if (result.ok) {
+          show(emailCodeForm, 'Check your email', 'email-code');
+          return {ok: true};
+        }
+        return result;
+      },
+    });
+
+    bindForm(emailCodeForm, {
+      rules: {code: [rules.required('Enter the 6-digit code from the email.')]},
+      pendingLabel: 'Checking…',
+      async submit(values) {
+        const {result, data} = await postJson(siteFetch, '/site-api/auth/code/verify', {email, code: values.code, next});
+        if (result.ok && data?.twoFactor === true && typeof data.challenge === 'string') {
+          askTwoFactor(data.challenge);
+          return {ok: true};
+        }
+        return result.ok ? done(data) : result;
+      },
+    });
+
+    $('code-resend').addEventListener('click', async () => {
+      const result = await sendCode(email);
+      const status = emailCodeForm.querySelector<HTMLElement>('[data-form-status]')!;
+      status.textContent = result.ok ? 'We sent a new code. Only the newest one works.' : result.message ?? 'That did not work. Try again in a moment.';
+      status.hidden = false;
+    });
+    $('code-other-email').addEventListener('click', () => show(emailForm, 'Sign in', 'login-email'));
+    $('use-password').addEventListener('click', () => {
+      $<HTMLInputElement>('login-password-email').value = $<HTMLInputElement>('login-email').value;
+      show(loginForm, 'Sign in with your password', 'login-password-email');
+    });
+    $('use-code').addEventListener('click', () => {
+      $<HTMLInputElement>('login-email').value = $<HTMLInputElement>('login-password-email').value;
+      show(emailForm, 'Sign in', 'login-email');
+    });
+
+    bindForm(loginForm, {
+      rules: {email: AUTH_RULES.email, password: AUTH_RULES.password},
+      pendingLabel: 'Signing in…',
+      async submit(values) {
+        const {result, data} = await postJson(siteFetch, '/site-api/auth/login', {...values, next});
+        if (result.ok && data?.twoFactor === true && typeof data.challenge === 'string') {
+          askTwoFactor(data.challenge);
+          return {ok: true};
+        }
+        // A wrong email or password is ONE generic line (the server never says which).
+        return result.ok ? done(data) : result;
+      },
+    });
+
+    bindForm(codeForm, {
+      rules: {code: [rules.required('Enter the 6-digit code from your app, or a recovery code.')]},
+      pendingLabel: 'Checking…',
+      async submit(values) {
+        const {result, data, res} = await postJson(siteFetch, '/site-api/auth/login/two-factor', {...values, challenge, next});
+        if (res?.status === 401) {
+          // The challenge expired (5 minutes) or the password changed: start again.
+          window.location.replace(`/account/login/?next=${encodeURIComponent(next)}`);
+          return result;
+        }
+        return result.ok ? done(data) : result;
+      },
+    });
+  });
+</script>

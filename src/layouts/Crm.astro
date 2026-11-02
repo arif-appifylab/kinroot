@@ -1,0 +1,76 @@
+---
+/**
+ * The <head> and body for Kinroot's signed-in CRM (`/crm/*`). Like the template's App
+ * layout (full height, no site header or footer, `noindex`), but with Kinroot's own design:
+ * its Tailwind styles (src/crm/styles.css), its theme (the `dark` class, stored as
+ * `kinroot-theme`) and its brand colours.
+ */
+import '../crm/styles.css';
+
+import {BRAND, type Brand} from '../crm/lib/brand';
+import {themeBootScript} from '../crm/lib/theme';
+import type {Viewer} from '../lib/types';
+
+interface Props {
+  brand: Brand;
+  viewer: Viewer;
+  /** The tab title until the app sets its own ("Deals · Acme"). */
+  title: string;
+}
+
+const {brand, viewer, title} = Astro.props;
+
+// Kinroot's theme boot (themeBootScript in src/crm/lib/theme.ts): a constant, never data.
+const THEME_BOOT = themeBootScript;
+const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(THEME_BOOT));
+Astro.csp?.insertScriptHash(`sha256-${btoa(String.fromCharCode(...new Uint8Array(digest)))}`);
+const name = brand.name || BRAND.name;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{`${title} · ${name}`}</title>
+    <meta name="description" content={`${name}: ${BRAND.description}`} />
+    <meta name="application-name" content={name} />
+    <meta name="theme-color" content={brand.primary || BRAND.primary} />
+    <!-- Signed-in screens are never search results. -->
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href={brand.logo || '/kinroot-mark.svg'} />
+    <!-- The company's own colours (Settings → Branding), as a stylesheet from this site: the CSP allows no inline style. -->
+    {(brand.primary || brand.secondary) && <link rel="stylesheet" href="/site-api/public/brand.css" />}
+    <!-- Before the first paint, so the page never flashes the wrong theme (src/crm/lib/theme.ts).
+         Inline on purpose; its hash is added to this page's CSP above, so nothing else inline runs. -->
+    <script is:inline set:html={THEME_BOOT} />
+  </head>
+  <body data-viewer={viewer.state}>
+    <slot />
+
+    <script>
+      import {refreshSession} from '../platform/browser';
+
+      // As in the template's App layout: the server saw an expired access token but a refresh
+      // cookie. Refresh ONCE in the browser, then re-render signed in.
+      if (document.body.dataset.viewer === 'returning') {
+        const key = 'site:refreshed';
+        let first = true;
+        try {
+          first = !sessionStorage.getItem(key);
+          sessionStorage.setItem(key, '1');
+        } catch {
+          // Storage blocked: no way to remember the reload, so never reload.
+          first = false;
+        }
+        if (first) void refreshSession().then(ok => ok && window.location.reload());
+      } else {
+        try {
+          sessionStorage.removeItem('site:refreshed');
+        } catch {
+          // Storage blocked: nothing to clear.
+        }
+      }
+    </script>
+  </body>
+</html>

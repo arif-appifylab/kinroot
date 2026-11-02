@@ -1,0 +1,86 @@
+---
+/**
+ * The checkout page's question before paying (`/checkout/?price=…`, docs/agent/payments.md),
+ * as a plain form posting to `/site-api/checkout`, so it works without JavaScript: which way to
+ * pay (several are set up), or whether to pay now without a free trial already used (`noTrial`).
+ * With JavaScript the page's checkout island asks instead (the trial question keeps this form).
+ */
+import type {PaymentGateway} from '../../platform/payments';
+
+interface Props {
+  ask: {
+    price: string;
+    quantity: string;
+    successPath: string;
+    cancelPath: string;
+    email: string;
+    gateway: string;
+    trialUsed: boolean;
+  };
+  /** The ways to pay to choose from (empty: no question). */
+  gateways: PaymentGateway[];
+}
+
+const {ask, gateways} = Astro.props;
+---
+
+<form class="checkout-ask" method="post" action="/site-api/checkout" novalidate data-buy>
+  <input type="hidden" name="price" value={ask.price} />
+  <input type="hidden" name="quantity" value={ask.quantity} />
+  <input type="hidden" name="successPath" value={ask.successPath} />
+  <input type="hidden" name="cancelPath" value={ask.cancelPath} />
+  {ask.email && <input type="hidden" name="email" value={ask.email} />}
+  {ask.trialUsed && <input type="hidden" name="noTrial" value="1" />}
+  {
+    ask.gateway ? (
+      <input type="hidden" name="gateway" value={ask.gateway} />
+    ) : gateways.length > 1 ? (
+      <fieldset class="checkout-ways">
+        <legend>How do you want to pay?</legend>
+        {gateways.map((g, i) => (
+          <label class="checkout-way">
+            <input type="radio" name="gateway" value={g.slug} checked={i === 0} />
+            <span>{g.name}</span>
+          </label>
+        ))}
+      </fieldset>
+    ) : null
+  }
+  <button class="button" type="submit" data-pending-label="Opening checkout…" aria-describedby="checkout-ask-status">
+    {ask.trialUsed ? 'Continue without the trial' : 'Continue'}
+  </button>
+  <p class="form-status" id="checkout-ask-status" data-form-status role="status" aria-live="polite"></p>
+</form>
+
+<style>
+  .checkout-ask {
+    display: grid;
+    justify-items: start;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+  .checkout-ways {
+    display: grid;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    width: 100%;
+  }
+  .checkout-ways legend {
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+  }
+  .checkout-way {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--line, currentColor);
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  .checkout-way:has(input:checked) {
+    border-color: var(--accent);
+  }
+</style>

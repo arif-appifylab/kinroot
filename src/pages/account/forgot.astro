@@ -1,0 +1,54 @@
+---
+/**
+ * Forgot password. PRERENDERED; posts to `/site-api/auth/forgot-password`,
+ * which always answers the same (it never says whether the email has an
+ * account). The email itself is relayed by the platform.
+ */
+import Base from '../../layouts/Base.astro';
+import {staticContext} from '../../server/page';
+
+export const prerender = true;
+
+const {site, viewer} = await staticContext(Astro.request);
+---
+
+<Base site={site} viewer={viewer} isStatic noindex title="Reset your password">
+  <main id="main" tabindex="-1" class="wrap auth-wrap section">
+    <div class="card auth-card">
+      <h1>Reset your password</h1>
+      <p class="muted">Enter your email and we will send you a link to choose a new password.</p>
+      <form id="forgot-form" class="auth-form" novalidate>
+        <div class="field">
+          <label for="forgot-email">Email</label>
+          <input id="forgot-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="name@example.com" />
+        </div>
+        <p class="notice" data-form-status hidden></p>
+        <button class="button" type="submit">Send the link</button>
+      </form>
+      <p class="auth-links"><a href="/account/login/">Back to sign in</a></p>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import {replaceWithMessage} from '../../lib/account';
+  import {bindForm, postJson} from '../../lib/form';
+  import {AUTH_RULES} from '../../lib/rules';
+  import {siteFetch} from '../../platform/browser';
+
+  // Client navigation (ClientRouter): a bundled script runs once, so this page's code runs on
+  // every `astro:page-load` (the first load, each navigation, back/forward) while it is this page.
+  document.addEventListener('astro:page-load', () => {
+    if (!document.querySelector('#forgot-form')) return;
+    const form = document.querySelector<HTMLFormElement>('#forgot-form')!;
+    bindForm(form, {
+      rules: {email: AUTH_RULES.email},
+      pendingLabel: 'Sending…',
+      async submit(values) {
+        const {result} = await postJson(siteFetch, '/site-api/auth/forgot-password', values);
+        if (result.ok) replaceWithMessage(form, result.message ?? 'Check your inbox.');
+        return result;
+      },
+    });
+  });
+</script>

@@ -1,0 +1,85 @@
+---
+/**
+ * One post, as an article: `/blog/<file name>`, one page per Markdown file in
+ * `src/content/blog/`, PRERENDERED. The Markdown is this repo's own content
+ * (trusted); never paste HTML from elsewhere into a post. An unknown slug is
+ * not built, so it answers the site's 404.
+ */
+import {getImage} from 'astro:assets';
+import {render} from 'astro:content';
+
+import Cover from '../../components/Cover.astro';
+import PostRow from '../../components/PostRow.astro';
+import Base from '../../layouts/Base.astro';
+import {formatDate, publishedPosts, readingMinutes} from '../../lib/posts';
+import {postJsonLd} from '../../lib/seo';
+import {staticContext} from '../../server/page';
+
+export const prerender = true;
+
+export async function getStaticPaths() {
+  const posts = await publishedPosts();
+  return posts.map(post => ({
+    params: {slug: post.id},
+    props: {
+      post,
+      // Up to 3 others sharing a tag, newest first; else the newest others.
+      related: posts
+        .filter(other => other.id !== post.id)
+        .sort((a, b) => Number(b.data.tags.some(t => post.data.tags.includes(t))) - Number(a.data.tags.some(t => post.data.tags.includes(t))))
+        .slice(0, 3),
+    },
+  }));
+}
+
+const {post, related} = Astro.props;
+const {site, viewer} = await staticContext(Astro.request);
+const {title, description, author, publishedAt, updatedAt, cover, coverAlt, tags} = post.data;
+const {Content} = await render(post);
+const name = site?.name ?? 'My site';
+// The social card: a 1200-wide JPEG of a src/assets cover (every app reads JPEG), else the path or URL as given.
+const image = !cover ? null : typeof cover === 'string' ? cover : (await getImage({src: cover, width: 1200, format: 'jpg'})).src;
+---
+
+<Base site={site} viewer={viewer} isStatic title={title} description={description} image={image} imageAlt={coverAlt} type="article" publishedAt={publishedAt} updatedAt={updatedAt} jsonLd={postJsonLd({name, logo: site?.logo}, {path: `/blog/${post.id}/`, title, description, publishedAt, updatedAt, author, image})}>
+  <main id="main" tabindex="-1" class="pub">
+    <article class="article">
+      <header>
+        <h1>{title}</h1>
+        <p class="article-subtitle">{description}</p>
+        <div class="article-byline">
+          <div>
+            <strong>{author ?? name}</strong>
+            <span class="muted small">
+              {formatDate(publishedAt)}
+              {updatedAt && <> · updated {formatDate(updatedAt)}</>} · {readingMinutes(post.body)} min read
+            </span>
+          </div>
+        </div>
+      </header>
+
+      {cover && <Cover class="article-cover" src={cover} alt={coverAlt} width={1200} height={630} sizes="(min-width: 760px) 720px, calc(100vw - 32px)" eager />}
+
+      <div class="prose">
+        <Content />
+      </div>
+
+      {tags.length > 0 && <p class="terms">{tags.map(tag => <span class="chip chip-tag">#{tag}</span>)}</p>}
+    </article>
+
+    <aside class="article-cta" data-guest-only>
+      <h2>Enjoyed this? Create an account</h2>
+      <p class="muted">Every new post, and your own dashboard.</p>
+      <a class="button" href={`/account/register/?next=${encodeURIComponent(`/blog/${post.id}/`)}`} data-astro-prefetch>Create an account</a>
+    </aside>
+
+    {related.length > 0 && (
+      <section class="pub-related">
+        <h2>Keep reading</h2>
+        <div class="pub-list">{related.map(item => <PostRow post={item} />)}</div>
+      </section>
+    )}
+
+    <p><a href="/blog/" data-astro-prefetch>← All posts</a></p>
+  </main>
+</Base>

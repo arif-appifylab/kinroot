@@ -1,0 +1,133 @@
+---
+/**
+ * A small set of 24px stroke icons (Lucide shapes) drawn with `currentColor`,
+ * so they take the colour of their tile. Decorative: always `aria-hidden`.
+ * Add a shape here when a section needs one; never inline `style=""` (CSP).
+ */
+export type IconName =
+  | 'user'
+  | 'dashboard'
+  | 'bell'
+  | 'shield'
+  | 'book'
+  | 'briefcase'
+  | 'phone'
+  | 'arrow-right'
+  | 'plus'
+  | 'lock'
+  | 'rss';
+
+interface Props {
+  name: IconName;
+  size?: number;
+  class?: string;
+}
+
+const {name, size = 24, class: className} = Astro.props;
+---
+
+<svg
+  class:list={['icon', className]}
+  xmlns="http://www.w3.org/2000/svg"
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.75"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+  focusable="false">
+  {
+    name === 'user' && (
+      <>
+        <circle cx="12" cy="8" r="5" />
+        <path d="M20 21a8 8 0 0 0-16 0" />
+      </>
+    )
+  }
+  {
+    name === 'dashboard' && (
+      <>
+        <rect width="7" height="9" x="3" y="3" rx="1" />
+        <rect width="7" height="5" x="14" y="3" rx="1" />
+        <rect width="7" height="9" x="14" y="12" rx="1" />
+        <rect width="7" height="5" x="3" y="16" rx="1" />
+      </>
+    )
+  }
+  {
+    name === 'bell' && (
+      <>
+        <path d="M10.268 21a2 2 0 0 0 3.464 0" />
+        <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
+      </>
+    )
+  }
+  {
+    name === 'shield' && (
+      <>
+        <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+        <path d="m9 12 2 2 4-4" />
+      </>
+    )
+  }
+  {
+    name === 'book' && (
+      <>
+        <path d="M12 7v14" />
+        <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
+      </>
+    )
+  }
+  {
+    name === 'briefcase' && (
+      <>
+        <path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+        <rect width="20" height="14" x="2" y="6" rx="2" />
+      </>
+    )
+  }
+  {
+    name === 'phone' && (
+      <>
+        <rect width="14" height="20" x="5" y="2" rx="2" ry="2" />
+        <path d="M12 18h.01" />
+      </>
+    )
+  }
+  {
+    name === 'arrow-right' && (
+      <>
+        <path d="M5 12h14" />
+        <path d="m12 5 7 7-7 7" />
+      </>
+    )
+  }
+  {
+    name === 'plus' && (
+      <>
+        <path d="M5 12h14" />
+        <path d="M12 5v14" />
+      </>
+    )
+  }
+  {
+    name === 'lock' && (
+      <>
+        <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+      </>
+    )
+  }
+  {
+    name === 'rss' && (
+      <>
+        <path d="M4 11a9 9 0 0 1 9 9" />
+        <path d="M4 4a16 16 0 0 1 16 16" />
+        <circle cx="5" cy="19" r="1" />
+      </>
+    )
+  }
+</svg>

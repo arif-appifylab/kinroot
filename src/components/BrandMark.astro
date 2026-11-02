@@ -1,0 +1,31 @@
+---
+/**
+ * The site's mark: logo when it has one, monogram fallback otherwise.
+ * `initial-data` carries no description and no brand colour, so name + logo is
+ * the whole brand.
+ */
+import type {Site} from '../lib/types';
+import {initials} from '../lib/format';
+
+interface Props {
+  site: Site | null;
+  /**
+   * One of the sizes `global.css` defines (`.brand-size-<n>`). No `style=""`:
+   * the CSP blocks inline style attributes (security.md).
+   */
+  size?: 32 | 56 | 64 | 72;
+}
+
+const {site, size = 32} = Astro.props;
+const name = site?.name ?? 'My site';
+---
+
+{
+  site?.logo ? (
+    <img class:list={['brand-logo', `brand-size-${size}`]} src={site.logo} alt={name} height={size} decoding="async" />
+  ) : (
+    <span class:list={['brand-monogram', `brand-size-${size}`]} aria-hidden="true">
+      {initials(name)}
+    </span>
+  )
+}

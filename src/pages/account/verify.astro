@@ -1,0 +1,86 @@
+---
+/**
+ * Confirm an email address from an emailed link (`?token=`, single use, 24
+ * hours). PRERENDERED. The visitor presses a button to confirm: links in
+ * emails are often opened by scanners, which must not use the token up.
+ * An expired link offers to send a new one.
+ */
+import Base from '../../layouts/Base.astro';
+import {staticContext} from '../../server/page';
+
+export const prerender = true;
+
+const {site, viewer} = await staticContext(Astro.request);
+---
+
+<Base site={site} viewer={viewer} isStatic noindex secretInUrl title="Confirm your email">
+  <main id="main" tabindex="-1" class="wrap auth-wrap section">
+    <div class="card auth-card">
+      <h1>Confirm your email</h1>
+      <form id="verify-form" class="auth-form" novalidate>
+        <p class="muted">One click and your account is ready.</p>
+        <p class="notice" data-form-status hidden></p>
+        <button class="button" type="submit">Confirm my email</button>
+      </form>
+      <form id="resend-form" class="auth-form" novalidate hidden>
+        <p class="muted">Need a new link? Enter your email and we will send one.</p>
+        <div class="field">
+          <label for="resend-email">Email</label>
+          <input id="resend-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="name@example.com" />
+        </div>
+        <p class="notice" data-form-status hidden></p>
+        <button class="button ghost" type="submit">Send a new link</button>
+      </form>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import {replaceWithMessage, takeToken} from '../../lib/account';
+  import {bindForm, postJson} from '../../lib/form';
+  import {AUTH_RULES} from '../../lib/rules';
+  import {verifyOutcome} from '../../lib/verify-outcome';
+  import {siteFetch} from '../../platform/browser';
+
+  // Client navigation (ClientRouter): a bundled script runs once, so this page's code runs on
+  // every `astro:page-load` (the first load, each navigation, back/forward) while it is this page.
+  document.addEventListener('astro:page-load', () => {
+    if (!document.querySelector('#verify-form')) return;
+    const token = takeToken();
+    const verify = document.querySelector<HTMLFormElement>('#verify-form')!;
+    const resend = document.querySelector<HTMLFormElement>('#resend-form')!;
+    const offerResend = () => {
+      resend.hidden = false;
+    };
+    if (!token) {
+      verify.hidden = true;
+      offerResend();
+    }
+
+    bindForm(verify, {
+      rules: {},
+      pendingLabel: 'Confirming…',
+      async submit() {
+        const {data, result} = await postJson(siteFetch, '/site-api/auth/verify-email', {token});
+        if (result.ok) {
+          // An owner address that must choose its password first gets no Sign in link.
+          const {message, link} = verifyOutcome(data);
+          replaceWithMessage(verify, message, link);
+        } else {
+          offerResend();
+        }
+        return result;
+      },
+    });
+
+    bindForm(resend, {
+      rules: {email: AUTH_RULES.email},
+      pendingLabel: 'Sending…',
+      async submit(values) {
+        const {result} = await postJson(siteFetch, '/site-api/auth/resend-verification', values);
+        if (result.ok) replaceWithMessage(resend, result.message ?? 'Check your inbox.');
+        return result;
+      },
+    });
+  });
+</script>

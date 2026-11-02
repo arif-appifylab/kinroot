@@ -1,0 +1,23 @@
+---
+/**
+ * What a visitor sees when a page fails on the server (an error thrown while
+ * rendering), instead of an empty answer. Astro renders it with a 500 status.
+ * It reads nothing (no brand, no visitor, no database): whatever broke the
+ * page must not break this one too. The error itself is never shown here;
+ * it is in the Worker's log.
+ *
+ * In `npm run dev` and the editor Preview you see Astro's error overlay
+ * instead, with the stack trace.
+ */
+import Base from '../layouts/Base.astro';
+import {GUEST} from '../platform/auth';
+---
+
+<Base site={null} viewer={GUEST} title="Something went wrong" noindex>
+  <main id="main" tabindex="-1" class="wrap narrow section center">
+    <p class="eyebrow">500</p>
+    <h1>Something went wrong</h1>
+    <p class="lede">This page could not be shown just now. Try again in a minute.</p>
+    <p><a class="button" href="/" data-astro-prefetch>Back to home</a></p>
+  </main>
+</Base>

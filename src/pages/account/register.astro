@@ -1,0 +1,80 @@
+---
+/**
+ * Create an account. PRERENDERED; posts to `/site-api/auth/register`. With
+ * email confirmation on (the default) the answer is the same whether or not
+ * the email already has an account: "check your inbox".
+ */
+import Base from '../../layouts/Base.astro';
+import {staticContext} from '../../server/page';
+
+export const prerender = true;
+
+const {site, viewer} = await staticContext(Astro.request);
+---
+
+<Base site={site} viewer={viewer} isStatic noindex title="Create an account">
+  <main id="main" tabindex="-1" class="wrap auth-wrap section">
+    <div class="card auth-card">
+      <h1>Create an account</h1>
+      <form id="register-form" class="auth-form" novalidate>
+        <div class="field">
+          <label for="register-name">Your name</label>
+          <input id="register-name" name="name" type="text" autocomplete="name" maxlength="80" />
+        </div>
+        <div class="field">
+          <label for="register-email">Email</label>
+          <input id="register-email" name="email" type="email" autocomplete="email" inputmode="email" placeholder="name@example.com" />
+        </div>
+        <div class="field">
+          <label for="register-password">Password</label>
+          <div class="pw-input">
+            <input id="register-password" name="password" type="password" autocomplete="new-password" aria-describedby="register-password-checks" data-describedby="register-password-checks" />
+            <button class="pw-reveal" type="button" data-reveal-password aria-controls="register-password" aria-pressed="false" aria-label="Show password" hidden>Show</button>
+          </div>
+          <ul class="pw-checks" id="register-password-checks"><li>At least 10 characters</li></ul>
+          <p class="field-hint">A short sentence works well.</p>
+        </div>
+        <p class="notice" data-form-status hidden></p>
+        <button class="button" type="submit">Create account</button>
+      </form>
+      <p class="auth-links">
+        Already have an account? <a href="/account/login/" data-keep-next>Sign in</a>
+      </p>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import {nextPath, replaceWithMessage, signedIn} from '../../lib/account';
+  import {bindForm, postJson} from '../../lib/form';
+  import {bindPasswordChecks, bindPasswordReveal} from '../../lib/password-checks';
+  import {AUTH_RULES, passwordMeetsRules} from '../../lib/rules';
+  import {siteFetch} from '../../platform/browser';
+
+  // Client navigation (ClientRouter): a bundled script runs once, so this page's code runs on
+  // every `astro:page-load` (the first load, each navigation, back/forward) while it is this page.
+  document.addEventListener('astro:page-load', () => {
+    if (!document.querySelector('#register-form')) return;
+    const next = nextPath();
+    document.querySelectorAll<HTMLAnchorElement>('[data-keep-next]').forEach(a => {
+      a.href = `${a.pathname}?next=${encodeURIComponent(next)}`;
+    });
+    void signedIn().then(yes => yes && window.location.replace(next));
+
+    const form = document.querySelector<HTMLFormElement>('#register-form')!;
+    const email = form.elements.namedItem('email') as HTMLInputElement;
+    const password = form.elements.namedItem('password') as HTMLInputElement;
+    bindPasswordChecks(password, document.getElementById('register-password-checks')!, {email});
+    bindPasswordReveal(form);
+    bindForm(form, {
+      rules: {name: AUTH_RULES.name, email: AUTH_RULES.email, password: [passwordMeetsRules(() => email.value)]},
+      pendingLabel: 'Creating account…',
+      async submit(values) {
+        const {res, result} = await postJson(siteFetch, '/site-api/auth/register', values);
+        if (res?.status === 201) return {ok: true, redirect: next};
+        if (result.ok) replaceWithMessage(form, result.message ?? 'Check your inbox to continue.');
+        return result;
+      },
+    });
+  });
+</script>

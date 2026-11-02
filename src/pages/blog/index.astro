@@ -1,0 +1,48 @@
+---
+/**
+ * The blog, as a publication: masthead, featured story, the list. Built from
+ * the Markdown files in `src/content/blog/` (PRERENDERED: a new post goes live
+ * with the next Publish). To add a post, add a Markdown file.
+ */
+import BrandMark from '../../components/BrandMark.astro';
+import Cover from '../../components/Cover.astro';
+import PostRow from '../../components/PostRow.astro';
+import Base from '../../layouts/Base.astro';
+import {postHref, publishedPosts} from '../../lib/posts';
+import {staticContext} from '../../server/page';
+
+export const prerender = true;
+
+const {site, viewer} = await staticContext(Astro.request);
+const name = site?.name ?? 'My site';
+const [featured, ...rest] = await publishedPosts();
+---
+
+<Base site={site} viewer={viewer} isStatic title="Blog" description={`Stories and updates from ${name}.`}>
+  <main id="main" tabindex="-1" class="pub">
+    <header class="pub-masthead">
+      <BrandMark site={site} size={64} />
+      <h1 data-brand-text="{name}">{name}</h1>
+      <p class="pub-tagline">Stories, guides and updates.</p>
+      <a class="button" href="/account/register/?next=%2Fblog%2F" data-astro-prefetch data-guest-only>Create an account</a>
+    </header>
+
+    {
+      featured ? (
+        <a class="pub-featured" href={postHref(featured)} data-astro-prefetch>
+          {featured.data.cover && (
+            <Cover src={featured.data.cover} alt={featured.data.coverAlt} width={1200} height={630} sizes="(min-width: 760px) 720px, calc(100vw - 32px)" eager />
+          )}
+          <h2>{featured.data.title}</h2>
+          <p class="pub-subtitle">{featured.data.description}</p>
+        </a>
+      ) : (
+        <p class="lede center">No posts published yet.</p>
+      )
+    }
+
+    <div class="pub-list">
+      {rest.map(post => <PostRow post={post} />)}
+    </div>
+  </main>
+</Base>

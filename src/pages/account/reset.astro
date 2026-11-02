@@ -1,0 +1,86 @@
+---
+/**
+ * Choose a new password from an emailed link (`?token=`, single use, 30
+ * minutes). PRERENDERED; the script takes the token out of the address bar
+ * first and posts it to `/site-api/auth/reset-password`.
+ */
+import Base from '../../layouts/Base.astro';
+import {staticContext} from '../../server/page';
+
+export const prerender = true;
+
+const {site, viewer} = await staticContext(Astro.request);
+---
+
+<Base site={site} viewer={viewer} isStatic noindex secretInUrl title="Choose a new password">
+  <main id="main" tabindex="-1" class="wrap auth-wrap section">
+    <div class="card auth-card">
+      <h1>Choose a new password</h1>
+      <p class="notice notice-error" data-no-token hidden>
+        This link is incomplete. Open the link from the email again, or <a href="/account/forgot/">ask for a new one</a>.
+      </p>
+      <form id="reset-form" class="auth-form" novalidate>
+        <div class="field">
+          <label for="reset-password">New password</label>
+          <div class="pw-input">
+            <input id="reset-password" name="password" type="password" autocomplete="new-password" aria-describedby="reset-password-checks" data-describedby="reset-password-checks" />
+            <button class="pw-reveal" type="button" data-reveal-password aria-controls="reset-password" aria-pressed="false" aria-label="Show password" hidden>Show</button>
+          </div>
+          <ul class="pw-checks" id="reset-password-checks"><li>At least 10 characters</li></ul>
+        </div>
+        <div class="field">
+          <label for="reset-confirm">Type it again</label>
+          <div class="pw-input">
+            <input id="reset-confirm" name="confirm" type="password" autocomplete="new-password" aria-describedby="reset-confirm-checks" data-describedby="reset-confirm-checks" />
+            <button class="pw-reveal" type="button" data-reveal-password aria-controls="reset-confirm" aria-pressed="false" aria-label="Show password" hidden>Show</button>
+          </div>
+          <ul class="pw-checks" id="reset-confirm-checks" hidden></ul>
+        </div>
+        <p class="notice" data-form-status hidden></p>
+        <button class="button" type="submit">Save the new password</button>
+      </form>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import {replaceWithMessage, takeToken} from '../../lib/account';
+  import {bindForm, postJson} from '../../lib/form';
+  import {bindPasswordChecks, bindPasswordReveal} from '../../lib/password-checks';
+  import {passwordMeetsRules} from '../../lib/rules';
+  import {siteFetch} from '../../platform/browser';
+
+  // Client navigation (ClientRouter): a bundled script runs once, so this page's code runs on
+  // every `astro:page-load` (the first load, each navigation, back/forward) while it is this page.
+  document.addEventListener('astro:page-load', () => {
+    if (!document.querySelector('#reset-form')) return;
+    const token = takeToken();
+    const form = document.querySelector<HTMLFormElement>('#reset-form')!;
+    if (!token) {
+      document.querySelector<HTMLElement>('[data-no-token]')!.hidden = false;
+      form.hidden = true;
+    }
+    const password = form.elements.namedItem('password') as HTMLInputElement;
+    const confirm = form.elements.namedItem('confirm') as HTMLInputElement;
+    bindPasswordChecks(password, document.getElementById('reset-password-checks')!, {
+      confirm,
+      confirmList: document.getElementById('reset-confirm-checks'),
+    });
+    bindPasswordReveal(form);
+
+    bindForm(form, {
+      rules: {
+        password: [passwordMeetsRules()],
+        confirm: [value => (value === password.value ? null : 'The two passwords are not the same.')],
+      },
+      pendingLabel: 'Saving…',
+      async submit(values) {
+        const {result} = await postJson(siteFetch, '/site-api/auth/reset-password', {token, password: values.password});
+        if (result.ok) {
+          replaceWithMessage(form, result.message ?? 'Your password is changed.', {href: '/account/login/', text: 'Sign in'});
+        }
+        return result;
+      },
+    });
+  });
+</script>

@@ -1,0 +1,103 @@
+---
+/**
+ * `/thanks/?checkout=pcs_…`: where the buyer lands after paying (the Buy button's default
+ * `successPath`; the platform adds `checkout=<id>`). It CONFIRMS with the platform
+ * (`GET /site-api/checkout/:id`), which also records the order through
+ * src/server/payments-hooks.ts, so it works in the Preview, where no events arrive. Never trust
+ * the URL alone: only `status: 'paid'` says thank you. Rendered on request; never indexed.
+ */
+import TestModeBadge from '../../components/payments/TestModeBadge.astro';
+import Base from '../../layouts/Base.astro';
+import {formatDate, formatMoney} from '../../lib/format';
+import {backend, read} from '../../server/backend';
+import {pageContext} from '../../server/page';
+
+export const prerender = false;
+
+type Answer = {
+  checkout: {
+    id: string;
+    mode: 'test' | 'live';
+    status: 'open' | 'paid' | 'failed' | 'expired';
+    quantity: number;
+    amountCents: number;
+    currency: string;
+    subscription: {status: string; currentPeriodEnd: string | null} | null;
+  };
+};
+
+const id = Astro.url.searchParams.get('checkout') ?? '';
+const [{site, viewer}, found] = await Promise.all([
+  pageContext(Astro.request, Astro.response),
+  id ? read<Answer>(backend(Astro.request).checkout[':id'].$get({param: {id}})) : Promise.resolve(null),
+]);
+const checkout = found?.checkout ?? null;
+const paid = checkout?.status === 'paid';
+// Still `open`: the gateway has not told the platform yet (a few seconds). The page refreshes.
+const waiting = checkout?.status === 'open';
+if (!checkout) Astro.response.status = 404;
+---
+
+<Base site={site} viewer={viewer} title={paid ? 'Thank you' : 'Payment'} noindex>
+  <main id="main" tabindex="-1" class="wrap narrow section center">
+    <TestModeBadge mode={checkout?.mode ?? null} />
+    {
+      paid && checkout ? (
+        <>
+          <h1>Thank you</h1>
+          <p class="lede">
+            Your payment of {formatMoney(checkout.amountCents, checkout.currency)} went through.
+            {checkout.subscription?.currentPeriodEnd && ` Your membership renews on ${formatDate(checkout.subscription.currentPeriodEnd)}.`}
+          </p>
+          <p>
+            <a class="button" href="/">Back to home</a>
+          </p>
+        </>
+      ) : waiting ? (
+        <>
+          <h1>Confirming your payment</h1>
+          <p class="lede">This takes a few seconds. This page checks again by itself.</p>
+          <p>
+            <a class="button button-secondary" href={Astro.url.pathname + Astro.url.search} data-thanks-retry>
+              Check again
+            </a>
+          </p>
+        </>
+      ) : (
+        <>
+          <h1>{checkout ? 'The payment did not go through' : 'We could not find this payment'}</h1>
+          <p class="lede">
+            {checkout ? 'Nothing was charged. Go back and try again, or use another card.' : 'If you paid, your receipt is in your email.'}
+          </p>
+          <p>
+            <a class="button" href="/">Back to home</a>
+          </p>
+        </>
+      )
+    }
+  </main>
+</Base>
+
+<script>
+  // While the payment is being confirmed: look again every 3 seconds (at most 10 times).
+  document.addEventListener('astro:page-load', () => {
+    const retry = document.querySelector<HTMLAnchorElement>('[data-thanks-retry]');
+    const store = (() => {
+      try {
+        return window.sessionStorage;
+      } catch {
+        return null;
+      }
+    })();
+    if (!retry) {
+      store?.removeItem('thanks-tries');
+      return;
+    }
+    const tries = Number(store?.getItem('thanks-tries') ?? 0);
+    if (tries >= 10) return;
+    setTimeout(() => {
+      store?.setItem('thanks-tries', String(tries + 1));
+      window.location.reload();
+    }, 3000);
+  });
+</script>

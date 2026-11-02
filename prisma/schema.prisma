@@ -1,0 +1,2227 @@
+// The Site Database's schema (Prisma ORM 7). Change it, then run
+// `npx prisma migrate dev --create-only --name <what-changed>` against the
+// Preview Database, wrap the new migration.sql in BEGIN; … COMMIT;, apply it
+// with `npx prisma migrate dev`, then `npx prisma generate` (docs/agent/database.md).
+//
+// Tables marked MANAGED belong to the template's auth core (src/platform/auth):
+// add columns to them only through a template upgrade.
+
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  // The client runs in the Cloudflare Workers runtime, never in Node.
+  runtime         = "workerd"
+  // ONE SQL query per read: a nested `select` of related rows is joined in the database instead
+  // of one extra query per relation (each query is an HTTPS round trip). docs/agent/database.md.
+  previewFeatures = ["relationJoins"]
+}
+
+// TESTS ONLY: the same client for Node, so `npm test` can run the real Site API
+// against a real Postgres (vitest aliases the import to it). Never imported by
+// site code; git-ignored like the one above.
+generator nodeClient {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma-node"
+  runtime         = "nodejs"
+  previewFeatures = ["relationJoins"]
+}
+
+// The connection string is NOT here: prisma.config.ts reads DATABASE_URL from
+// the environment, which the platform sets (the Build never gets one).
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------- auth (MANAGED)
+
+/// A person with an account on this site. `email` is stored trimmed and
+/// lower-cased. Only the user and holders of `site:user:read` ever see it.
+model User {
+  id                Int       @id @default(autoincrement())
+  email             String    @unique @db.VarChar(254)
+  /// `pbkdf2-sha256$v1$<iterations>$<salt>$<key>` (src/platform/auth/password.ts).
+  passwordHash      String    @map("password_hash") @db.VarChar(255)
+  name              String    @db.VarChar(80)
+  /// `active` or `suspended`.
+  status            String    @default("active") @db.VarChar(16)
+  emailVerifiedAt   DateTime? @map("email_verified_at")
+  /// Bumped on password change, logout-all and suspension: every access token
+  /// carrying an older value stops working at once.
+  sessionVersion    Int       @default(1) @map("session_version")
+  lastLoginAt       DateTime? @map("last_login_at")
+  /// Two-step sign-in (src/platform/auth/two-factor.ts): the authenticator secret, SEALED
+  /// (never in clear), set once the user confirmed a first code (`totpEnabledAt`).
+  totpSecretSealed  String?   @map("totp_secret_sealed") @db.VarChar(255)
+  /// A secret shown during setup, not yet confirmed with a code.
+  totpPendingSealed String?   @map("totp_pending_sealed") @db.VarChar(255)
+  totpEnabledAt     DateTime? @map("totp_enabled_at")
+  /// The 30-second step of the last accepted code: that code (and older) never works again.
+  totpLastStep      Int?      @map("totp_last_step")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  roles              UserRole[]
+  refreshTokens      RefreshToken[]
+  passwordResets     PasswordReset[]
+  emailVerifications EmailVerification[]
+  emailChanges       EmailChange[]
+  recoveryCodes      RecoveryCode[]
+  signInCodes        SignInCode[]
+  /// Kinroot: the CRM team profile of this account (not a column).
+  member             Member?
+
+  @@index([status, id])
+  @@map("users")
+}
+
+/// A role: a named set of permissions. `is_system` roles (owner, admin,
+/// member) are seeded and cannot be deleted; `owner` cannot be edited.
+model Role {
+  id          Int      @id @default(autoincrement())
+  slug        String   @unique @db.VarChar(48)
+  name        String   @db.VarChar(80)
+  description String?  @db.VarChar(255)
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  permissions RolePermission[]
+  users       UserRole[]
+
+  @@map("roles")
+}
+
+/// The permission catalogue: one row per codename (`site:job:manage`,
+/// `site:user:*`, `*`). Shipped as idempotent migrations, matched by codename.
+model Permission {
+  id          Int      @id @default(autoincrement())
+  codename    String   @unique @db.VarChar(128)
+  title       String   @db.VarChar(120)
+  description String?  @db.VarChar(255)
+  /// Groups the catalogue in the roles screen ("Users", "Jobs").
+  groupName   String   @default("General") @map("group_name") @db.VarChar(48)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       Int      @map("role_id")
+  permissionId Int      @map("permission_id")
+  grantedBy    Int?     @map("granted_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId    Int      @map("user_id")
+  roleId    Int      @map("role_id")
+  grantedBy Int?     @map("granted_by")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@index([roleId, userId])
+  @@map("user_roles")
+}
+
+/// One refresh token, stored only as its SHA-256. Tokens of one sign-in share
+/// a `family_id`; each rotation marks the old row used and points the new
+/// row at it (`rotated_from`). Reuse of a used token revokes the family.
+model RefreshToken {
+  id                BigInt    @id @default(autoincrement())
+  familyId          String    @map("family_id") @db.Uuid
+  userId            Int       @map("user_id")
+  tokenHash         String    @unique @map("token_hash") @db.Char(64)
+  rotatedFromId     BigInt?   @map("rotated_from")
+  usedAt            DateTime? @map("used_at")
+  revokedAt         DateTime? @map("revoked_at")
+  revokedReason     String?   @map("revoked_reason") @db.VarChar(16)
+  expiresAt         DateTime  @map("expires_at")
+  absoluteExpiresAt DateTime  @map("absolute_expires_at")
+  userAgent         String?   @map("user_agent") @db.VarChar(255)
+  ipHash            String?   @map("ip_hash") @db.Char(64)
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([familyId])
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+/// A single-use password reset link (30 minutes), stored as its SHA-256.
+model PasswordReset {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  ipHash    String?   @map("ip_hash") @db.Char(64)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@map("password_resets")
+}
+
+/// A single-use email confirmation link (24 hours), stored as its SHA-256.
+model EmailVerification {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  /// The address this link confirms (the user's email when it was sent).
+  email     String    @db.VarChar(254)
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@map("email_verifications")
+}
+
+/// A 6-digit sign-in code emailed to the account (src/platform/auth/code-routes.ts): 10 minutes,
+/// single use, 5 wrong tries and it is spent. Only its keyed hash is stored. A new code ends the
+/// older ones.
+model SignInCode {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  codeHash  String    @map("code_hash") @db.Char(64)
+  tries     Int       @default(0)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  ipHash    String?   @map("ip_hash") @db.Char(64)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@map("sign_in_codes")
+}
+
+/// Rate-limit ledger: one row per attempt. Keyed hashes only (never the raw
+/// email or IP). Rows older than a day are swept on the way.
+model LoginAttempt {
+  id        BigInt   @id @default(autoincrement())
+  /// `login`, `register`, `reset`, `verify`, `password`, `code`, `codecheck`, ….
+  kind      String   @db.VarChar(16)
+  emailHash String?  @map("email_hash") @db.Char(64)
+  ipHash    String   @map("ip_hash") @db.Char(64)
+  succeeded Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([kind, emailHash, createdAt])
+  @@index([kind, ipHash, createdAt])
+  @@index([createdAt])
+  @@map("login_attempts")
+}
+
+/// Security-relevant events (sign-ups, password changes, role changes,
+/// refresh-token reuse). No email addresses, no raw IPs, no secrets.
+/// A pending move of an account to a new address: the link mailed to the NEW address
+/// (`/account/confirm-email/?token=…`) finishes it; single use, 24 hours.
+model EmailChange {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  newEmail  String    @map("new_email") @db.VarChar(254)
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@map("email_changes")
+}
+
+/// Two-step sign-in recovery codes, as SHA-256 hashes; each works once.
+model RecoveryCode {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  codeHash  String    @map("code_hash") @db.Char(64)
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, codeHash])
+  @@map("recovery_codes")
+}
+
+model AuditEvent {
+  id          BigInt   @id @default(autoincrement())
+  actorUserId Int?     @map("actor_user_id")
+  action      String   @db.VarChar(64)
+  targetType  String?  @map("target_type") @db.VarChar(32)
+  targetId    String?  @map("target_id") @db.VarChar(64)
+  ipHash      String?  @map("ip_hash") @db.Char(64)
+  /// Small, non-personal details (`{"roles":["admin"]}`). Never filtered on.
+  meta        Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([actorUserId, id])
+  @@index([targetType, targetId, id])
+  @@map("audit_events")
+}
+
+/// One row (`id = 1`): who claimed the owner role first. Claimed with a
+/// conditional update, so two simultaneous sign-ups can never both become owner.
+model AuthState {
+  id          Int      @id
+  ownerUserId Int?     @map("owner_user_id")
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("auth_state")
+}
+
+/// Background job deliveries already taken (`src/platform/background.ts`): the
+/// replay guard for signed deliveries, across every Worker instance. One row
+/// per job try; rows older than a day are swept on the way.
+model JobDelivery {
+  jobId   String   @map("job_id")
+  attempt Int
+  seenAt  DateTime @default(now()) @map("seen_at")
+
+  @@id([jobId, attempt])
+  @@index([seenAt])
+  @@map("job_deliveries")
+}
+
+// ---------------------------------------------------------------- payments (MANAGED)
+// Filled by src/server/payments-hooks.ts from the platform's payment events (and the thanks
+// page's confirm). Add columns only through a template upgrade; keep your own data in your own
+// tables, pointing at `checkout_id` / `subscription_id`.
+
+/// Payment events already handled, by event id (`src/platform/payments.ts`): a retried or
+/// replayed event runs its hook once. Rows older than 90 days are swept on the way.
+model PaymentEvent {
+  id         String   @id @db.VarChar(128)
+  type       String   @db.VarChar(40)
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  @@index([receivedAt])
+  @@map("payment_events")
+}
+
+/// One paid (or failed / refunded) checkout. `checkout_id` is the platform's `pcs_…`.
+model Order {
+  id          Int       @id @default(autoincrement())
+  checkoutId  String    @unique @map("checkout_id") @db.VarChar(80)
+  priceKey    String    @map("price_key") @db.VarChar(63)
+  /// `test` (sandbox) or `live`.
+  mode        String    @default("test") @db.VarChar(4)
+  email       String?   @db.VarChar(254)
+  /// The signed-in buyer (`users.id`), from the checkout's `customerRef`. No foreign key: an
+  /// order outlives a deleted account.
+  userId      Int?      @map("user_id")
+  /// `paid`, `failed`, `refunded` or `partially_refunded`.
+  status      String    @db.VarChar(20)
+  quantity    Int       @default(1)
+  amountCents Int       @map("amount_cents")
+  currency    String    @db.Char(3)
+  metadata    Json?
+  paidAt      DateTime? @map("paid_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([userId, id])
+  @@index([email, id])
+  @@map("orders")
+}
+
+/// A subscription bought on this site. Access: `active`, `trialing`, `past_due`, or `canceled`
+/// until `access_ends_at` (`grantsAccess` in src/platform/payments.ts).
+model Membership {
+  id               Int       @id @default(autoincrement())
+  subscriptionId   String    @unique @map("subscription_id") @db.VarChar(128)
+  priceKey         String    @map("price_key") @db.VarChar(63)
+  mode             String    @default("test") @db.VarChar(4)
+  email            String?   @db.VarChar(254)
+  userId           Int?      @map("user_id")
+  status           String    @db.VarChar(20)
+  currentPeriodEnd DateTime? @map("current_period_end")
+  accessEndsAt     DateTime? @map("access_ends_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  @@index([userId, priceKey])
+  @@index([email, priceKey])
+  @@map("memberships")
+}
+
+// ---------------------------------------------------------------- the site's own data
+
+/// A job on the job board (`/jobs`, `/jobs/<slug>`). Holders of
+/// `site:job:manage` post and edit them from `/portal/jobs`.
+model Job {
+  id          Int      @id @default(autoincrement())
+  /// URL name, unique: `/jobs/<slug>`.
+  slug        String   @unique @db.VarChar(120)
+  title       String   @db.VarChar(120)
+  company     String   @db.VarChar(80)
+  location    String   @db.VarChar(80)
+  /// `full-time`, `part-time`, `contract` or `internship`.
+  type        String   @default("full-time") @db.VarChar(20)
+  remote      Boolean  @default(false)
+  /// Plain text; paragraphs separated by blank lines.
+  description String   @db.VarChar(10000)
+  /// Where to apply: an https URL or a mailto: link the poster chose to publish.
+  applyUrl    String   @map("apply_url") @db.VarChar(500)
+  /// `open` (listed) or `closed` (kept, not listed).
+  status      String   @default("open") @db.VarChar(10)
+  /// The user (`users.id`) who posted it. No foreign key: a job outlives its poster.
+  createdBy   Int      @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([status, id])
+  @@map("jobs")
+}
+
+// =============================================================== Kinroot CRM
+// One deployment = one company: no tenant column. Ported from the Kinroot app as it was.
+
+// ─── Team ───────────────────────────────────────────────────────────────────
+
+/// The team role inside Kinroot (one workspace = one team). Team roles are the CRM's own
+/// data (docs/agent/roles-and-permissions.md › Teams); site roles only decide who may
+/// claim the workspace (`site:crm:own`).
+enum TeamRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+/// A Kinroot team member: the CRM side of a site account (`users`, managed by the
+/// template's auth, which owns sign-in, passwords and two-step). `userId` is null while
+/// an invite is pending; accepting it links the SIGNED-IN account whose verified email is
+/// `inviteEmail`, then clears the invite. `name` is a display copy of `users.name`,
+/// refreshed on each signed-in request (src/server/lib/member.ts). A joined member's
+/// email is never copied: join `user`.
+model Member {
+  id              String    @id @default(cuid())
+  userId          Int?      @unique
+  user            User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  role            TeamRole  @default(MEMBER)
+  color           String    @default("#2563eb")
+  avatarUrl       String? // profile picture: a public platform file's stable link
+  active          Boolean   @default(true)
+  lastSeenAt      DateTime?
+  /// Pending invite: the invited address, the SHA-256 of the link's token, its expiry.
+  inviteEmail     String?   @unique
+  inviteTokenHash String?   @unique
+  inviteExpiresAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  contacts             Contact[]             @relation("ContactOwner")
+  companies            Company[]             @relation("CompanyOwner")
+  deals                Deal[]                @relation("DealOwner")
+  notes                Note[]
+  tasksAssigned        Task[]                @relation("TaskAssignee")
+  tasksCreated         Task[]                @relation("TaskCreator")
+  activities           Activity[]
+  emailAccounts        EmailAccount[]
+  emailTemplates       EmailTemplate[]
+  emailsSent           EmailMessage[]
+  savedViews           SavedView[]
+  stageChanges         StageChange[]
+  interactions         Interaction[]
+  comments             ActivityComment[]
+  files                File[]
+  notifications        Notification[]        @relation("NotificationRecipient")
+  notified             Notification[]        @relation("NotificationActor")
+  follows              Follow[]
+  forms                Form[]
+  schedulingProfile    SchedulingProfile?
+  bookingLinks         BookingLink[]
+  bookings             Booking[]
+  calendarConnections  CalendarConnection[]
+  tickets              Ticket[]              @relation("TicketAssignee")
+  ticketMessages       TicketMessage[]
+  lists                ContactList[]
+  reports              Report[]
+  dashboards           Dashboard[]
+  goals                Goal[]
+  broadcasts           Broadcast[]
+  imports              Import[]
+  exports              Export[]
+  reportSchedules      ReportSchedule[]
+  conversations        EmailThread[]         @relation("ConversationAssignee")
+  conversationComments ConversationComment[]
+  channelMessages      ChannelMessage[]      @relation("ChannelMessageSender")
+  apiKeys              ApiKey[]              @relation("ApiKeyCreator")
+}
+
+// ─── Team & auth ────────────────────────────────────────────────────────────
+
+// ─── Records ────────────────────────────────────────────────────────────────
+
+enum LifecycleStage {
+  LEAD
+  QUALIFIED
+  OPPORTUNITY
+  CUSTOMER
+  CHURNED
+  OTHER
+}
+
+model Company {
+  id             String    @id @default(cuid())
+  name           String
+  domain         String?
+  industry       String?
+  size           String?
+  type           String? // Prospect, Partner, Reseller, Vendor, Other…
+  employees      Int?
+  annualRevenue  Float?
+  timezone       String?
+  website        String?
+  phone          String?
+  address        String?
+  city           String?
+  state          String?
+  postalCode     String?
+  country        String?
+  linkedin       String?
+  description    String?
+  tags           String[]  @default([])
+  custom         Json      @default("{}")
+  ownerId        String?
+  owner          Member?   @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  lastActivityAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  contacts     ContactCompany[]
+  deals        Deal[]
+  dealLinks    DealCompany[]
+  notes        Note[]
+  tasks        Task[]
+  activities   Activity[]
+  emailThreads EmailThread[]
+  interactions Interaction[]
+  files        File[]
+  tickets      Ticket[]
+
+  @@index([domain])
+  @@index([name])
+  @@index([ownerId])
+}
+
+model Contact {
+  id             String         @id @default(cuid())
+  firstName      String
+  lastName       String?
+  email          String?
+  phone          String?
+  title          String?
+  linkedin       String?
+  lifecycleStage LifecycleStage @default(LEAD)
+  leadStatus     String?
+  buyingRole     String?
+  emailOptOut    Boolean        @default(false)
+  city           String?
+  country        String?
+  source         String?
+  tags           String[]       @default([])
+  custom         Json           @default("{}")
+  ownerId        String?
+  owner          Member?        @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  lastActivityAt DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  score          Int            @default(0) // lead score: sum of ScoreEvent points (see src/server/lib/scoring.ts)
+  scoreUpdatedAt DateTime?
+
+  companies         ContactCompany[]
+  deals             DealContact[]
+  notes             Note[]
+  tasks             Task[]
+  activities        Activity[]
+  emailThreads      EmailThread[]
+  emailMessages     EmailMessage[]
+  interactions      Interaction[]
+  files             File[]
+  formSubmissions   FormSubmission[]
+  tickets           Ticket[]
+  listMemberships   ContactListMember[]
+  scoreEvents       ScoreEvent[]
+  channelIdentities ChannelIdentity[]
+  channelMessages   ChannelMessage[]
+
+  @@index([email])
+  @@index([score])
+  @@index([ownerId])
+  @@index([lastName, firstName])
+}
+
+model ContactCompany {
+  contactId String
+  companyId String
+  role      String?
+  isPrimary Boolean @default(false)
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, companyId])
+  @@index([companyId])
+}
+
+// ─── Pipelines & deals ──────────────────────────────────────────────────────
+
+model Pipeline {
+  id          String   @id @default(cuid())
+  name        String
+  position    Int      @default(0)
+  isDefault   Boolean  @default(false)
+  rottingDays Int      @default(14)
+  createdAt   DateTime @default(now())
+
+  stages Stage[]
+  deals  Deal[]
+}
+
+model Stage {
+  id          String   @id @default(cuid())
+  pipelineId  String
+  pipeline    Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  name        String
+  position    Int      @default(0)
+  probability Int      @default(10) // 0-100, used for the weighted forecast
+  color       String   @default("#3b82f6")
+
+  deals      Deal[]
+  changesIn  StageChange[] @relation("ToStage")
+  changesOut StageChange[] @relation("FromStage")
+
+  @@index([pipelineId, position])
+}
+
+enum DealStatus {
+  OPEN
+  WON
+  LOST
+}
+
+model Deal {
+  id                String     @id @default(cuid())
+  title             String
+  value             Float      @default(0)
+  currency          String     @default("USD")
+  pipelineId        String
+  pipeline          Pipeline   @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stageId           String
+  stage             Stage      @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  status            DealStatus @default(OPEN)
+  lostReason        String?
+  expectedCloseDate DateTime?
+  closedAt          DateTime?
+  position          Float      @default(0) // order inside a kanban column
+  companyId         String?
+  company           Company?   @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  ownerId           String?
+  owner             Member?    @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  tags              String[]   @default([])
+  custom            Json       @default("{}")
+  type              String? // New business | Existing business
+  priority          String? // Low | Medium | High
+  stageEnteredAt    DateTime   @default(now())
+  lastActivityAt    DateTime   @default(now())
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  forecastCategory  String? // PIPELINE | BEST_CASE | COMMIT | OMIT; null = from stage probability
+
+  contacts        DealContact[]
+  companies       DealCompany[]
+  stageChanges    StageChange[]
+  notes           Note[]
+  tasks           Task[]
+  activities      Activity[]
+  emailThreads    EmailThread[]
+  interactions    Interaction[]
+  files           File[]
+  formSubmissions FormSubmission[]
+  tickets         Ticket[]
+
+  @@index([pipelineId, stageId, position])
+  @@index([status])
+  @@index([ownerId])
+  @@index([companyId])
+}
+
+// Every company on a deal. Deal.companyId mirrors the primary one.
+model DealCompany {
+  dealId    String
+  companyId String
+  isPrimary Boolean @default(false)
+  deal      Deal    @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([dealId, companyId])
+  @@index([companyId])
+}
+
+model DealContact {
+  dealId    String
+  contactId String
+  deal      Deal    @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([dealId, contactId])
+  @@index([contactId])
+}
+
+model StageChange {
+  id          String   @id @default(cuid())
+  dealId      String
+  deal        Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  fromStageId String?
+  fromStage   Stage?   @relation("FromStage", fields: [fromStageId], references: [id], onDelete: SetNull)
+  toStageId   String?
+  toStage     Stage?   @relation("ToStage", fields: [toStageId], references: [id], onDelete: SetNull)
+  userId      String?
+  user        Member?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  @@index([dealId, createdAt])
+}
+
+// ─── Notes, tasks, timeline ─────────────────────────────────────────────────
+
+model Note {
+  id        String   @id @default(cuid())
+  body      String
+  pinned    Boolean  @default(false)
+  authorId  String?
+  author    Member?  @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([contactId])
+  @@index([companyId])
+  @@index([dealId])
+}
+
+enum TaskType {
+  TODO
+  CALL
+  EMAIL
+  MEETING
+  DEADLINE
+}
+
+enum Priority {
+  NONE
+  LOW
+  NORMAL // shown as "Medium"
+  HIGH
+}
+
+model Task {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  type        TaskType  @default(TODO)
+  priority    Priority  @default(NONE)
+  dueAt       DateTime?
+  done        Boolean   @default(false)
+  doneAt      DateTime?
+  repeat      String? // DAILY | WEEKDAYS | WEEKLY | MONTHLY | QUARTERLY | YEARLY: completing creates the next one
+  queue       String? // named task queue, e.g. "Follow-ups", "Renewals"
+  reminderAt  DateTime?
+  remindedAt  DateTime?
+  assigneeId  String?
+  assignee    Member?   @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  creatorId   String?
+  creator     Member?   @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  contactId   String?
+  contact     Contact?  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  companyId   String?
+  company     Company?  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  dealId      String?
+  deal        Deal?     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([assigneeId, done, dueAt])
+  @@index([assigneeId, reminderAt])
+  @@index([dealId])
+  @@index([contactId])
+  @@index([companyId])
+}
+
+// One row per timeline event. `type` examples: note, task_created, task_done,
+// email_out, email_in, deal_created, stage_changed, deal_won, deal_lost,
+// contact_created, field_changed.
+model Activity {
+  id        String   @id @default(cuid())
+  type      String
+  title     String
+  data      Json     @default("{}")
+  text      String? // plain text body, for activity search
+  refId     String? // id of the note / task / email / interaction this event points at
+  actorId   String?
+  actor     Member?  @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  comments ActivityComment[]
+
+  @@index([contactId, createdAt])
+  @@index([companyId, createdAt])
+  @@index([dealId, createdAt])
+  @@index([createdAt])
+}
+
+model ActivityComment {
+  id         String   @id @default(cuid())
+  activityId String
+  activity   Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+  authorId   String?
+  author     Member?  @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  body       String
+  createdAt  DateTime @default(now())
+
+  @@index([activityId, createdAt])
+}
+
+enum InteractionKind {
+  CALL
+  MEETING
+  EMAIL
+  SMS
+  LINKEDIN
+  WHATSAPP
+  POSTAL
+}
+
+// Calls, meetings and messages logged by hand (or meetings scheduled ahead).
+model Interaction {
+  id           String          @id @default(cuid())
+  kind         InteractionKind
+  title        String?
+  body         String?
+  occurredAt   DateTime        @default(now()) // start time for meetings
+  durationMin  Int?
+  outcome      String?
+  direction    String? // INBOUND | OUTBOUND
+  locationType String? // VIDEO | PHONE | IN_PERSON | OTHER (meetings)
+  location     String? // meeting link, phone number or address
+  attendeeIds  String[]        @default([]) // contact ids
+  authorId     String?
+  author       Member?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  contactId    String?
+  contact      Contact?        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  companyId    String?
+  company      Company?        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  dealId       String?
+  deal         Deal?           @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([contactId, occurredAt])
+  @@index([companyId, occurredAt])
+  @@index([dealId, occurredAt])
+  @@index([kind, occurredAt])
+}
+
+// ─── Email ──────────────────────────────────────────────────────────────────
+
+enum EmailProvider {
+  SMTP
+  RESEND
+  POSTMARK
+  SENDGRID
+  MAILGUN
+  GMAIL
+  OUTLOOK
+}
+
+enum EmailAccountStatus {
+  CONNECTED
+  ERROR
+  PENDING
+}
+
+model EmailAccount {
+  id             String             @id @default(cuid())
+  provider       EmailProvider
+  label          String
+  fromName       String
+  fromEmail      String
+  credentials    String // AES-GCM encrypted JSON, never returned to the browser
+  userId         String? // null = shared team account
+  user           Member?            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isDefault      Boolean            @default(false)
+  status         EmailAccountStatus @default(PENDING)
+  lastError      String?
+  trackOpens     Boolean            @default(true)
+  trackClicks    Boolean            @default(true)
+  dailyLimit     Int                @default(300)
+  signature      String?
+  syncCursor     String?
+  lastSyncedAt   DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  // Reply capture for SMTP / API accounts and the HTML signature (module 1b)
+  replyTo        String? // e.g. the provider's inbound address, added as Reply-To
+  forwardReplies Boolean            @default(false) // forward a copy of webhook replies to the rep
+  signatureHtml  String?
+
+  threads    EmailThread[]
+  messages   EmailMessage[]
+  broadcasts Broadcast[]
+}
+
+model EmailThread {
+  id               String             @id @default(cuid())
+  subject          String
+  accountId        String?
+  account          EmailAccount?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  externalThreadId String?
+  lastMessageAt    DateTime           @default(now())
+  unread           Boolean            @default(false)
+  contactId        String?
+  contact          Contact?           @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  companyId        String?
+  company          Company?           @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  dealId           String?
+  deal             Deal?              @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  createdAt        DateTime           @default(now())
+  // Shared inbox (module 10, src/server/inbox/): a thread with an inbound message is a conversation.
+  channel          String             @default("email") // email | form | ticket (worked from its ticket); see src/lib/inbox.ts
+  status           ConversationStatus @default(OPEN)
+  assigneeId       String?
+  assignee         Member?            @relation("ConversationAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  assignedAt       DateTime?
+  snoozedUntil     DateTime? // leaves the open views until then (job "inbox.wake")
+  spamAt           DateTime? // Spam folder
+  trashedAt        DateTime? // Trash folder; "Delete forever" / 30 days later → recycle bin
+  firstInboundAt   DateTime? // when it became a conversation (first message from outside)
+  waitingSince     DateTime? // oldest inbound message not answered yet
+  firstResponseAt  DateTime? // first team reply after firstInboundAt
+  closedAt         DateTime?
+  formSubmissionId String?            @unique // form channel: the response it came from
+  // Non-email channels (website chat): who is on the other side, and cheap typing indicators.
+  identityId       String?
+  identity         ChannelIdentity?   @relation(fields: [identityId], references: [id], onDelete: SetNull)
+  contactTypingAt  DateTime? // the visitor / customer is typing (set by their poll)
+  teamTypingAt     DateTime? // an agent is typing
+
+  messages        EmailMessage[]
+  comments        ConversationComment[]
+  channelMessages ChannelMessage[]
+
+  @@index([accountId, externalThreadId])
+  @@index([contactId])
+  @@index([dealId])
+  @@index([lastMessageAt])
+  @@index([status, assigneeId])
+  @@index([assigneeId])
+  @@index([snoozedUntil])
+  @@index([trashedAt])
+  @@index([identityId])
+}
+
+enum ConversationStatus {
+  OPEN
+  CLOSED
+}
+
+// Internal comments on a conversation (never emailed) and its status events
+// (assigned, closed, snoozed…), shown in the thread.
+model ConversationComment {
+  id        String      @id @default(cuid())
+  threadId  String
+  thread    EmailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  kind      String      @default("comment") // comment | event
+  body      String      @default("")
+  data      Json        @default("{}") // events: {type, to, name, until, …}
+  authorId  String?
+  author    Member?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt DateTime    @default(now())
+
+  @@index([threadId, createdAt])
+}
+
+enum EmailDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum EmailStatus {
+  QUEUED
+  SENT
+  FAILED
+  RECEIVED
+}
+
+model EmailMessage {
+  id            String         @id @default(cuid())
+  threadId      String
+  thread        EmailThread    @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  accountId     String?
+  account       EmailAccount?  @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  direction     EmailDirection
+  status        EmailStatus
+  fromEmail     String
+  fromName      String?
+  to            String[]
+  cc            String[]       @default([])
+  bcc           String[]       @default([])
+  subject       String
+  html          String?
+  text          String?
+  messageId     String? // RFC 5322 Message-ID
+  inReplyTo     String?
+  externalId    String? // provider id (Gmail id, Graph id, Postmark MessageID …)
+  error         String?
+  trackingId    String?        @unique
+  openCount     Int            @default(0)
+  clickCount    Int            @default(0)
+  firstOpenedAt DateTime?
+  senderId      String?
+  sender        Member?        @relation(fields: [senderId], references: [id], onDelete: SetNull)
+  contactId     String?
+  contact       Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  sentAt        DateTime       @default(now())
+
+  events TrackingEvent[]
+
+  @@index([threadId, sentAt])
+  @@index([accountId, externalId])
+  @@index([messageId])
+  @@index([accountId, sentAt])
+}
+
+// ─── Non-email inbox channels (website chat; future channels reuse the same model) ───
+
+enum ChannelMessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  RECEIVED
+}
+
+// One message on a conversation (EmailThread) of a channel that is not email.
+// Email keeps EmailMessage; see src/server/inbox/channel-messages.ts.
+model ChannelMessage {
+  id             String               @id @default(cuid())
+  threadId       String
+  thread         EmailThread          @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  channel        String // chat (future channels add their own key)
+  direction      EmailDirection // INBOUND from the visitor / customer, OUTBOUND from the team
+  kind           String               @default("text") // text | auto (automatic notice such as the offline message)
+  status         ChannelMessageStatus @default(SENT)
+  text           String               @default("") // plain text, never HTML
+  fileIds        String[]             @default([]) // File rows (purpose "chat"), served by signed links
+  identityId     String? // inbound: who sent it
+  identity       ChannelIdentity?     @relation(fields: [identityId], references: [id], onDelete: SetNull)
+  senderId       String? // outbound: the team member
+  sender         Member?              @relation("ChannelMessageSender", fields: [senderId], references: [id], onDelete: SetNull)
+  contactId      String?
+  contact        Contact?             @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  externalId     String? // provider message id for channels that have one; unique per channel
+  error          String?
+  data           Json                 @default("{}") // channel extras (chat: page the visitor was on)
+  deliveredAt    DateTime?
+  readAt         DateTime?
+  emailMessageId String? // chat: emailed to the visitor because they had left
+  createdAt      DateTime             @default(now())
+
+  @@unique([channel, externalId])
+  @@index([threadId, createdAt])
+  @@index([identityId])
+  @@index([contactId])
+}
+
+// The person on the other side of a non-email channel: an anonymous website
+// visitor (chat), or a provider's id for future channels. Linked to a contact once known.
+model ChannelIdentity {
+  id          String    @id @default(cuid())
+  channel     String
+  externalId  String // chat: random visitor key
+  name        String?
+  email       String?
+  phone       String?
+  contactId   String?
+  contact     Contact?  @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  data        Json      @default("{}") // chat: current page, pages, referrer, utm, time zone, user agent
+  blockedAt   DateTime? // "Spam & block visitor": their messages are refused
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+
+  threads  EmailThread[]
+  messages ChannelMessage[]
+
+  @@unique([channel, externalId])
+  @@index([contactId])
+  @@index([email])
+}
+
+// DB-based rate limiting (src/server/lib/rate-limit.ts): one row per hit, pruned daily.
+model RateHit {
+  id  String   @id @default(cuid())
+  key String
+  at  DateTime @default(now())
+
+  @@index([key, at])
+}
+
+model TrackingEvent {
+  id        String       @id @default(cuid())
+  messageId String
+  message   EmailMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  type      String // open | click
+  url       String?
+  userAgent String?
+  createdAt DateTime     @default(now())
+
+  @@index([messageId])
+}
+
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  name      String
+  subject   String
+  body      String
+  shared    Boolean  @default(true)
+  ownerId   String?
+  owner     Member?  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  // Rich templates (module 1b): `html` from the editor, `body` stays the plain-text version
+  html      String?
+  preheader String?
+  layout    String   @default("plain") // plain | branded
+  category  String?
+}
+
+// ─── Configuration ──────────────────────────────────────────────────────────
+
+enum EntityType {
+  CONTACT
+  COMPANY
+  DEAL
+}
+
+enum FieldType {
+  TEXT
+  NUMBER
+  CURRENCY
+  DATE
+  SELECT
+  MULTISELECT
+  URL
+  CHECKBOX
+}
+
+model CustomFieldDef {
+  id        String     @id @default(cuid())
+  entity    EntityType
+  key       String
+  label     String
+  type      FieldType
+  options   String[]   @default([])
+  position  Int        @default(0)
+  required  Boolean    @default(false)
+  createdAt DateTime   @default(now())
+
+  @@unique([entity, key])
+}
+
+model SavedView {
+  id        String     @id @default(cuid())
+  entity    EntityType
+  name      String
+  filters   Json       @default("{}")
+  ownerId   String?
+  owner     Member?    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  shared    Boolean    @default(false)
+  createdAt DateTime   @default(now())
+
+  @@index([entity])
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Foundation: jobs, events, webhooks, files, notifications ───────────────
+
+// Background work. POST /site-api/jobs/run claims due rows; failures retry with backoff.
+// Domain events (contact.created, deal.stage_changed, …). Webhooks, lead scoring
+// and automations consume them.
+model Event {
+  id        String   @id @default(cuid())
+  type      String
+  entity    String? // contact | company | deal | task | note | email | interaction
+  recordId  String?
+  actorId   String?
+  data      Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  deliveries WebhookDelivery[]
+
+  @@index([type, createdAt])
+  @@index([entity, recordId])
+  @@index([createdAt])
+}
+
+model Webhook {
+  id             String    @id @default(cuid())
+  url            String
+  description    String?
+  events         String[]  @default([]) // event types; "*" = every event
+  secret         String // AES-GCM encrypted signing secret
+  active         Boolean   @default(true)
+  failures       Int       @default(0) // consecutive failed deliveries
+  lastStatus     Int?
+  lastDeliveryAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  deliveries WebhookDelivery[]
+}
+
+enum DeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+model WebhookDelivery {
+  id             String         @id @default(cuid())
+  webhookId      String
+  webhook        Webhook        @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  eventId        String
+  event          Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  eventType      String
+  status         DeliveryStatus @default(PENDING)
+  attempts       Int            @default(0)
+  responseStatus Int?
+  responseBody   String?
+  error          String?
+  durationMs     Int?
+  deliveredAt    DateTime?
+  createdAt      DateTime       @default(now())
+
+  @@index([webhookId, createdAt])
+}
+
+// Incoming webhooks (Settings → Webhooks → Incoming): other tools POST to
+// /site-api/public/hooks/:token and the data becomes CRM records. Shapes of
+// `config` live in src/lib/incoming-webhooks.ts; processing in
+// src/server/lib/incoming-webhooks.ts (a job per request).
+model IncomingWebhook {
+  id             String    @id @default(cuid())
+  name           String
+  tokenHash      String    @unique // SHA-256 of the URL token (lookup)
+  token          String // AES-GCM encrypted URL token (to show the URL again)
+  active         Boolean   @default(true)
+  action         String // contact | company | deal | ticket | automations
+  config         Json      @default("{}") // mapping, fixed values, tags, list, owner, mode, skipBlanks, deal / ticket options, idempotency path, rate limit
+  verify         String    @default("none") // none | header | hmac
+  verifyHeader   String? // header carrying the shared secret or the signature
+  verifyEncoding String? // hmac: hex | base64
+  secret         String? // AES-GCM encrypted shared secret / HMAC key
+  listenUntil    DateTime? // "Listen for a test request": the next request becomes the sample
+  sample         Json? // {payload, contentType, headers, at}
+  sampleAt       DateTime?
+  lastRequestAt  DateTime?
+  lastStatus     String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  requests IncomingWebhookRequest[]
+}
+
+// One received request (kept 30 days): accepted → processed / failed, or
+// duplicate / rejected / captured. `result` holds what it wrote (and the ids
+// already created, so a retried job never creates them twice).
+model IncomingWebhookRequest {
+  id             String          @id @default(cuid())
+  webhookId      String
+  webhook        IncomingWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  status         String // accepted | processed | failed | duplicate | rejected | captured
+  idempotencyKey String?
+  contentType    String?
+  size           Int             @default(0)
+  payload        Json? // parsed body (+ query parameters); null for rejected requests
+  headers        Json            @default("{}") // secret-looking values redacted
+  result         Json? // {outcome, entity, recordId, label, contactId, …}
+  error          String?
+  attempts       Int             @default(0)
+  processedAt    DateTime?
+  createdAt      DateTime        @default(now())
+
+  @@unique([webhookId, idempotencyKey])
+  @@index([webhookId, createdAt])
+  @@index([createdAt])
+}
+
+// ─── Data in API (Settings → Webhooks → Incoming) ───────────────────────────
+// Other platforms push data in through /site-api/public/data-in/v1/*, with an
+// API key (Bearer) and an HMAC signature made with the signing secret (the
+// "data-in" Setting row, encrypted). Catalogue: src/lib/data-in.ts.
+
+// Only the SHA-256 of a key is stored; `prefix` is what the UI shows. A key
+// acts as the user who created it (ownership, scope); revoked keys stay listed.
+model ApiKey {
+  id          String    @id @default(cuid())
+  name        String
+  prefix      String
+  keyHash     String    @unique
+  createdById String?
+  createdBy   Member?   @relation("ApiKeyCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  requests DataInRequest[]
+}
+
+// One Data in request (kept 30 days), accepted or refused. Records it touched
+// are kept loosely in `records` ([{entity, id, label}], no foreign keys), so
+// deleting or restoring a record never touches the log. Headers are not kept
+// and secret-looking body values are redacted.
+model DataInRequest {
+  id             String   @id @default(cuid())
+  apiKeyId       String?
+  apiKey         ApiKey?  @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  keyName        String?
+  keyPrefix      String?
+  action         String // catalogue key, e.g. contacts.upsert
+  method         String
+  path           String
+  status         Int
+  errorCode      String?
+  error          String?
+  durationMs     Int      @default(0)
+  idempotencyKey String?
+  replayed       Boolean  @default(false) // answered from a stored Idempotency-Key response
+  body           String? // the request body, cut to 4 KB
+  response       Json?
+  records        Json     @default("[]")
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+}
+
+// Idempotency-Key → the stored response, per API key, for 24 hours. A row
+// without a status is a request still running.
+model DataInIdempotency {
+  id        String   @id @default(cuid())
+  apiKeyId  String
+  key       String
+  action    String
+  status    Int?
+  response  Json?
+  createdAt DateTime @default(now())
+
+  @@unique([apiKeyId, key])
+  @@index([createdAt])
+}
+
+// Signatures already used (replay protection), kept for the 5-minute window.
+model DataInSignature {
+  signature String   @id // SHA-256 of the v1 value
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// Uploads live in Postgres (no R2 on this stack), 5 MB max each.
+model File {
+  id           String   @id @default(cuid())
+  name         String
+  mimeType     String
+  size         Int
+  storageId    String?  @unique // platform file id (`file_…`); bytes live in platform storage
+  purpose      String   @default("attachment") // attachment | form | ticket | public | import | import_errors | export
+  uploadedById String?
+  uploadedBy   Member?  @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  contactId    String?
+  contact      Contact? @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  companyId    String?
+  company      Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  dealId       String?
+  deal         Deal?    @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+
+  importSources Import[] @relation("ImportSource")
+  importErrors  Import[] @relation("ImportErrors")
+  exports       Export[]
+
+  @@index([contactId])
+  @@index([companyId])
+  @@index([dealId])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      Member    @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  type      String // mention | assigned | reminder | activity | stage_changed | deal_won | deal_lost | email_in
+  title     String
+  body      String?
+  link      String? // in-app path, e.g. /deals/abc
+  actorId   String?
+  actor     Member?   @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+}
+
+// People who get notified about a record besides its owner.
+model Follow {
+  userId    String
+  user      Member     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entity    EntityType
+  recordId  String
+  createdAt DateTime   @default(now())
+
+  @@id([userId, entity, recordId])
+  @@index([entity, recordId])
+}
+
+// ─── Forms ──────────────────────────────────────────────────────────────────
+
+enum FormStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+// Field list, logic and settings are JSON (see src/lib/forms.ts for the shapes),
+// so a form is edited and published as one document.
+model Form {
+  id               String     @id @default(cuid())
+  name             String
+  slug             String     @unique
+  status           FormStatus @default(DRAFT)
+  fields           Json       @default("[]")
+  settings         Json       @default("{}")
+  views            Int        @default(0)
+  starts           Int        @default(0)
+  submissionCount  Int        @default(0)
+  lastSubmissionAt DateTime?
+  createdById      String?
+  createdBy        Member?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  publishedAt      DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  submissions FormSubmission[]
+}
+
+model FormSubmission {
+  id        String   @id @default(cuid())
+  formId    String
+  form      Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  // [{fieldId, label, type, value}]: self-describing, so later form edits never lose answers
+  answers   Json     @default("[]")
+  // utm_*, referrer, page URL, user agent, ending shown, emails sent
+  meta      Json     @default("{}")
+  email     String?
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  dealId    String?
+  deal      Deal?    @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+
+  @@index([formId, createdAt])
+  @@index([contactId])
+  @@index([formId, email])
+}
+
+// ─── Lists & segments ───────────────────────────────────────────────────────
+
+enum ListKind {
+  STATIC
+  DYNAMIC
+}
+
+// STATIC lists hold members; DYNAMIC segments hold filter rules (shape in
+// src/lib/segments.ts) and are evaluated on read by src/server/lib/segments.ts.
+model ContactList {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  kind        ListKind @default(STATIC)
+  rules       Json     @default("{}")
+  ownerId     String?
+  owner       Member?  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members    ContactListMember[]
+  broadcasts Broadcast[]
+
+  @@index([name])
+}
+
+model ContactListMember {
+  listId    String
+  list      ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contactId String
+  contact   Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  source    String? // manual | bulk | import | form | merge | snapshot
+  addedById String?
+  createdAt DateTime    @default(now())
+
+  @@id([listId, contactId])
+  @@index([contactId])
+}
+
+// ─── Reports, dashboards & goals ────────────────────────────────────────────
+
+// A saved report. The builder's definition (object, measure, group-bys,
+// filters, chart) is one JSON document; shape in src/lib/reports.ts.
+model Report {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  config      Json     @default("{}")
+  shared      Boolean  @default(true)
+  ownerId     String?
+  owner       Member?  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  widgets   DashboardWidget[]
+  schedules ReportSchedule[]
+}
+
+model Dashboard {
+  id        String   @id @default(cuid())
+  name      String
+  shared    Boolean  @default(false)
+  filters   Json     @default("{}") // default date range + owner applied to every widget
+  ownerId   String?
+  owner     Member?  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  widgets   DashboardWidget[]
+  schedules ReportSchedule[]
+}
+
+model DashboardWidget {
+  id          String    @id @default(cuid())
+  dashboardId String
+  dashboard   Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  reportId    String
+  report      Report    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  size        String    @default("medium") // small | medium | large
+  position    Int       @default(0)
+
+  @@index([dashboardId, position])
+}
+
+// A recurring target, every month or quarter from startsAt on. userId null = the whole team.
+model Goal {
+  id        String    @id @default(cuid())
+  metric    String // won_revenue | deals_won | activities
+  period    String    @default("MONTH") // MONTH | QUARTER
+  target    Float
+  kinds     String[]  @default([]) // activities: CALL | MEETING | EMAIL (empty = all three)
+  userId    String?
+  user      Member?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  startsAt  DateTime  @default(now())
+  endsAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+// ─── Tickets & support portal ───────────────────────────────────────────────
+
+enum TicketStatus {
+  NEW
+  WAITING_ON_CONTACT
+  WAITING_ON_US
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum TicketSource {
+  EMAIL
+  FORM
+  PORTAL
+  MANUAL
+  WEBHOOK
+  API
+}
+
+// Support tickets. Categories, queues, SLA targets and portal/CSAT switches
+// live in the "tickets" Setting row (see src/lib/tickets.ts).
+model Ticket {
+  id                      String         @id @default(cuid())
+  number                  Int            @unique @default(autoincrement()) // shown as #1001…
+  subject                 String
+  description             String?
+  descriptionHtml         String? // sanitised rich text (rich-text.ts); `description` stays its plain text
+  status                  TicketStatus   @default(NEW)
+  priority                TicketPriority @default(NORMAL)
+  category                String?
+  queue                   String? // team queue, e.g. "Billing"
+  source                  TicketSource   @default(MANUAL)
+  tags                    String[]       @default([])
+  assigneeId              String?
+  assignee                Member?        @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  contactId               String?
+  contact                 Contact?       @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  companyId               String?
+  company                 Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  dealId                  String?
+  deal                    Deal?          @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  emailThreadId           String?        @unique // EmailThread carrying the emailed conversation (threading headers)
+  firstResponseAt         DateTime?
+  firstResponseDueAt      DateTime?
+  firstResponseBreachedAt DateTime?
+  resolvedAt              DateTime?
+  resolutionDueAt         DateTime?
+  resolutionBreachedAt    DateTime?
+  closedAt                DateTime?
+  csatRating              Int? // 1-5
+  csatComment             String?
+  csatAt                  DateTime?
+  csatSentAt              DateTime?
+  lastMessageAt           DateTime       @default(now())
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+
+  messages TicketMessage[]
+
+  @@index([status])
+  @@index([assigneeId, status])
+  @@index([contactId])
+  @@index([companyId])
+  @@index([dealId])
+  @@index([lastMessageAt])
+}
+
+// The ticket thread: public replies (emailed), internal notes and events
+// (status changes, assignment, SLA breaches).
+model TicketMessage {
+  id             String   @id @default(cuid())
+  ticketId       String
+  ticket         Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  kind           String // reply | note | event
+  direction      String? // replies: INBOUND (customer) | OUTBOUND (team)
+  via            String? // email | portal | app | form
+  body           String   @default("")
+  html           String? // sanitised rich text (rich-text.ts); `body` stays its plain text
+  authorId       String?
+  author         Member?  @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  fromEmail      String? // customer replies
+  fromName       String?
+  emailMessageId String? // EmailMessage sent or received for this reply
+  fileIds        String[] @default([]) // File rows (purpose "ticket")
+  data           Json     @default("{}") // events: {type, from, to, …}
+  createdAt      DateTime @default(now())
+
+  @@index([ticketId, createdAt])
+  @@index([emailMessageId])
+}
+
+// Saved reply snippets; merge fields like {{contact.first_name}} are filled on send.
+model CannedReply {
+  id        String   @id @default(cuid())
+  name      String
+  body      String
+  html      String? // sanitised rich text; `body` stays its plain text
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Scheduling & calendar sync ─────────────────────────────────────────────
+
+// A user's public booking identity: /book/:handle/:slug, plus their default timezone.
+model SchedulingProfile {
+  userId    String   @id
+  user      Member   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  handle    String   @unique
+  timezone  String   @default("UTC")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// A bookable meeting type. Personal links belong to `userId` (/book/:handle/:slug);
+// team links (kind "team", /book/team/:slug) rotate among `hostIds`.
+// Availability and questions are JSON (shapes in src/lib/scheduling.ts).
+model BookingLink {
+  id           String   @id @default(cuid())
+  kind         String   @default("personal") // personal | team
+  userId       String? // owner (personal) or creator (team)
+  user         Member?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  hostIds      String[] @default([]) // team links: users in the rotation
+  slug         String
+  name         String
+  description  String?
+  durations    Int[]    @default([30]) // minutes; the first one is preselected
+  timezone     String   @default("UTC") // the timezone `availability` is written in
+  availability Json     @default("{}")
+  bufferBefore Int      @default(0)
+  bufferAfter  Int      @default(0)
+  minNoticeMin Int      @default(240)
+  maxDaysAhead Int      @default(60)
+  dailyLimit   Int? // bookings per host per day
+  slotStepMin  Int? // start times every N minutes (null = the duration)
+  locationType String   @default("VIDEO") // VIDEO | PHONE | IN_PERSON | OTHER, like Interaction.locationType
+  location     String? // fixed link / phone / address; VIDEO + empty = the calendar's Meet / Teams link
+  questions    Json     @default("{}")
+  active       Boolean  @default(true)
+  bookingCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  bookings Booking[]
+
+  @@index([kind, slug])
+  @@index([userId])
+}
+
+// One booked slot. The meeting itself is an Interaction (kind MEETING) on the timeline.
+model Booking {
+  id            String       @id @default(cuid())
+  linkId        String?
+  link          BookingLink? @relation(fields: [linkId], references: [id], onDelete: SetNull)
+  hostId        String?
+  host          Member?      @relation(fields: [hostId], references: [id], onDelete: SetNull)
+  interactionId String?      @unique
+  contactId     String?
+  status        String       @default("CONFIRMED") // CONFIRMED | CANCELED
+  title         String
+  startAt       DateTime
+  endAt         DateTime
+  timezone      String       @default("UTC") // the invitee's, used in their emails
+  name          String
+  email         String
+  phone         String?
+  company       String?
+  notes         String?
+  locationType  String?
+  location      String?
+  source        String       @default("page") // page | widget | form
+  meta          Json         @default("{}") // emails sent, form submission, reschedule history
+  cancelReason  String?
+  canceledAt    DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([hostId, startAt])
+  @@index([linkId, startAt])
+  @@index([email])
+}
+
+// Google / Microsoft calendar of one user. Tokens are AES-GCM encrypted.
+model CalendarConnection {
+  id               String    @id @default(cuid())
+  userId           String
+  user             Member    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider         String // google | microsoft
+  email            String
+  credentials      String // encrypted OAuth tokens, never returned to the browser
+  calendars        Json      @default("[]") // [{id, name, primary, writable}] as last listed
+  busyCalendarIds  String[]  @default([]) // checked for conflicts on booking pages
+  targetCalendarId String? // where new meetings are written (null = primary)
+  isDefault        Boolean   @default(false) // the connection new meetings are written to
+  syncMeetings     Boolean   @default(true) // log events with known contacts as meetings
+  status           String    @default("CONNECTED") // CONNECTED | ERROR
+  lastError        String?
+  lastSyncedAt     DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  events CalendarEvent[]
+
+  @@unique([userId, provider, email])
+}
+
+// A calendar event mirrored by a CRM meeting (written by the CRM or imported by sync).
+model CalendarEvent {
+  id            String             @id @default(cuid())
+  connectionId  String
+  connection    CalendarConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  calendarId    String
+  externalId    String
+  interactionId String?
+  changeKey     String? // provider's last-modified marker, to skip unchanged events
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@unique([connectionId, externalId])
+  @@index([interactionId])
+}
+
+// ─── Broadcasts (one-off email to a list) ───────────────────────────────────
+
+// A one-off email to a list or segment: no follow-up steps. Recipients are
+// resolved when sending starts (as the creator would see them); batches run as
+// jobs, go through sendEmail() and wait for the account's daily limit.
+model Broadcast {
+  id           String        @id @default(cuid())
+  listId       String?
+  list         ContactList?  @relation(fields: [listId], references: [id], onDelete: SetNull)
+  listName     String // kept for the history when the list is deleted
+  accountId    String?
+  account      EmailAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  createdById  String?
+  createdBy    Member?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  subject      String
+  html         String // editor HTML; always sent in the branded layout (unsubscribe link)
+  preheader    String?
+  templateId   String? // template it started from, for reference
+  status       String        @default("SCHEDULED") // SCHEDULED | SENDING | SENT | CANCELED
+  scheduledAt  DateTime      @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  canceledAt   DateTime?
+  waitingUntil DateTime? // daily limit reached: the next batch runs then
+  origin       String // site origin for tracking and unsubscribe links
+  total        Int           @default(0) // recipients after exclusions, set when sending starts
+  excluded     Json          @default("{}") // {optedOut, noEmail, duplicates} when sending started
+  error        String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  recipients BroadcastRecipient[]
+
+  @@index([listId, createdAt])
+  @@index([status])
+}
+
+model BroadcastRecipient {
+  id          String    @id @default(cuid())
+  broadcastId String
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  contactId   String?
+  email       String // lower-cased; one row per address
+  status      String    @default("PENDING") // PENDING | SENDING | SENT | FAILED | SKIPPED | CANCELED
+  messageId   String? // EmailMessage sent (opens / clicks come from it)
+  error       String?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([broadcastId, email])
+  @@index([broadcastId, status])
+  @@index([contactId])
+}
+
+// ─── Lead scoring ───────────────────────────────────────────────────────────
+
+// A scoring rule. "property" rules add points while a contact matches segment
+// rules (`rules`, same JSON as ContactList.rules); "behavior" rules add points
+// each time a domain event (`event`) happens, within an optional limit.
+model ScoreRule {
+  id         String   @id @default(cuid())
+  name       String
+  kind       String // property | behavior
+  enabled    Boolean  @default(true)
+  points     Int // may be negative
+  rules      Json     @default("{}") // property: SegmentRules
+  event      String? // behavior: event type, e.g. email.opened
+  filter     Json     @default("{}") // behavior: {formId?, linkId?, pipelineId?, listId?, kind?}
+  limitCount Int? // behavior: at most N awards per contact (null = no limit)
+  limitDays  Int? // … within the last N days (null = ever)
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  scoreEvents ScoreEvent[]
+
+  @@index([kind, enabled])
+  @@index([event])
+}
+
+// Why a contact has its score: one row per award. Property awards stay until the
+// contact stops matching (revokedAt); behaviour awards age with the decay setting.
+model ScoreEvent {
+  id        String     @id @default(cuid())
+  contactId String
+  contact   Contact    @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  ruleId    String?
+  rule      ScoreRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  ruleName  String // snapshot, survives rule renames and deletes
+  kind      String // property | behavior
+  points    Int
+  reason    String
+  eventType String?
+  eventId   String? // the domain Event that earned it (behavior)
+  refId     String? // the record behind it (email, form submission, deal…)
+  revokedAt DateTime?
+  createdAt DateTime   @default(now())
+
+  @@unique([ruleId, eventId, contactId])
+  @@index([contactId, createdAt])
+  @@index([ruleId, contactId])
+}
+
+// ─── Data hygiene: audit log, recycle bin, duplicates ───────────────────────
+
+// Who did what, when and from where (Settings → Audit log, admins only). No
+// foreign key to User, so entries outlive accounts; the actor is a snapshot.
+model AuditLog {
+  id         String   @id @default(cuid())
+  action     String // <entity>.<verb>: contact.deleted, auth.login_failed, export.contacts, webhook.secret_revealed…
+  category   String // record | auth | team | settings | export | security
+  entity     String? // contact | company | deal | ticket | form | list | booking_link | template | webhook | user | …
+  recordId   String?
+  label      String? // the record's name at the time
+  actorId    String?
+  actorName  String?
+  actorEmail String?
+  meta       Json     @default("{}") // compact diff / details; secrets are redacted or fingerprinted
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([entity, recordId])
+  @@index([category, createdAt])
+}
+
+// Recycle bin: a deleted record plus everything its delete cascaded, restorable
+// with the same ids for 30 days (src/server/lib/recycle-bin.ts). Its files stay
+// as File rows with purpose "trash" until the entry is purged.
+model DeletedRecord {
+  id            String   @id @default(cuid())
+  entity        String // contact | company | deal | ticket | form | list
+  recordId      String
+  label         String
+  detail        String? // email, domain, value, ticket number… for the bin list
+  counts        Json     @default("{}") // {note: 3, task: 1, …} for the bin list
+  snapshot      Json // {v, record, rows: {table: row[]}, relink: {"table.column": id[]}, files: […]}
+  fileIds       String[] @default([])
+  deletedById   String?
+  deletedByName String?
+  deletedAt     DateTime @default(now())
+  expiresAt     DateTime
+
+  @@index([entity, deletedAt])
+  @@index([deletedById, deletedAt])
+  @@index([expiresAt])
+  @@index([recordId])
+}
+
+// A likely duplicate pair (aId < bId) found by src/server/lib/duplicates.ts.
+// "Not a duplicate" sets status dismissed, so the pair is never suggested again.
+model DuplicatePair {
+  id            String    @id @default(cuid())
+  entity        String // contact | company
+  aId           String
+  bId           String
+  reasons       String[]  @default([]) // see DUPLICATE_REASONS in src/lib/hygiene.ts
+  score         Int // confidence 0-100
+  status        String    @default("open") // open | dismissed
+  dismissedById String?
+  dismissedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([entity, aId, bId])
+  @@index([entity, status, score])
+  @@index([bId])
+}
+
+// ─── Automations ────────────────────────────────────────────────────────────
+
+// A trigger + a tree of steps about one record type (shapes in
+// src/lib/automations.ts, engine in src/server/lib/automations.ts). Runs are
+// jobs; every run keeps its step history in AutomationRunStep.
+model Automation {
+  id            String    @id @default(cuid())
+  name          String
+  description   String?
+  enabled       Boolean   @default(false)
+  object        String // contact | company | deal | ticket | none
+  triggerKind   String // event | date | inactivity | manual
+  triggerEvent  String? // event triggers: the event type (what the emit() hook looks up)
+  trigger       Json      @default("{}")
+  steps         Json      @default("[]")
+  reenroll      String    @default("always") // always | never | after (reenrollDays)
+  reenrollDays  Int?
+  activeFrom    DateTime?
+  activeUntil   DateTime?
+  timezone      String    @default("UTC") // time-of-day triggers and waits
+  origin        String    @default("") // site origin for links in emails sent by runs
+  webhookSecret String? // AES-GCM encrypted signing secret for webhook steps
+  state         Json      @default("{}") // round-robin positions per step
+  cursorAt      DateTime? // date / inactivity triggers: checked up to here
+  enabledAt     DateTime?
+  failureStreak Int       @default(0) // failed runs in a row (the creator hears about repeated failures)
+  lastRunAt     DateTime?
+  createdById   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  runs  AutomationRun[]
+  fires AutomationFire[]
+
+  @@index([enabled, triggerKind])
+  @@index([triggerEvent])
+}
+
+// One run of an automation for one record (or none).
+model AutomationRun {
+  id           String     @id @default(cuid())
+  automationId String
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  object       String
+  recordId     String?
+  recordLabel  String?
+  ownerId      String? // record owner when the run started (owner-only visibility)
+  status       String     @default("running") // running | waiting | done | failed | skipped | canceled
+  source       String // event | date | inactivity | manual | list
+  eventType    String?
+  dedupeKey    String?    @unique // one run per (automation, event) / (automation, fire)
+  chainId      String // runs caused by each other's events share a chain
+  depth        Int        @default(0)
+  context      Json       @default("{}") // trigger snapshot: event data, date value…
+  cursor       String? // id of the next step to run
+  waitUntil    DateTime?
+  error        String?
+  startedById  String?
+  startedAt    DateTime   @default(now())
+  finishedAt   DateTime?
+  // Test runs from the editor: quick | timed (simulations, nothing happens) | record (for real).
+  // Null for real runs. Tests never count in stats, failure streaks, re-enrollment or rate limits.
+  test         String?
+  definition   Json? // test runs: the editor's draft they execute (name, object, trigger, steps, timezone)
+
+  steps AutomationRunStep[]
+
+  @@index([automationId, startedAt])
+  @@index([recordId, startedAt])
+  @@index([status, startedAt])
+}
+
+// Step history of a run; (runId, stepId) is unique, so a retried job never repeats a finished step.
+model AutomationRunStep {
+  id         String        @id @default(cuid())
+  runId      String
+  run        AutomationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stepId     String
+  type       String
+  status     String        @default("running") // running | done | skipped | failed
+  attempts   Int           @default(1)
+  input      Json          @default("{}") // values remembered for retries (round-robin pick, created ids)
+  output     Json          @default("{}")
+  error      String?
+  startedAt  DateTime      @default(now())
+  finishedAt DateTime?
+
+  @@unique([runId, stepId])
+  @@index([runId, startedAt])
+}
+
+// Exactly-once log for date and inactivity triggers: (automation, record, trigger value).
+// A changed date is a new value, so the automation re-arms.
+model AutomationFire {
+  automationId String
+  automation   Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  recordId     String
+  value        String
+  createdAt    DateTime   @default(now())
+
+  @@id([automationId, recordId, value])
+}
+
+// ─── Import & export ────────────────────────────────────────────────────────
+
+// Big files (exports up to 50 MB) are written in pieces: File.data stays empty
+// and the bytes are these chunks in `seq` order (see src/server/lib/file-chunks.ts).
+// A CSV import started from a list page (src/server/lib/imports.ts): draft → validating (dry run) → ready →
+// queued → running → done | failed | canceled. Both phases run as self-chaining job batches; counts are the
+// current phase's, the dry run's are kept in `preview`.
+model Import {
+  id          String    @id @default(cuid())
+  entity      String // contact | company | deal
+  status      String    @default("draft")
+  fileName    String
+  fileId      String? // the uploaded CSV (File, purpose "import")
+  file        File?     @relation("ImportSource", fields: [fileId], references: [id], onDelete: SetNull)
+  errorFileId String? // rows that failed, with the reason (File, purpose "import_errors")
+  errorFile   File?     @relation("ImportErrors", fields: [errorFileId], references: [id], onDelete: SetNull)
+  userId      String?
+  user        Member?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  headers     String[]  @default([])
+  delimiter   String    @default(",")
+  mapping     Json      @default("[]") // target per column index (null = skip)
+  options     Json      @default("{}") // ImportOptions in src/lib/import-export.ts
+  total       Int       @default(0)
+  processed   Int       @default(0)
+  created     Int       @default(0)
+  updated     Int       @default(0)
+  skipped     Int       @default(0)
+  failed      Int       @default(0)
+  warnings    Int       @default(0)
+  preview     Json? // dry-run counts
+  stats       Json      @default("{}") // companies created, list adds, owners assigned…
+  error       String?
+  token       String? // the current phase's job chain; older chains stop
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  issues ImportIssue[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+// Per-row errors and warnings of an import's dry run ("validate") or run.
+model ImportIssue {
+  id       String  @id @default(cuid())
+  importId String
+  import   Import  @relation(fields: [importId], references: [id], onDelete: Cascade)
+  phase    String // validate | run
+  row      Int // spreadsheet row (the header is row 1)
+  level    String // error | warning
+  column   String?
+  message  String
+
+  @@index([importId, phase, row])
+}
+
+// A CSV export from a list page (src/server/lib/exports.ts). Small ones are written during the request, big
+// ones by background jobs, into platform storage; the file is deleted after 7 days.
+model Export {
+  id         String    @id @default(cuid())
+  entity     String // contact | company | deal
+  status     String    @default("queued") // queued | running | done | failed
+  userId     String?
+  user       Member?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  filters    Json      @default("{}")
+  columns    String[]  @default([])
+  listId     String?
+  fileName   String
+  fileId     String?
+  file       File?     @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  total      Int       @default(0)
+  processed  Int       @default(0)
+  cursor     String? // last exported id
+  chunks     Int       @default(0)
+  emailMe    Boolean   @default(false)
+  emailed    Boolean   @default(false)
+  origin     String? // site origin for the emailed link
+  error      String?
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+/// "Email this report / dashboard every Monday at 9:00": one schedule of a saved report or a whole dashboard.
+model ReportSchedule {
+  id          String     @id @default(cuid())
+  reportId    String?
+  report      Report?    @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  dashboardId String?
+  dashboard   Dashboard? @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+  /// The creator: reports run with their visibility, failures notify them.
+  ownerId     String
+  owner       Member     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  frequency   String // daily | weekly | monthly
+  weekday     Int? // weekly: 0 = Sunday … 6 = Saturday
+  monthDay    Int? // monthly: 1–31 (clamped to short months), -1 = last day
+  time        String     @default("09:00") // HH:MM, wall clock in `timezone`
+  timezone    String     @default("UTC")
+  userIds     String[] // team members
+  emails      String[] // external addresses
+  subject     String?
+  note        String?
+  range       String     @default("report") // report = its own range | previous = the period since the last send
+  active      Boolean    @default(true)
+  /// Public origin for links when EZY_SITE_URL is unset (captured from the request).
+  origin      String     @default("")
+  /// Slots after this instant are due (moved to now on create / resume / timing changes).
+  cursor      DateTime   @default(now())
+  nextRunAt   DateTime?
+  lastSlotAt  DateTime?
+  lastSentAt  DateTime?
+  lastStatus  String? // sent | failed | no_mailbox | partial
+  lastError   String?
+  failures    Int        @default(0) // failed sends in a row
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  sends ReportScheduleSend[]
+
+  @@index([active, nextRunAt])
+  @@index([ownerId])
+}
+
+/// One send of a schedule per slot (exactly-once fire log); `delivered` keeps retries from emailing anyone twice.
+model ReportScheduleSend {
+  id         String         @id @default(cuid())
+  scheduleId String
+  schedule   ReportSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  slotAt     DateTime
+  manual     Boolean        @default(false)
+  status     String         @default("pending") // pending | sent | failed | no_mailbox
+  delivered  String[]
+  recipients Int            @default(0)
+  attempts   Int            @default(0)
+  error      String?
+  sentAt     DateTime?
+  createdAt  DateTime       @default(now())
+
+  @@unique([scheduleId, slotAt])
+}

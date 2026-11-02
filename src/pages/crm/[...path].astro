@@ -1,0 +1,50 @@
+---
+/**
+ * Every `/crm/*` URL renders this page; Kinroot's TanStack Router app inside it picks the
+ * screen in the browser (src/crm/CrmApp.tsx, screens in src/crm/routes). Signed-in users only:
+ * the server checks the visitor's session first and everyone else gets a sign-in prompt (the
+ * Site API checks again on every call: this page is not the guard).
+ *
+ * The ONLY `.astro` file of the CRM: never add one per screen.
+ */
+import CrmApp from '../../crm/CrmApp';
+import {DEFAULT_BRAND} from '../../crm/lib/brand';
+import Crm from '../../layouts/Crm.astro';
+import {config} from '../../platform/config';
+import {pageContext} from '../../server/page';
+
+export const prerender = false;
+
+const {viewer} = await pageContext(Astro.request, Astro.response);
+const brand = DEFAULT_BRAND;
+const back = encodeURIComponent(`${Astro.url.pathname}${Astro.url.search}`);
+// The editor Preview's gateway drops cookies, so this page never sees the session there: the
+// app starts anyway and asks the Site API itself (it sends a signed-out visitor to sign in).
+const open = viewer.state === 'user' || config.preview;
+---
+
+<Crm brand={brand} viewer={viewer} title="CRM">
+  {
+    open ? (
+      <>
+        <CrmApp client:only="react" />
+        <noscript>
+          <p class="p-8 text-center text-muted-foreground">Kinroot needs JavaScript.</p>
+        </noscript>
+      </>
+    ) : (
+      <main class="grid min-h-screen place-items-center bg-background p-6">
+        <div class="w-full max-w-sm rounded-2xl border bg-card p-8 text-center shadow-soft">
+          <img src={brand.logo || '/kinroot-mark.svg'} alt="" width="40" height="40" class="mx-auto mb-4 size-10 rounded-xl" />
+          <h1 class="text-xl font-bold">Sign in to continue</h1>
+          <p class="mt-2 text-sm text-muted-foreground">Sign in to {brand.name || 'Kinroot'} to open your CRM.</p>
+          <a
+            class="mt-6 inline-flex h-10 w-full items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-btn"
+            href={`/account/login/?next=${back}`}>Sign in</a
+          >
+          <a class="mt-3 inline-block text-sm text-muted-foreground hover:text-foreground" href="/">Back to the website</a>
+        </div>
+      </main>
+    )
+  }
+</Crm>

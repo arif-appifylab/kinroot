@@ -1,0 +1,40 @@
+---
+/**
+ * What a gated server-rendered page shows instead of its content
+ * (`pagePermission()` in `src/server/page-access.ts` decides `denied`).
+ * `refreshing`: the layout refreshes the session in the browser and reloads.
+ */
+import type {Site} from '../lib/types';
+import type {PageDenied} from '../server/page-access';
+
+interface Props {
+  site: Site | null;
+  denied: PageDenied | null;
+}
+
+const {denied} = Astro.props;
+const back = encodeURIComponent(`${Astro.url.pathname}${Astro.url.search}`);
+---
+
+<main id="main" tabindex="-1" class="wrap narrow section center">
+  {
+    denied === 'forbidden' ? (
+      <>
+        <p class="eyebrow">403</p>
+        <h1>You do not have access to this page</h1>
+        <p class="lede">Ask the site’s owner if you need it.</p>
+        <p>
+          <a class="button" href="/">Back to home</a>
+        </p>
+      </>
+    ) : (
+      <>
+        <h1>{denied === 'refreshing' ? 'Checking your session' : 'Sign in to continue'}</h1>
+        <p class="lede">This page is for signed-in users with access.</p>
+        <p>
+          <a class="button" href={`/account/login/?next=${back}`}>Sign in</a>
+        </p>
+      </>
+    )
+  }
+</main>

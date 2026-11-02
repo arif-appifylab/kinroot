@@ -1,0 +1,51 @@
+---
+/**
+ * Every `/dashboard/*` URL renders this page; the TanStack Router app inside it
+ * picks the screen in the browser. Signed-in users only: the server checks
+ * the visitor's own session first, and everyone else gets a sign-in prompt
+ * (the Site API checks again on every call — this page is not the guard;
+ * the app's shell also sends a signed-out visitor to sign in).
+ *
+ * The APP layout, not the website's: the portal draws its own full-height
+ * shell (sidebar, top bar). The ONLY `.astro` file of the app: never add one
+ * per screen.
+ */
+import App from '../../layouts/App.astro';
+import {config} from '../../platform/config';
+import PortalApp from '../../portal/PortalApp';
+import {pageContext} from '../../server/page';
+
+export const prerender = false;
+
+const {site, viewer} = await pageContext(Astro.request, Astro.response);
+const back = encodeURIComponent(`${Astro.url.pathname}${Astro.url.search}`);
+// The editor Preview's gateway drops cookies, so this page never sees the
+// session there: the app starts anyway and asks `/site-api/me` itself (its
+// shell sends a signed-out visitor to sign in).
+const open = viewer.state === 'user' || config.preview;
+---
+
+<App site={site} viewer={viewer} title="Dashboard">
+  {
+    open ? (
+      <>
+        <PortalApp client:only="react" />
+        <noscript>
+          <p class="app-gate">The dashboard needs JavaScript.</p>
+        </noscript>
+      </>
+    ) : (
+      <main class="app-gate">
+        <div class="card center">
+          <h1>Sign in to continue</h1>
+          <p class="lede">Sign in to {site?.name ?? 'this site'} to open your dashboard.</p>
+          <div class="actions">
+            <a class="button" href={`/account/login/?next=${back}`}>Sign in</a>
+            <a class="button ghost" href={`/account/register/?next=${back}`}>Create an account</a>
+            <a class="button link" href="/">Back to the website</a>
+          </div>
+        </div>
+      </main>
+    )
+  }
+</App>

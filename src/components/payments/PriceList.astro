@@ -1,0 +1,94 @@
+---
+/**
+ * A pricing section from the site's catalogue (docs/agent/payments.md › Step 1): one card per
+ * price with its name, amount, interval and trial, and a Buy / Subscribe button. While the site
+ * can't take payments yet (`ready: false`), the cards show "Coming soon" instead of a button.
+ * Reads the catalogue on the server, so put it on an on-demand page (`prerender = false`).
+ *
+ *   <PriceList />                                   every price
+ *   <PriceList keys={['club-monthly', 'club-yearly']} successPath="/thanks/" />
+ */
+import {formatMoney} from '../../lib/format';
+import {listPrices, type Price} from '../../platform/payments';
+import BuyButton from './BuyButton.astro';
+
+interface Props {
+  /** Only these price keys, in this order. Default: the whole catalogue. */
+  keys?: string[];
+  /** Where the buyer lands after paying (the platform adds `checkout=<id>`). */
+  successPath?: string;
+}
+
+const {keys, successPath = '/thanks/'} = Astro.props;
+const catalogue = await listPrices(Astro.url, {ttlSeconds: 60}).catch(() => null);
+const all = catalogue?.ok ? catalogue.data.prices : [];
+const prices: Price[] = keys ? keys.map(k => all.find(p => p.key === k)).filter((p): p is Price => !!p) : all;
+const open = catalogue?.ok ? catalogue.data.ready : false;
+
+const every = (p: Price) => {
+  if (p.interval === 'one_time') return '';
+  const n = p.intervalCount || 1;
+  return n === 1 ? ` / ${p.interval}` : ` every ${n} ${p.interval}s`;
+};
+---
+
+{
+  prices.length > 0 && (
+    <ul class="price-list" role="list">
+      {prices.map(p => (
+        <li class="price-card">
+          <h3 class="price-name">{p.name}</h3>
+          {p.description && <p class="price-description">{p.description}</p>}
+          <p class="price-amount">
+            {formatMoney(p.amountCents, p.currency)}
+            <span class="price-every">{every(p)}</span>
+          </p>
+          {p.trialDays > 0 && <p class="price-trial">{p.trialDays}-day free trial</p>}
+          {open ? (
+            <BuyButton price={p.key} label={p.interval === 'one_time' ? 'Buy now' : 'Subscribe'} successPath={successPath} />
+          ) : (
+            <p class="price-soon">Coming soon</p>
+          )}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+<style>
+  .price-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+    gap: 1rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .price-card {
+    display: grid;
+    align-content: start;
+    gap: 0.5rem;
+    padding: 1.25rem;
+    border: 1px solid var(--line, currentColor);
+    border-radius: var(--radius);
+  }
+  .price-name,
+  .price-description,
+  .price-amount,
+  .price-trial,
+  .price-soon {
+    margin: 0;
+  }
+  .price-amount {
+    font-size: 1.5rem;
+    font-weight: 700;
+  }
+  .price-every,
+  .price-description,
+  .price-trial,
+  .price-soon {
+    color: var(--muted);
+    font-size: 0.95rem;
+    font-weight: 400;
+  }
+</style>

@@ -1,0 +1,56 @@
+---
+/**
+ * Confirm a NEW email address for an existing account, from the link mailed to
+ * that address (`?token=`, single use, 24 hours). PRERENDERED. A button press,
+ * not the page load, uses the token: email scanners open links too. Confirming
+ * signs every device out; the person signs in again with the new address.
+ */
+import Base from '../../layouts/Base.astro';
+import {staticContext} from '../../server/page';
+
+export const prerender = true;
+
+const {site, viewer} = await staticContext(Astro.request);
+---
+
+<Base site={site} viewer={viewer} isStatic noindex secretInUrl title="Confirm your new email">
+  <main id="main" tabindex="-1" class="wrap auth-wrap section">
+    <div class="card auth-card">
+      <h1>Confirm your new email</h1>
+      <form id="confirm-form" class="auth-form" novalidate>
+        <p class="muted">Your account will sign in with this address from now on. Every device is signed out once you confirm.</p>
+        <p class="notice" data-form-status hidden></p>
+        <button class="button" type="submit">Confirm my new email</button>
+      </form>
+    </div>
+  </main>
+</Base>
+
+<script>
+  import {replaceWithMessage, takeToken} from '../../lib/account';
+  import {bindForm, postJson} from '../../lib/form';
+  import {siteFetch} from '../../platform/browser';
+
+  // Client navigation (ClientRouter): a bundled script runs once, so this page's code runs on
+  // every `astro:page-load` (the first load, each navigation, back/forward) while it is this page.
+  document.addEventListener('astro:page-load', () => {
+    if (!document.querySelector('#confirm-form')) return;
+    const token = takeToken();
+    const form = document.querySelector<HTMLFormElement>('#confirm-form')!;
+    if (!token) {
+      replaceWithMessage(form, 'This link is not complete. Open it again from the email, or ask for a new one in your account.');
+    }
+
+    bindForm(form, {
+      rules: {},
+      pendingLabel: 'Confirming…',
+      async submit() {
+        const {result} = await postJson(siteFetch, '/site-api/auth/email/confirm', {token});
+        if (result.ok) {
+          replaceWithMessage(form, result.message ?? 'Your email address is changed.', {href: '/account/login/', text: 'Sign in'});
+        }
+        return result;
+      },
+    });
+  });
+</script>

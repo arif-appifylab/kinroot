@@ -1,0 +1,332 @@
+/* Kinroot's design, compiled by Tailwind at build time (@tailwindcss/vite). It scans only
+ * src/crm (the app) for class names; it is loaded by the CRM's pages, never by the template's. */
+@import 'tailwindcss' source('.');
+/* The CRM's host page and layout use Kinroot classes too. */
+@source '../pages/crm';
+@source '../layouts/Crm.astro';
+@import 'tw-animate-css';
+/* Self-hosted (the CSP allows fonts from this site only): no Google Fonts request. */
+@import '@fontsource-variable/plus-jakarta-sans';
+/* Toasts: sonner also tries to inject this at runtime, which the CSP blocks; the file is the same CSS. */
+@import 'sonner/dist/styles.css';
+
+/*
+ * Design tokens: "Corporate Trust" style, Ocean palette.
+ * Royal blue → teal is the signature gradient; shadows are tinted with the
+ * primary hue instead of grey. Change colours here and the whole app follows.
+ */
+:root {
+  color-scheme: light;
+
+  --background: #f8fafc; /* slate 50 */
+  --foreground: #0f172a; /* slate 900 */
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+  --muted: #f1f5f9; /* slate 100 */
+  --muted-foreground: #64748b; /* slate 500 */
+  --accent: #eff6ff; /* blue 50: hover surfaces */
+  --accent-foreground: #1e3a8a;
+  --border: #e2e8f0; /* slate 200 */
+  --input: #e2e8f0;
+  --ring: #2563eb;
+
+  --primary: #2563eb; /* blue 600 */
+  --primary-foreground: #ffffff;
+  --secondary: #0d9488; /* teal 600: gradient partner */
+  --secondary-foreground: #ffffff;
+  --success: #16a34a;
+  --warning: #d97706;
+  --destructive: #e11d48;
+  --destructive-foreground: #ffffff;
+
+  --sidebar: #0b1533;
+  --sidebar-foreground: #cbd5e1;
+
+  /* Brand-tinted elevation */
+  --shadow-soft: 0 4px 20px -2px rgb(37 99 235 / 0.08);
+  --shadow-lift: 0 10px 25px -5px rgb(37 99 235 / 0.15), 0 8px 10px -6px rgb(37 99 235 / 0.1);
+  --shadow-btn: 0 4px 14px 0 rgb(37 99 235 / 0.3);
+  --shadow-glow: 0 0 20px rgb(37 99 235 / 0.45);
+}
+
+/*
+ * Dark mode. Besides the semantic tokens, the neutral (slate) scale is flipped
+ * and the light tints (50–200) / dark inks (600–800) of every accent hue are
+ * remapped, so existing utility classes like `bg-slate-50` or
+ * `bg-blue-50 text-blue-700` read correctly on dark surfaces without a
+ * `dark:` variant on every element. Raw `white` / `black` are left alone.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root.dark {
+  color-scheme: dark;
+
+  --background: #070c1a;
+  --foreground: #e2e8f0;
+  --card: #0f1629;
+  --card-foreground: #e2e8f0;
+  --popover: #131b31;
+  --popover-foreground: #e2e8f0;
+  --muted: #162036;
+  --muted-foreground: #94a3b8;
+  --accent: #142449;
+  --accent-foreground: #bfdbfe;
+  --border: #1e2a42;
+  --input: #26334f;
+  --ring: #3b82f6;
+
+  --primary: #3b82f6;
+  --secondary: #0d9488;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --destructive: #f43f5e;
+
+  --sidebar: #050915;
+  --sidebar-foreground: #cbd5e1;
+
+  --shadow-soft: 0 4px 20px -2px rgb(0 0 0 / 0.35);
+  --shadow-lift: 0 10px 25px -5px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(59 130 246 / 0.12);
+  --shadow-btn: 0 4px 14px 0 rgb(59 130 246 / 0.35);
+  --shadow-glow: 0 0 20px rgb(59 130 246 / 0.45);
+
+  --color-slate-50: #0b1222;
+  --color-slate-100: #18223a;
+  --color-slate-200: #233049;
+  --color-slate-300: #33415e;
+  --color-slate-400: #6b7a96;
+  --color-slate-500: #8b99b2;
+  --color-slate-600: #a9b5c9;
+  --color-slate-700: #c3cddc;
+  --color-slate-800: #dbe2ec;
+  --color-slate-900: #eef2f7;
+  --color-slate-950: #f8fafc;
+
+  --color-blue-50: color-mix(in oklab, var(--color-blue-500) 14%, var(--card));
+  --color-blue-100: color-mix(in oklab, var(--color-blue-500) 22%, var(--card));
+  --color-blue-200: color-mix(in oklab, var(--color-blue-500) 32%, var(--card));
+  --color-blue-600: color-mix(in oklab, var(--color-blue-500) 72%, white);
+  --color-blue-700: color-mix(in oklab, var(--color-blue-500) 58%, white);
+  --color-blue-800: color-mix(in oklab, var(--color-blue-500) 46%, white);
+  --color-teal-50: color-mix(in oklab, var(--color-teal-500) 14%, var(--card));
+  --color-teal-100: color-mix(in oklab, var(--color-teal-500) 22%, var(--card));
+  --color-teal-200: color-mix(in oklab, var(--color-teal-500) 32%, var(--card));
+  --color-teal-600: color-mix(in oklab, var(--color-teal-500) 72%, white);
+  --color-teal-700: color-mix(in oklab, var(--color-teal-500) 58%, white);
+  --color-teal-800: color-mix(in oklab, var(--color-teal-500) 46%, white);
+  --color-green-50: color-mix(in oklab, var(--color-green-500) 14%, var(--card));
+  --color-green-100: color-mix(in oklab, var(--color-green-500) 22%, var(--card));
+  --color-green-200: color-mix(in oklab, var(--color-green-500) 32%, var(--card));
+  --color-green-600: color-mix(in oklab, var(--color-green-500) 72%, white);
+  --color-green-700: color-mix(in oklab, var(--color-green-500) 58%, white);
+  --color-green-800: color-mix(in oklab, var(--color-green-500) 46%, white);
+  --color-amber-50: color-mix(in oklab, var(--color-amber-500) 14%, var(--card));
+  --color-amber-100: color-mix(in oklab, var(--color-amber-500) 22%, var(--card));
+  --color-amber-200: color-mix(in oklab, var(--color-amber-500) 32%, var(--card));
+  --color-amber-600: color-mix(in oklab, var(--color-amber-500) 72%, white);
+  --color-amber-700: color-mix(in oklab, var(--color-amber-500) 58%, white);
+  --color-amber-800: color-mix(in oklab, var(--color-amber-500) 46%, white);
+  --color-amber-900: color-mix(in oklab, var(--color-amber-500) 36%, white);
+  --color-rose-50: color-mix(in oklab, var(--color-rose-500) 14%, var(--card));
+  --color-rose-100: color-mix(in oklab, var(--color-rose-500) 22%, var(--card));
+  --color-rose-200: color-mix(in oklab, var(--color-rose-500) 32%, var(--card));
+  --color-rose-600: color-mix(in oklab, var(--color-rose-500) 72%, white);
+  --color-rose-700: color-mix(in oklab, var(--color-rose-500) 58%, white);
+  --color-rose-800: color-mix(in oklab, var(--color-rose-500) 46%, white);
+  --color-violet-50: color-mix(in oklab, var(--color-violet-500) 14%, var(--card));
+  --color-violet-100: color-mix(in oklab, var(--color-violet-500) 22%, var(--card));
+  --color-violet-200: color-mix(in oklab, var(--color-violet-500) 32%, var(--card));
+  --color-violet-600: color-mix(in oklab, var(--color-violet-500) 72%, white);
+  --color-violet-700: color-mix(in oklab, var(--color-violet-500) 58%, white);
+  --color-violet-800: color-mix(in oklab, var(--color-violet-500) 46%, white);
+  --color-sky-50: color-mix(in oklab, var(--color-sky-500) 14%, var(--card));
+  --color-sky-100: color-mix(in oklab, var(--color-sky-500) 22%, var(--card));
+  --color-sky-200: color-mix(in oklab, var(--color-sky-500) 32%, var(--card));
+  --color-sky-600: color-mix(in oklab, var(--color-sky-500) 72%, white);
+  --color-sky-700: color-mix(in oklab, var(--color-sky-500) 58%, white);
+  --color-sky-800: color-mix(in oklab, var(--color-sky-500) 46%, white);
+}
+
+/*
+ * Always-light islands inside a dark page: the website chat panel looks the same on every
+ * site, so it keeps the default palette for the colours it uses (the dark theme above
+ * remaps them for the app).
+ */
+:root.dark .light-scope {
+  color-scheme: light;
+  --color-slate-50: oklch(98.4% 0.003 247.858);
+  --color-slate-100: oklch(96.8% 0.007 247.896);
+  --color-slate-200: oklch(92.9% 0.013 255.508);
+  --color-slate-300: oklch(86.9% 0.022 252.894);
+  --color-slate-400: oklch(70.4% 0.04 256.788);
+  --color-slate-500: oklch(55.4% 0.046 257.417);
+  --color-slate-600: oklch(44.6% 0.043 257.281);
+  --color-slate-700: oklch(37.2% 0.044 257.287);
+  --color-slate-800: oklch(27.9% 0.041 260.031);
+  --color-slate-900: oklch(20.8% 0.042 265.755);
+  --color-slate-950: oklch(12.9% 0.042 264.695);
+  --color-rose-50: oklch(96.9% 0.015 12.422);
+  --color-rose-600: oklch(58.6% 0.253 17.585);
+  --color-rose-700: oklch(51.4% 0.222 16.935);
+  --color-amber-50: oklch(98.7% 0.022 95.277);
+  --color-amber-800: oklch(47.3% 0.137 46.201);
+  --color-amber-900: oklch(41.4% 0.112 45.904);
+}
+
+:root.dark .blob {
+  opacity: 0.35;
+}
+
+@theme inline {
+  --font-sans: 'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+
+  --shadow-soft: var(--shadow-soft);
+  --shadow-lift: var(--shadow-lift);
+  --shadow-btn: var(--shadow-btn);
+  --shadow-glow: var(--shadow-glow);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  h1,
+  h2,
+  h3 {
+    @apply tracking-[-0.02em];
+  }
+  ::selection {
+    background: rgb(37 99 235 / 0.18);
+  }
+}
+
+@utility bg-brand {
+  background-image: linear-gradient(135deg, var(--primary), var(--secondary));
+}
+
+@utility text-brand {
+  background-image: linear-gradient(135deg, var(--primary), var(--secondary));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Soft blurred orbs for atmospheric depth (auth screens, empty states). */
+@utility blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(64px);
+  pointer-events: none;
+}
+
+/* Recharts draws with SVG attributes; CSS wins, so charts follow the theme. */
+.recharts-cartesian-grid line {
+  stroke: var(--border);
+}
+.recharts-cartesian-axis-tick text {
+  fill: var(--muted-foreground);
+}
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-slate-300) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/*
+ * Chart palette (reports). Validated with the dataviz validator against the
+ * card surface in both modes: categorical slots are assigned in this fixed
+ * order and never cycled; past 8 series the tail folds into "Other" (gray).
+ * The ordinal ramp (one hue, light → dark) is for ordered categories such as
+ * forecast categories. Status colours are reserved for good / warning /
+ * critical and always ship with an icon + label.
+ */
+:root {
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #6250d6;
+  --chart-8: #e34948;
+  --chart-other: #94a3b8;
+  --chart-ord-1: #86b6ef;
+  --chart-ord-2: #5598e7;
+  --chart-ord-3: #256abf;
+  --chart-ord-4: #104281;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-critical: #d03b3b;
+}
+
+:root.dark {
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
+  --chart-other: #64748b;
+  --chart-ord-1: #1c5cab;
+  --chart-ord-2: #2a78d6;
+  --chart-ord-3: #5598e7;
+  --chart-ord-4: #9ec5f4;
+}
+
+/*
+ * Page scroll lock while a drawer or menu is open. Radix (react-remove-scroll-bar) injects
+ * these rules as an inline <style>, which the CSP blocks; it still marks <body>, so the
+ * same rules live here.
+ */
+body[data-scroll-locked] {
+  overflow: hidden !important;
+  overscroll-behavior: contain;
+}

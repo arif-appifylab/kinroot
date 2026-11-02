@@ -1,0 +1,86 @@
+---
+/**
+ * The job board: search and filters as a plain GET form, so every result set
+ * is a real, shareable URL (`/jobs?search=dev&type=contract&remote=1`).
+ * Rendered on the server from `GET /site-api/jobs` (in-process), which reads
+ * the Site Database. "Older jobs" follows the keyset cursor (`?before=<id>`).
+ */
+import Base from '../../layouts/Base.astro';
+import {formatDate} from '../../lib/format';
+import {JOB_TYPES, type JobsPage} from '../../lib/types';
+import {backend, read} from '../../server/backend';
+import {pageContext} from '../../server/page';
+
+const q = Astro.url.searchParams;
+const search = (q.get('search') ?? '').trim().slice(0, 80);
+const type = (JOB_TYPES as string[]).includes(q.get('type') ?? '') ? (q.get('type') as string) : '';
+const remote = q.get('remote') === '1';
+const before = q.get('before') ?? undefined;
+
+// In PARALLEL: the jobs do not depend on the visitor, so never wait for one before the other.
+const [{site, viewer, abilities}, result] = await Promise.all([
+  pageContext(Astro.request, Astro.response),
+  read<JobsPage>(backend(Astro.request).jobs.$get({query: {search, type, remote: remote ? '1' : '', before}})),
+]);
+const jobs = result?.jobs ?? [];
+// The board could not be read (a database outage): say so, with a status that says so.
+if (!result) Astro.response.status = 503;
+const filtered = Boolean(search || type || remote);
+const olderHref = () => {
+  const params = new URLSearchParams(q);
+  params.set('before', String(result!.nextBefore));
+  return `/jobs/?${params}`;
+};
+const label = (t: string) => t.replace('-', ' ').replace(/^\w/, c => c.toUpperCase());
+---
+
+<Base site={site} viewer={viewer} title="Jobs" description={`Open roles at ${site?.name ?? 'our site'}.`}>
+  <main id="main" tabindex="-1" class="wrap section">
+    <div class="section-head">
+      <div>
+        <p class="eyebrow">Job board</p>
+        <h1>Open roles</h1>
+      </div>
+      {abilities.manageJobs && <a class="button" href="/dashboard/jobs">Post a job</a>}
+    </div>
+
+    <form class="filters" action="/jobs/" method="get" role="search">
+      <input type="search" name="search" value={search} placeholder="Search job titles" maxlength="80" />
+      <select name="type" aria-label="Job type">
+        <option value="">Any type</option>
+        {JOB_TYPES.map(t => <option value={t} selected={t === type}>{label(t)}</option>)}
+      </select>
+      <label class="check"><input type="checkbox" name="remote" value="1" checked={remote} /> Remote</label>
+      <button class="button ghost" type="submit">Filter</button>
+      {filtered && <a class="small" href="/jobs/">Clear</a>}
+    </form>
+
+    {
+      !result ? (
+        <p class="notice">The job board is not available right now.</p>
+      ) : jobs.length === 0 ? (
+        <p class="lede">{filtered ? 'No jobs match these filters.' : 'No open roles right now. Check back soon.'}</p>
+      ) : (
+        <ul class="job-list">
+          {jobs.map(job => (
+            <li>
+              <a class="job-row" href={`/jobs/${encodeURIComponent(job.slug)}/`}>
+                <div>
+                  <h2 class="job-title">{job.title}</h2>
+                  <p class="muted">{job.company} · {job.location}</p>
+                </div>
+                <div class="job-tags">
+                  <span class="chip">{label(job.type)}</span>
+                  {job.remote && <span class="chip chip-tag">Remote</span>}
+                  <span class="muted small">{formatDate(job.createdAt)}</span>
+                </div>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+
+    {result?.nextBefore && <nav class="pager"><a href={olderHref()}>Older jobs →</a></nav>}
+  </main>
+</Base>

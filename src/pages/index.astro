@@ -1,0 +1,241 @@
+---
+/**
+ * The home page: PRERENDERED (built once, served as a static file, no server
+ * work per visit) and made of sections. Words in `HOME`, `src/content/site.ts`;
+ * styles in `src/styles/home.css` (every rule under `.home`).
+ *
+ * What changes often is filled in by the browser after load, from the Site API:
+ *   - the visitor (`<Base isStatic>`): signed-in users see "Open your dashboard"
+ *     (`data-user-only`), guests "Create an account" (`data-guest-only`)
+ *   - open roles (a `data-live` section, below)
+ * The latest posts come from `src/content/blog/` at build time.
+ * A section with no data stays hidden.
+ */
+import '../styles/home.css';
+
+import Cover from '../components/Cover.astro';
+import HeroVisual from '../components/home/HeroVisual.astro';
+import Icon, {type IconName} from '../components/home/Icon.astro';
+import {HOME, withName} from '../content/site';
+import Base from '../layouts/Base.astro';
+import {staticContext} from '../server/page';
+import {formatDate, postHref, publishedPosts} from '../lib/posts';
+
+export const prerender = true;
+
+const {site, viewer} = await staticContext(Astro.request);
+const name = site?.name ?? 'My site';
+const latest = (await publishedPosts()).slice(0, 3);
+
+// The headline, split around the highlighted words (`HOME.hero.highlight`).
+const {title, highlight} = HOME.hero;
+const at = highlight ? title.indexOf(highlight) : -1;
+const headline =
+  at < 0
+    ? {before: title, mark: '', after: ''}
+    : {before: title.slice(0, at), mark: highlight, after: title.slice(at + highlight.length)};
+---
+
+<Base site={site} viewer={viewer} isStatic>
+  <main id="main" tabindex="-1" class="home">
+    <section class="home-hero">
+      <div class="wrap home-hero-grid">
+        <div class="home-hero-copy">
+          <p class="home-eyebrow" data-brand-text={HOME.hero.eyebrow}>{withName(HOME.hero.eyebrow, name)}</p>
+          <h1>
+            {headline.before}{headline.mark && <mark>{headline.mark}</mark>}{headline.after}
+          </h1>
+          <p class="home-lede">{HOME.hero.body}</p>
+          <div class="home-actions" data-guest-only>
+            <a class="button home-button-lg" href="/account/register/" data-astro-prefetch>
+              {HOME.hero.guest.primary}
+              <Icon name="arrow-right" size={18} />
+            </a>
+            <a class="button ghost home-button-lg" href="#how">{HOME.hero.guest.secondary}</a>
+          </div>
+          <div class="home-actions" data-user-only hidden>
+            <a class="button home-button-lg" href="/dashboard">
+              {HOME.hero.user.primary}
+              <Icon name="arrow-right" size={18} />
+            </a>
+            <a class="button ghost home-button-lg" href="/blog/" data-astro-prefetch>{HOME.hero.user.secondary}</a>
+          </div>
+          <p class="home-note" data-guest-only>{HOME.hero.note}</p>
+        </div>
+        <div class="home-hero-visual">
+          <HeroVisual name={name} />
+        </div>
+      </div>
+    </section>
+
+    <section class="home-section" aria-labelledby="features-title">
+      <div class="wrap">
+        <div class="home-head">
+          <p class="home-eyebrow">{HOME.features.eyebrow}</p>
+          <h2 id="features-title">{HOME.features.title}</h2>
+          <p class="home-sub">{HOME.features.body}</p>
+        </div>
+        <ul class="home-features">
+          {
+            HOME.features.items.map(feature => (
+              <li class="home-feature">
+                <span class="home-icon-tile">
+                  <Icon name={feature.icon as IconName} />
+                </span>
+                <h3>{feature.title}</h3>
+                <p>{feature.body}</p>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </section>
+
+    <section class="home-section home-band" id="how" aria-labelledby="how-title">
+      <div class="wrap">
+        <div class="home-head">
+          <p class="home-eyebrow">{HOME.how.eyebrow}</p>
+          <h2 id="how-title">{HOME.how.title}</h2>
+        </div>
+        <ol class="home-steps">
+          {
+            HOME.how.steps.map((step, i) => (
+              <li class="home-step">
+                <span class="home-step-num">{String(i + 1).padStart(2, '0')}</span>
+                <h3>{step.title}</h3>
+                <p>{step.body}</p>
+              </li>
+            ))
+          }
+        </ol>
+      </div>
+    </section>
+
+    {
+      latest.length > 0 && (
+        <section class="home-section" aria-labelledby="blog-title">
+          <div class="wrap">
+            <div class="home-head home-head-row">
+              <h2 id="blog-title">{HOME.blog.title}</h2>
+              <a class="home-more" href="/blog/" data-astro-prefetch>
+                {HOME.blog.link}
+                <Icon name="arrow-right" size={16} />
+              </a>
+            </div>
+            <div class="grid grid-3">
+              {latest.map(post => (
+                <a class="post-card" href={postHref(post)} data-astro-prefetch>
+                  {post.data.cover ? (
+                    <Cover class="cover" src={post.data.cover} alt={post.data.coverAlt} width={640} height={360} sizes="(min-width: 1100px) 350px, (min-width: 640px) 50vw, 100vw" />
+                  ) : (
+                    <span class="cover cover-empty" aria-hidden="true" />
+                  )}
+                  <div class="post-card-body">
+                    <p class="meta">{formatDate(post.data.publishedAt)}</p>
+                    <h3>{post.data.title}</h3>
+                    <p class="muted small">{post.data.description}</p>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        </section>
+      )
+    }
+
+    <section class="home-section" data-live="jobs" aria-labelledby="jobs-title" hidden>
+      <div class="wrap">
+        <div class="home-head home-head-row">
+          <h2 id="jobs-title">{HOME.jobs.title}</h2>
+          <a class="home-more" href="/jobs/">
+            {HOME.jobs.link}
+            <Icon name="arrow-right" size={16} />
+          </a>
+        </div>
+        <ul class="job-list" data-list data-remote-label={HOME.jobs.remote}></ul>
+      </div>
+    </section>
+
+    <section class="home-section" aria-labelledby="faq-title">
+      <div class="wrap home-faq-grid">
+        <div class="home-head">
+          <p class="home-eyebrow">{HOME.faq.eyebrow}</p>
+          <h2 id="faq-title">{HOME.faq.title}</h2>
+        </div>
+        <div class="home-faq">
+          {
+            HOME.faq.items.map(item => (
+              <details>
+                <summary>
+                  {item.q}
+                  <Icon name="plus" size={20} class="home-faq-icon" />
+                </summary>
+                <p>{item.a}</p>
+              </details>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <section class="home-section home-section-last" data-guest-only aria-labelledby="cta-title">
+      <div class="wrap">
+        <div class="home-cta">
+          <div>
+            <h2 id="cta-title" data-brand-text={HOME.cta.title}>{withName(HOME.cta.title, name)}</h2>
+            <p>{HOME.cta.body}</p>
+          </div>
+          <div class="home-cta-actions">
+            <a class="button home-button-lg home-cta-primary" href="/account/register/" data-astro-prefetch>{HOME.cta.primary}</a>
+            <a class="button home-button-lg home-cta-ghost" href="/account/login/" data-astro-prefetch>{HOME.cta.secondary}</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</Base>
+
+<script>
+  import type {JobsPage} from '../lib/types';
+
+  // Client navigation (ClientRouter): a bundled script runs once, so this page's code runs on
+  // every `astro:page-load` (the first load, each navigation, back/forward) while it is this page.
+  document.addEventListener('astro:page-load', () => {
+    if (!document.querySelector('[data-live="jobs"]')) return;
+    /** One element with text: never HTML from an answer. */
+    const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    };
+
+    async function live<T>(name: string, path: string, render: (data: T, list: HTMLElement) => number) {
+      const section = document.querySelector<HTMLElement>(`[data-live="${name}"]`);
+      const list = section?.querySelector<HTMLElement>('[data-list]');
+      if (!section || !list) return;
+      try {
+        const res = await fetch(path, {headers: {accept: 'application/json'}});
+        if (!res.ok) return;
+        if (render((await res.json()) as T, list) > 0) section.hidden = false;
+      } catch {
+        // The section stays hidden: the page is complete without it.
+      }
+    }
+
+    void live<JobsPage>('jobs', '/site-api/jobs', (data, list) => {
+      for (const job of data.jobs.slice(0, 3)) {
+        const row = el('a', 'job-row');
+        row.href = `/jobs/${encodeURIComponent(job.slug)}/`;
+        const text = el('div');
+        text.append(el('h3', 'job-title', job.title), el('p', 'muted', `${job.company} · ${job.location}`));
+        row.append(text);
+        if (job.remote) row.append(el('span', 'chip chip-tag', list.dataset.remoteLabel || 'Remote'));
+        const item = el('li');
+        item.append(row);
+        list.append(item);
+      }
+      return Math.min(3, data.jobs.length);
+    });
+  });
+</script>

@@ -1,0 +1,24 @@
+---
+/** One story in the publication list: title, description, byline, cover thumbnail. */
+import {type BlogPost, formatDate, postHref} from '../lib/posts';
+import Cover from './Cover.astro';
+
+interface Props {
+  post: BlogPost;
+}
+
+const {post} = Astro.props;
+const {title, description, author, publishedAt, cover, coverAlt} = post.data;
+---
+
+<a class="post-row" href={postHref(post)} data-astro-prefetch>
+  <div class="post-row-text">
+    <h3>{title}</h3>
+    <p class="pub-subtitle">{description}</p>
+    <p class="byline">
+      {author && <span>{author}</span>}
+      <span>{formatDate(publishedAt)}</span>
+    </p>
+  </div>
+  {cover && <Cover class="post-row-cover" src={cover} alt={coverAlt} width={160} height={107} sizes="(max-width: 600px) 84px, 112px" />}
+</a>

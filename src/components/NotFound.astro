@@ -1,0 +1,22 @@
+---
+/**
+ * The branded 404 body — rendered by `pages/404.astro` for any address with no
+ * page, and by the post page for an unknown slug. Both set a 404 status.
+ */
+import type {Site} from '../lib/types';
+import BrandMark from './BrandMark.astro';
+
+interface Props {
+  site: Site | null;
+}
+
+const {site} = Astro.props;
+---
+
+<main id="main" tabindex="-1" class="wrap narrow section center">
+  <BrandMark site={site} size={56} />
+  <p class="eyebrow">404</p>
+  <h1>This page does not exist</h1>
+  <p class="lede">The page you were looking for isn’t part of {site?.name ?? 'this site'}.</p>
+  <p><a class="button" href="/" data-astro-prefetch>Back to home</a></p>
+</main>

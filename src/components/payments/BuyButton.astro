@@ -1,0 +1,61 @@
+---
+/**
+ * A Buy / Subscribe button for ONE price of the catalogue (docs/agent/payments.md):
+ *
+ *   <BuyButton price="pro-monthly" label="Subscribe" />
+ *   <BuyButton price="print-a3" label="Buy the print" quantity={2} successPath="/thanks/" />
+ *
+ * A real form posting to `/site-api/checkout`, so it works without JavaScript (the server
+ * redirects); with JavaScript it shows "Opening checkout…" and keeps errors next to it. The
+ * amount is the catalogue's: never put one here. Works on prerendered and on-demand pages.
+ */
+interface Props {
+  /** The price key (`pro-monthly`). */
+  price: string;
+  label?: string;
+  quantity?: number;
+  /** Where the buyer lands after paying (the platform adds `checkout=<id>`). */
+  successPath?: string;
+  /** Where "back" on the checkout goes. Default: this page. */
+  cancelPath?: string;
+  pendingLabel?: string;
+  variant?: 'primary' | 'secondary';
+}
+
+const {
+  price,
+  label = 'Buy now',
+  quantity = 1,
+  successPath = '/thanks/',
+  cancelPath = Astro.url.pathname,
+  pendingLabel = 'Opening checkout…',
+  variant = 'primary',
+} = Astro.props;
+const id = `buy-${price}-${Math.random().toString(36).slice(2, 8)}`;
+---
+
+<form class="buy" method="post" action="/site-api/checkout" novalidate data-buy>
+  <input type="hidden" name="price" value={price} />
+  <input type="hidden" name="quantity" value={String(quantity)} />
+  <input type="hidden" name="successPath" value={successPath} />
+  <input type="hidden" name="cancelPath" value={cancelPath} />
+  <button class:list={['button', variant === 'secondary' && 'button-secondary']} type="submit" data-pending-label={pendingLabel} aria-describedby={`${id}-status`}>
+    {label}
+  </button>
+  <p class="form-status" id={`${id}-status`} data-form-status role="status" aria-live="polite"></p>
+</form>
+
+<script>
+  import {bindBuyButtons} from '../../lib/buy-button';
+
+  // Client navigation: runs once per visit; bind the buttons of every page shown.
+  document.addEventListener('astro:page-load', bindBuyButtons);
+</script>
+
+<style>
+  .buy {
+    display: grid;
+    justify-items: start;
+    gap: 0.25rem;
+  }
+</style>
