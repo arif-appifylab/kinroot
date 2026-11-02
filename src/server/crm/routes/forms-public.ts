@@ -6,7 +6,8 @@ import {toPublicForm, type PublicForm} from '@/lib/forms';
 import {publicOrigin} from '../kit/config';
 import type {Db} from '../kit/db';
 import type {AppEnv} from '../kit/guards';
-import {closedReason, fileToken, formFields, formSettings, getTurnstile, submitForm} from '../lib/form-submit';
+import {closedReason, fileToken, formFields, formSettings, submitForm} from '../lib/form-submit';
+import {ipKey, rateLimit} from '../lib/rate-limit';
 import {notFound, valid} from '../lib/http';
 import {checkUpload, completeUpload, startUpload, uploadBody} from '../lib/uploads';
 
@@ -19,11 +20,25 @@ export async function publicFormBySlug(db: Db, slug: string): Promise<PublicForm
   const form = await db.form.findUnique({where: {slug}});
   if (!form) return null;
   const settings = formSettings(form);
-  const turnstile = settings.spamCheck ? await getTurnstile(db) : null;
-  return toPublicForm({...form, fields: formFields(form), settings}, {turnstileSiteKey: turnstile?.siteKey ?? null, closed: closedReason(form)});
+  return toPublicForm({...form, fields: formFields(form), settings}, {closed: closedReason(form)});
 }
 
 const ip = (h: (n: string) => string | undefined) => h('cf-connecting-ip') ?? h('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+
+/**
+ * Spam protection for every form: an invisible honeypot and a speed check (lib/form-submit.ts), and
+ * these limits per visitor address (kept hashed). Cloudflare Turnstile is not available: its script
+ * comes from another site, which the CSP refuses.
+ */
+const limitsFor = async (h: (n: string) => string | undefined, kind: 'submit' | 'upload') => {
+  const who = await ipKey(ip(h));
+  return kind === 'submit'
+    ? [
+        {key: `form:submit:min:${who}`, limit: 5, windowSec: 60},
+        {key: `form:submit:hour:${who}`, limit: 40, windowSec: 3600},
+      ]
+    : [{key: `form:upload:hour:${who}`, limit: 30, windowSec: 3600}];
+};
 
 /** Hosted forms, embeds and the <CrmForm> component talk to these. No sign-in. */
 export const formsPublic = new Hono<AppEnv>()
@@ -46,6 +61,7 @@ export const formsPublic = new Hono<AppEnv>()
   /** A file answer (upload step 1; lib/uploads.ts). The returned token goes into the answer; the file waits until submit. */
   .post('/forms/:slug/upload', valid('json', uploadBody.extend({fieldId: z.string().max(100)})), async (c) => {
     const db = c.var.db;
+    await rateLimit(db, await limitsFor((n) => c.req.header(n), 'upload'), 'Too many uploads from your connection. Please wait a while and try again.');
     const form = await db.form.findUnique({where: {slug: c.req.param('slug')}});
     if (!form || closedReason(form)) throw new HTTPException(403, {message: 'This form is not accepting responses'});
     const body = c.req.valid('json');
@@ -72,10 +88,10 @@ export const formsPublic = new Hono<AppEnv>()
       meta: z.record(z.string(), z.string().max(2000)).default({}),
       hp: z.string().optional(),
       startedAt: z.number().optional(),
-      turnstileToken: z.string().max(4000).optional(),
     })),
     async (c) => {
       const db = c.var.db;
+      await rateLimit(db, await limitsFor((n) => c.req.header(n), 'submit'), 'Too many responses from your connection. Please wait a moment and try again.');
       const form = await db.form.findUnique({where: {slug: c.req.param('slug')}});
       if (!form) throw notFound('Form');
       const body = c.req.valid('json');
@@ -88,7 +104,6 @@ export const formsPublic = new Hono<AppEnv>()
         meta,
         honeypot: body.hp,
         startedAt: body.startedAt,
-        turnstileToken: body.turnstileToken,
         ip: ip((n) => c.req.header(n)),
         userAgent: c.req.header('user-agent') ?? null,
         origin: publicOrigin(c.req.raw),
@@ -99,37 +114,40 @@ export const formsPublic = new Hono<AppEnv>()
   );
 
 /**
- * <div data-crm-form="slug"></div>            → inline form (auto height)
- * <button data-crm-form-popup="slug">…</button> → opens the form in a modal
- * UTM parameters and the page URL are passed to the form automatically.
+ * <div data-crm-form="slug"></div>              → a button that opens the form (data-label: its text)
+ * <button data-crm-form-popup="slug">…</button> → opens the form when clicked
+ *
+ * The form opens as a page of this site (/f/<slug>) in a small window (a new tab when popups are
+ * blocked): this site may not be framed by others (X-Frame-Options: DENY) nor answer their pages'
+ * calls (no CORS). UTM parameters and the page's address go along, saved with the response.
  */
 const EMBED_JS = `(function () {
   var script = document.currentScript;
   var origin = new URL(script.src).origin;
-  var frames = [];
   function url(slug) {
     var q = new URLSearchParams(location.search);
-    q.set('embed', '1');
     q.set('page', location.href.slice(0, 1000));
     if (document.referrer) q.set('ref', document.referrer.slice(0, 1000));
-    var theme = script.getAttribute('data-theme');
-    if (theme) q.set('theme', theme);
     return origin + '/f/' + encodeURIComponent(slug) + '?' + q.toString();
   }
-  function frame(slug) {
-    var f = document.createElement('iframe');
-    f.src = url(slug);
-    f.title = 'Form';
-    f.loading = 'lazy';
-    f.style.cssText = 'display:block;width:100%;height:420px;border:0;background:transparent;color-scheme:normal;';
-    frames.push(f);
-    return f;
+  function open(slug) {
+    var w = Math.min(720, screen.availWidth - 40), h = Math.min(860, screen.availHeight - 80);
+    var win = window.open(url(slug), 'crm-form-' + slug, 'popup=yes,width=' + w + ',height=' + h + ',left=' + Math.max(0, (screen.availWidth - w) / 2) + ',top=' + Math.max(0, (screen.availHeight - h) / 2));
+    if (!win) window.open(url(slug), '_blank', 'noopener');
   }
   function mount() {
     document.querySelectorAll('[data-crm-form]').forEach(function (el) {
       if (el.getAttribute('data-crm-mounted')) return;
       el.setAttribute('data-crm-mounted', '1');
-      el.appendChild(frame(el.getAttribute('data-crm-form')));
+      var slug = el.getAttribute('data-crm-form');
+      var a = document.createElement('a');
+      a.href = url(slug);
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = el.getAttribute('data-label') || 'Fill in the form';
+      a.style.cssText = 'display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:12px;background:' + (el.getAttribute('data-color') || '#2563eb') + ';color:#fff;font:600 15px/1.2 system-ui,sans-serif;text-decoration:none;box-shadow:0 6px 18px rgba(15,23,42,.15);';
+      a.addEventListener('click', function (e) { e.preventDefault(); open(slug); });
+      el.appendChild(a);
     });
     document.querySelectorAll('[data-crm-form-popup]').forEach(function (el) {
       if (el.getAttribute('data-crm-mounted')) return;
@@ -137,35 +155,7 @@ const EMBED_JS = `(function () {
       el.addEventListener('click', function (e) { e.preventDefault(); open(el.getAttribute('data-crm-form-popup')); });
     });
   }
-  function open(slug) {
-    var overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:16px;';
-    var box = document.createElement('div');
-    box.style.cssText = 'position:relative;width:100%;max-width:640px;max-height:90vh;overflow:auto;background:#fff;border-radius:16px;box-shadow:0 25px 60px rgba(15,23,42,.35);';
-    var close = document.createElement('button');
-    close.type = 'button';
-    close.setAttribute('aria-label', 'Close');
-    close.innerHTML = '&times;';
-    close.style.cssText = 'position:absolute;top:8px;right:10px;z-index:1;width:36px;height:36px;border:0;border-radius:999px;background:rgba(15,23,42,.06);font:24px/1 system-ui;cursor:pointer;color:#0f172a;';
-    function shut() { overlay.remove(); document.removeEventListener('keydown', onKey); }
-    function onKey(e) { if (e.key === 'Escape') shut(); }
-    close.onclick = shut;
-    overlay.addEventListener('click', function (e) { if (e.target === overlay) shut(); });
-    document.addEventListener('keydown', onKey);
-    box.appendChild(close);
-    box.appendChild(frame(slug));
-    overlay.appendChild(box);
-    document.body.appendChild(overlay);
-  }
-  window.addEventListener('message', function (e) {
-    if (e.origin !== origin || !e.data || typeof e.data.type !== 'string') return;
-    frames.forEach(function (f) {
-      if (f.contentWindow !== e.source) return;
-      if (e.data.type === 'crm-form:resize') f.style.height = Math.max(120, Math.ceil(e.data.height)) + 'px';
-      if (e.data.type === 'crm-form:submitted') f.dispatchEvent(new CustomEvent('crm-form-submitted', {bubbles: true, detail: e.data}));
-    });
-  });
-  window.CrmForms = {open: open, mount: mount};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();
+  window.CrmForms = {open: open, mount: mount};
 })();
 `;

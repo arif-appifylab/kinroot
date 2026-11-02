@@ -286,41 +286,11 @@ function EndingsSection({fields, endings, onChange}: {fields: FormField[]; endin
   );
 }
 
-function SpamSection({enabled, onChange}: {enabled: boolean; onChange: (v: boolean) => void}) {
-  const {isAdmin} = useMe();
-  const cfg = useQuery({queryKey: [...keys.forms, 'turnstile'], queryFn: () => api.get<{siteKey: string; configured: boolean}>('/forms/turnstile'), enabled: isAdmin});
-  const [siteKey, setSiteKey] = useState<string | null>(null);
-  const [secret, setSecret] = useState('');
-  const save = useApiMutation(() => api.put('/forms/turnstile', {siteKey: (siteKey ?? cfg.data?.siteKey ?? '').trim(), secret: secret.trim() || undefined}), {
-    invalidate: [[...keys.forms, 'turnstile']],
-    success: 'Turnstile keys saved',
-    onSuccess: () => setSecret(''),
-  });
+function SpamSection(_props: {enabled: boolean; onChange: (v: boolean) => void}) {
   return (
-    <SettingsSection title="Spam protection" description="Every form has an invisible honeypot and a speed check. Add Cloudflare Turnstile for stronger protection.">
-      <div className="grid gap-4">
-        <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          <ShieldCheck className="size-4" /> Honeypot and speed check are on for every form.
-        </div>
-        <Toggle label="Require Cloudflare Turnstile" hint="A privacy-friendly check (usually no puzzle). Needs the keys below." checked={enabled} onChange={onChange} />
-        {isAdmin && (
-          <div className="grid gap-3 rounded-xl border border-slate-200 p-4">
-            <p className="text-sm font-semibold text-slate-800">
-              Turnstile keys <span className="font-normal text-muted-foreground">(shared by all forms)</span>
-            </p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label="Site key"><Input value={siteKey ?? cfg.data?.siteKey ?? ''} onChange={(e) => setSiteKey(e.target.value)} placeholder="0x4AAAA…" /></Field>
-              <Field label="Secret key" hint={cfg.data?.configured ? 'Saved. Leave empty to keep it.' : undefined}>
-                <Input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={cfg.data?.configured ? '••••••••' : '0x4AAAA…'} autoComplete="off" />
-              </Field>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <a className="text-xs font-semibold text-primary hover:underline" href="https://dash.cloudflare.com/?to=/:account/turnstile" target="_blank" rel="noopener noreferrer">Get keys in the Cloudflare dashboard</a>
-              <Button size="sm" variant="secondary" onClick={() => save.mutate(undefined)} disabled={save.isPending}>Save keys</Button>
-            </div>
-          </div>
-        )}
-        {enabled && !isAdmin && <p className="text-xs text-muted-foreground">An admin needs to add the Turnstile keys for this to work.</p>}
+    <SettingsSection title="Spam protection" description="Every form has an invisible honeypot, a speed check and a limit on responses per connection.">
+      <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+        <ShieldCheck className="size-4" /> Honeypot, speed check and rate limits are on for every form.
       </div>
     </SettingsSection>
   );

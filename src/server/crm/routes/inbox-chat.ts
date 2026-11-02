@@ -9,7 +9,6 @@ import {publicOrigin} from '../kit/config';
 import {currentUser, requireRole, type AppEnv} from '../kit/guards';
 import {diff} from '../lib/activity';
 import {audit} from '../lib/audit';
-import {getTurnstile} from '../lib/form-submit';
 import {notFound, valid} from '../lib/http';
 import {mergeFields} from '../email/render';
 import {sendChannelMessage} from '../inbox/channel-messages';
@@ -104,12 +103,11 @@ export const inboxChat = new Hono<AppEnv>()
   // ─── Settings → Inbox → Chat (admins) ───
   .get('/chat/settings', requireRole('ADMIN'), async (c) => {
     const db = c.var.db;
-    const [settings, shared, turnstile] = await Promise.all([
+    const [settings, shared] = await Promise.all([
       getChatSettings(db),
       db.emailAccount.findMany({where: {userId: null}, select: {id: true, label: true, fromEmail: true}, orderBy: {createdAt: 'asc'}}),
-      getTurnstile(db),
     ]);
-    return c.json({settings, sharedAccounts: shared, turnstile: !!turnstile, snippetUrl: `${publicOrigin(c.req.raw)}/site-api/crm/public/chat/widget.js`});
+    return c.json({settings, sharedAccounts: shared, snippetUrl: `${publicOrigin(c.req.raw)}/site-api/crm/public/chat/widget.js`});
   })
 
   .put('/chat/settings', requireRole('ADMIN'), valid('json', settingsSchema), async (c) => {

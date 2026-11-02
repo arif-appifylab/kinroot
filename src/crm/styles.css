@@ -6,6 +6,7 @@
 @source '../layouts/Crm.astro';
 @source '../layouts/CrmPublic.astro';
 @source '../pages/chat';
+@source '../pages/f';
 @import 'tw-animate-css';
 /* Self-hosted (the CSP allows fonts from this site only): no Google Fonts request. */
 @import '@fontsource-variable/plus-jakarta-sans';

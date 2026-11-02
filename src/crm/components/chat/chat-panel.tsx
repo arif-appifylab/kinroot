@@ -4,7 +4,6 @@ import {useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type K
 import {speaker, type VisitorMessage} from '@/lib/chat';
 import {cn} from '@/lib/utils';
 
-import {Turnstile} from '../forms/turnstile';
 import {fileSize, MessageFiles, MessageText} from './message-text';
 import type {ChatState, UploadedFile} from './use-chat';
 
@@ -65,7 +64,6 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [awayEmail, setAwayEmail] = useState('');
-  const [turnstile, setTurnstile] = useState<string | null>(null);
   const [hp, setHp] = useState('');
   const startedAt = useRef(Date.now());
   const conv = chat.conversation;
@@ -73,7 +71,6 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
   const known = chat.session?.email;
   const preChat = !conv && cfg && cfg.preChat !== 'off' && !known;
   const needsEmail = preChat && cfg?.preChat === 'required' && !emailOk(email);
-  const needsTurnstile = !conv && !!cfg?.turnstileSiteKey && !turnstile;
   const lastMine = [...messages].reverse().find((m) => m.from === 'visitor')?.id;
 
   // Newest message in view; new ones are announced by the log's aria-live.
@@ -116,12 +113,12 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
     if (fileInput.current) fileInput.current.value = '';
   }
 
-  const canSend = !preview && !chat.sending && !uploading && (!!text.trim() || files.length > 0) && !needsEmail && !needsTurnstile;
+  const canSend = !preview && !chat.sending && !uploading && (!!text.trim() || files.length > 0) && !needsEmail;
   async function submit() {
     if (!canSend) return;
     const ok = conv
       ? await chat.send(text.trim(), files)
-      : await chat.start({text: text.trim(), files, name: preChat ? name : undefined, email: preChat && emailOk(email) ? email : undefined, turnstileToken: turnstile ?? undefined, hp, startedAt: startedAt.current});
+      : await chat.start({text: text.trim(), files, name: preChat ? name : undefined, email: preChat && emailOk(email) ? email : undefined, hp, startedAt: startedAt.current});
     if (ok) {
       setText('');
       setFiles([]);
@@ -223,7 +220,6 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
             />
           </div>
         )}
-        {!conv && cfg.turnstileSiteKey && !preview && <div className="mb-2"><Turnstile siteKey={cfg.turnstileSiteKey} onToken={setTurnstile} /></div>}
         {files.length > 0 && (
           <ul className="mb-2 flex flex-wrap gap-1.5" aria-label="Attachments">
             {files.map((f) => (

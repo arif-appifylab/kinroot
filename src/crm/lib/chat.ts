@@ -44,7 +44,7 @@ export type ChatSettings = {
   awayAfterMin: number;
   /** Sites allowed to embed the widget (hostnames; subdomains included). Empty = anywhere. */
   allowedDomains: string[];
-  /** Turnstile on the first message (uses the key from Forms → Spam protection). */
+  /** Kept from Kinroot's Turnstile option; not used (chats are rate limited per visitor and address). */
   spamCheck: boolean;
 };
 
@@ -193,7 +193,6 @@ export type PublicChatConfig = {
   offlineMessage: string;
   /** ISO time the office opens next (outside office hours). */
   opensAt: string | null;
-  turnstileSiteKey: string | null;
 };
 
 export type VisitorFile = {id: string; name: string; size: number; mimeType: string; image: boolean; url: string};

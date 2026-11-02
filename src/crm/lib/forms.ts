@@ -84,7 +84,7 @@ export type FormSettings = {
   closedMessage?: string;
   responseLimit?: number | null;
   onePerContact?: boolean;
-  /** Cloudflare Turnstile check (keys are shared by all forms, set in the Forms page). */
+  /** Kept from Kinroot's Turnstile option; not used (honeypot, speed check and rate limits protect every form). */
   spamCheck?: boolean;
   endings: Ending[];
   // what a submission does
@@ -537,11 +537,10 @@ export type PublicForm = {
   name: string;
   fields: FormField[];
   settings: Pick<FormSettings, 'title' | 'intro' | 'submitLabel' | 'layout' | 'progressBar' | 'accent' | 'endings'>;
-  turnstileSiteKey: string | null;
   closed: string | null;
 };
 
-export function toPublicForm(form: {id: string; slug: string; name: string; fields: FormField[]; settings: FormSettings}, extra: {turnstileSiteKey: string | null; closed: string | null}): PublicForm {
+export function toPublicForm(form: {id: string; slug: string; name: string; fields: FormField[]; settings: FormSettings}, extra: {closed: string | null}): PublicForm {
   const s = form.settings;
   return {
     id: form.id,

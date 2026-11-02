@@ -18,8 +18,9 @@ import {cn} from '@/lib/utils';
 
 import {BookingSlotField} from '../booking/slot-field';
 import {Button} from '../ui/button';
-import {Turnstile} from './turnstile';
 import {Checkbox, Input, NativeSelect, Textarea} from '../ui/form';
+import {siteFetch} from '../../../platform/browser';
+import {putFile, type UploadGrant} from '../../../platform/files-browser';
 
 type Uploaded = {id: string; name: string; size: number; token?: string};
 type UploadFn = (field: FormField, file: File) => Promise<Uploaded>;
@@ -319,7 +320,6 @@ export function FormRenderer({
   const [status, setStatus] = useState<'idle' | 'submitting' | 'done'>('idle');
   const [ending, setEnding] = useState<Ending | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [token, setToken] = useState<string | null>(null);
   const [hp, setHp] = useState('');
   const startedAt = useRef(Date.now());
   const started = useRef(false);
@@ -345,7 +345,7 @@ export function FormRenderer({
     } catch {
       /* private mode: count anyway */
     }
-    fetch(`/site-api/crm/public/forms/${form.slug}/event`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({type: 'view'})}).catch(() => {});
+    siteFetch(`/site-api/crm/public/forms/${form.slug}/event`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({type: 'view'})}).catch(() => {});
   }, [live, form.slug, form.closed]);
 
   // Embeds tell the parent page how tall they are.
@@ -362,7 +362,7 @@ export function FormRenderer({
   function set(id: string, v: AnswerValue) {
     if (live && !started.current) {
       started.current = true;
-      fetch(`/site-api/crm/public/forms/${form.slug}/event`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({type: 'start'})}).catch(() => {});
+      siteFetch(`/site-api/crm/public/forms/${form.slug}/event`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({type: 'start'})}).catch(() => {});
     }
     setAnswers((a) => ({...a, [id]: v}));
     if (errors[id]) setErrors(({[id]: _drop, ...rest}) => rest);
@@ -382,12 +382,15 @@ export function FormRenderer({
   }
 
   async function upload(field: FormField, file: File): Promise<Uploaded> {
-    const body = new FormData();
-    body.set('file', file);
-    body.set('fieldId', field.id);
-    const res = await fetch(`/site-api/crm/public/forms/${form.slug}/upload`, {method: 'POST', body});
-    const data = (await res.json().catch(() => ({}))) as {file?: Uploaded; error?: string};
-    if (!res.ok || !data.file) throw new Error(data.error ?? 'Upload failed');
+    // Storage takes the bytes directly (docs/agent/files.md): ask, PUT, confirm.
+    const base = `/site-api/crm/public/forms/${form.slug}/upload`;
+    const res = await siteFetch(base, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({fieldId: field.id, name: file.name, contentType: file.type, size: file.size})});
+    const data = (await res.json().catch(() => ({}))) as {fileId?: string; upload?: UploadGrant['upload']; file?: Uploaded; error?: string};
+    if (!res.ok || !data.file || !data.upload || !data.fileId) throw new Error(data.error ?? 'Upload failed');
+    const put = await putFile(data.upload, file);
+    if (!put.ok) throw new Error(put.message);
+    const done = await siteFetch(`${base}/${data.fileId}/complete`, {method: 'POST', headers: {'content-type': 'application/json'}, body: '{}'});
+    if (!done.ok) throw new Error(((await done.json().catch(() => ({}))) as {error?: string}).error ?? 'Upload failed');
     return data.file;
   }
 
@@ -408,25 +411,22 @@ export function FormRenderer({
       onSubmitted?.(e);
       return;
     }
-    if (form.turnstileSiteKey && !token) {
-      setSubmitError('Please complete the spam check below.');
-      return;
-    }
     setStatus('submitting');
     const meta: Record<string, string> = {};
     for (const k of ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content']) {
       const v = params?.get(k);
       if (v) meta[k] = v.slice(0, 300);
     }
-    meta.page = (embed ? params?.get('page') : window.location.href)?.slice(0, 1000) ?? '';
-    const ref = embed ? params?.get('ref') : document.referrer;
+    // Opened from a company's website (embed.js), the page and referrer came along in the address.
+    meta.page = (params?.get('page') || window.location.href).slice(0, 1000);
+    const ref = params?.get('ref') || document.referrer;
     if (ref) meta.referrer = ref.slice(0, 1000);
     const payload = Object.fromEntries(all.map((f) => [f.id, answers[f.id] ?? null]));
     try {
-      const res = await fetch(`/site-api/crm/public/forms/${form.slug}/submit`, {
+      const res = await siteFetch(`/site-api/crm/public/forms/${form.slug}/submit`, {
         method: 'POST',
         headers: {'content-type': 'application/json'},
-        body: JSON.stringify({answers: payload, meta, hp, startedAt: startedAt.current, turnstileToken: token ?? undefined}),
+        body: JSON.stringify({answers: payload, meta, hp, startedAt: startedAt.current}),
       });
       const data = (await res.json().catch(() => ({}))) as {ending?: Ending; error?: string};
       if (!res.ok || !data.ending) throw new Error(data.error ?? 'Something went wrong. Please try again.');
@@ -505,7 +505,6 @@ export function FormRenderer({
 
   const footer = (
     <>
-      {last && form.turnstileSiteKey && live && <div className="mt-5"><Turnstile siteKey={form.turnstileSiteKey} onToken={setToken} /></div>}
       {submitError && <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700" role="alert">{submitError}</p>}
     </>
   );

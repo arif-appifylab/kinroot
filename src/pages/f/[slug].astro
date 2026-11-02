@@ -1,0 +1,37 @@
+---
+/**
+ * A hosted form: /f/<slug>. Loaded through Kinroot's own Site API route, in-process; the renderer is
+ * Kinroot's (src/crm/public/form-page.tsx), talking to /site-api/crm/public/forms/*. A missing form is
+ * a 404; a read that failed (the database is down) a 503, never a 404.
+ */
+import FormPage from '../../crm/public/form-page';
+import type {PublicForm} from '../../crm/lib/forms';
+import CrmPublic from '../../layouts/CrmPublic.astro';
+import {crmBrand, crmGet} from '../../server/crm/page';
+
+export const prerender = false;
+
+const slug = Astro.params.slug ?? '';
+const [brand, res] = await Promise.all([crmBrand(Astro.request), crmGet<{form: PublicForm}>(Astro.request, `/public/forms/${encodeURIComponent(slug)}`)]);
+const form = res.data?.form ?? null;
+const failed = !form && res.status !== 404;
+Astro.response.status = form ? 200 : failed ? 503 : 404;
+// The form changes when it is edited or closed; a short private cache is enough.
+Astro.response.headers.set('Cache-Control', 'private, max-age=60');
+const title = form?.settings.title || form?.name || (failed ? 'Form not available' : 'Form not found');
+---
+
+<CrmPublic brand={brand} title={title} description={form?.settings.intro?.slice(0, 160)} noindex={!form}>
+  {
+    failed ? (
+      <main class="grid min-h-dvh place-items-center p-6 text-center">
+        <div>
+          <h1 class="text-xl font-extrabold">This form is not available right now</h1>
+          <p class="mt-2 text-sm text-muted-foreground">Please try again in a few minutes.</p>
+        </div>
+      </main>
+    ) : (
+      <FormPage client:only="react" form={form} brand={brand} />
+    )
+  }
+</CrmPublic>

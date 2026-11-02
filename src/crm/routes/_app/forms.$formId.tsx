@@ -107,7 +107,7 @@ function FormPage() {
 
   const setTab = (t: Tab) => navigate({to: '/forms/$formId', params: {formId}, search: t === 'build' ? {} : {tab: t}, replace: true});
   const st = STATUS[form.status];
-  const publicPreview = toPublicForm({id: form.id, slug: form.slug, name: draft.name, fields: draft.fields, settings: draft.settings}, {turnstileSiteKey: null, closed: null});
+  const publicPreview = toPublicForm({id: form.id, slug: form.slug, name: draft.name, fields: draft.fields, settings: draft.settings}, {closed: null});
 
   async function publish() {
     // Flush pending edits first so the live form is what you see.

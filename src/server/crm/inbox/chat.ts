@@ -23,7 +23,6 @@ import {logActivity} from '../lib/activity';
 import {associateByDomain} from '../lib/domains';
 import {checkDuplicates} from '../lib/duplicates';
 import {emit} from '../lib/events';
-import {getTurnstile} from '../lib/form-submit';
 import {enqueue, kickJobs} from '../lib/jobs';
 import {notifyWatchers} from '../lib/notify';
 import {getSettings} from '../lib/settings';
@@ -142,11 +141,10 @@ export function embedAllowed(s: ChatSettings, hosts: (string | null | undefined)
 }
 
 export async function publicChatConfig(db: Db, s: ChatSettings, allowed: boolean): Promise<PublicChatConfig> {
-  const [brand, availability, users, turnstile] = await Promise.all([
+  const [brand, availability, users] = await Promise.all([
     getSettings(db),
     chatAvailability(db, s),
     s.avatarIds.length ? db.member.findMany({where: {id: {in: s.avatarIds}, active: true}, select: {id: true, name: true, color: true, avatarUrl: true}}) : [],
-    s.spamCheck ? getTurnstile(db) : null,
   ]);
   return {
     enabled: s.enabled,
@@ -165,7 +163,6 @@ export async function publicChatConfig(db: Db, s: ChatSettings, allowed: boolean
     awayReason: availability.reason,
     offlineMessage: s.offlineMessage,
     opensAt: availability.opensAt,
-    turnstileSiteKey: turnstile?.siteKey ?? null,
   };
 }
 

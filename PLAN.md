@@ -13,8 +13,8 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | 2 | Server: all of Kinroot's server code moved to `src/server/crm`, compiling and mounted at `/site-api/crm`; kit on the template's auth, database, jobs and storage; team, invites, uploads, exports / imports storage; integration tests | done |
 | 3 | Core CRM screens: shell, setup, invite, no-access, profile, contacts, companies, deals, pipelines, notes, tasks, timeline, views, ⌘K search, custom fields, dashboard, team (all signed-in screens compile; public pages are their phases) | done |
 | 4 | Email: providers, templates + editor, tracking, inbound replies, Gmail / Outlook sync; inbox; live chat | done |
-| 5 | Forms, lists and segments, broadcasts | next |
-| 6 | Tickets + support portal, meetings + booking pages, calendar sync | |
+| 5 | Forms, lists and segments, broadcasts | done |
+| 6 | Tickets + support portal, meetings + booking pages, calendar sync | next |
 | 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | |
 | 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | |
 | 9 | Public site pages (`/`, `/contact/`, `/demo/`), SEO, tests ported to vitest, build, `review.md` | |
@@ -105,13 +105,24 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
   opens `/chat/` (an Astro page, `src/pages/chat/`) as a small window; `/chat/c/<token>` continues a chat from an
   email. Visitor calls go through `siteFetch` (CSRF); chat settings are in the Site Cache (10 min, cleared on save).
 
+## Decisions (phase 5)
+
+- Turnstile removed everywhere (forms, chat, settings; `components/forms/turnstile.tsx` deleted). Every form keeps
+  its honeypot and speed check and gets rate limits per hashed address: 5 responses a minute, 40 an hour,
+  30 uploads an hour (`routes/forms-public.ts`). Chat was already rate limited.
+- Hosted form `/f/<slug>`: an Astro page (`src/pages/f/[slug].astro`) with Kinroot's renderer; a missing form is
+  a 404, a failed read a 503. Public React pages get the brand through `BrandProvider` (`lib/use-brand.ts`).
+- `embed.js`: `data-crm-form` becomes a button (`data-label`, `data-color`), `data-crm-form-popup` opens the form;
+  both open `/f/<slug>` in a small window with the page's UTM parameters and address.
+- Broadcast batches stop after 40 s (a job run has 60 s) and look up unsubscribes and contacts once per batch.
+  With the default 10 jobs a minute, a large broadcast sends about 250 emails a minute.
+
 ## Open items (tracked)
 
 - `$queryRawUnsafe` in `lib/reports.ts`, `routes/reports.ts`, `lib/automations.ts` (phase 7): to tagged `Prisma.sql`.
 - Plain `<a href>` links to `/site-api/crm/...` downloads (exports, files) carry the session by cookie: fine live, signed out in the editor Preview.
 - Email preview frame (`components/inbox/parts.tsx`) inherits the page CSP: check its styles in phase 4.
 - `routes/incoming-webhooks.ts`, `routes/data-in.ts` store raw IPs in their request logs (phase 8).
-- Turnstile (spam check on forms and chat) still in the code: removed in phase 5 (outside script blocked by the CSP).
 - Brand logo is still a data URL in the settings row (file bytes in the database): move to a public storage file.
 - The sonner toast library logs one CSP message per page load (its CSS loads from our stylesheet; harmless).
 - Automation merge field `{{owner.email}}` puts the record owner's address in emails to contacts, as before.

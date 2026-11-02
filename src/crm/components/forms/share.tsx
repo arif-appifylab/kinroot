@@ -61,11 +61,13 @@ export function SharePanel({slug, status, onPublish}: {slug: string; status: For
             <Button variant="secondary" size="icon" asChild><a href={url} target="_blank" rel="noopener noreferrer" aria-label="Open form"><ExternalLink /></a></Button>
           </div>
         </Way>
-        <Way icon={<Code2 />} title="Embed on a website" description="Paste where the form should appear. It resizes itself and passes the page's UTM parameters along.">
-          <Snippet label="Embed code" code={`<div data-crm-form="${slug}"></div>\n${script}`} />
-          <p className="text-xs text-muted-foreground">Dark website? Add <code>data-theme="dark"</code> to the script tag.</p>
+        <Way icon={<Code2 />} title="Button on a website" description="Paste where the button should appear. It opens the form in a small window and passes the page's UTM parameters along.">
+          <Snippet label="Embed code" code={`<div data-crm-form="${slug}" data-label="Get in touch"></div>\n${script}`} />
+          <p className="text-xs text-muted-foreground">
+            Forms open as a page of this site: other websites can't show it inside their own page. Change the button with <code>data-label</code> and <code>data-color</code>.
+          </p>
         </Way>
-        <Way icon={<MousePointerClick />} title="Popup button" description="Any element with this attribute opens the form in a modal.">
+        <Way icon={<MousePointerClick />} title="Your own button" description="Any element with this attribute opens the form in a small window.">
           <Snippet label="Popup code" code={`<button data-crm-form-popup="${slug}">Talk to sales</button>\n${script}`} />
         </Way>
         <Way icon={<Sparkles />} title="In a page built in this app" description="For landing pages the AI builds in this codebase: renders the form inline, no iframe.">

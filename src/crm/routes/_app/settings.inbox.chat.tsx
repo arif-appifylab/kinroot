@@ -25,7 +25,7 @@ export const Route = createFileRoute('/_app/settings/inbox/chat')({
   component: ChatSettingsPage,
 });
 
-type Response = {settings: ChatSettings; sharedAccounts: {id: string; label: string; fromEmail: string}[]; turnstile: boolean; snippetUrl: string};
+type Response = {settings: ChatSettings; sharedAccounts: {id: string; label: string; fromEmail: string}[]; snippetUrl: string};
 
 function Toggle({label, hint, checked, onChange, disabled}: {label: string; hint?: ReactNode; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean}) {
   return (
@@ -72,7 +72,6 @@ function Preview({form}: {form: ChatSettings}) {
     awayReason: state === 'away' ? 'nobody' : null,
     offlineMessage: form.offlineMessage,
     opensAt: null,
-    turnstileSiteKey: null,
   };
   const chat: ChatState = {
     config,
@@ -256,13 +255,6 @@ function ChatSettingsPage() {
             <Field label="Allowed domains" htmlFor="ch-domains" hint="Empty: any site with the snippet. example.com also covers www.example.com and shop.example.com. Pages of this app always work.">
               <TagInput id="ch-domains" noun="domain" value={form.allowedDomains} onChange={(allowedDomains) => set({allowedDomains})} />
             </Field>
-            <Toggle
-              label="Spam check (Turnstile) on the first message"
-              hint={q.data.turnstile ? 'Uses the key from the forms spam protection.' : 'Add a Turnstile key in a form’s settings (Spam protection) first.'}
-              checked={form.spamCheck}
-              disabled={!q.data.turnstile}
-              onChange={(spamCheck) => set({spamCheck})}
-            />
             <p className="text-xs text-muted-foreground">Starting chats and sending messages are rate limited per visitor and per network address.</p>
           </div>
         </SettingsSection>

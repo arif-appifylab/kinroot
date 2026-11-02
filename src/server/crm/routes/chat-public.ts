@@ -6,7 +6,6 @@ import type {ChannelIdentity} from '../../../generated/prisma/client';
 import {CHAT_LIMITS, CHAT_UPLOAD_TYPES, hostOf, type ChatSettings, type VisitorSession} from '@/lib/chat';
 import {publicOrigin} from '../kit/config';
 import type {AppContext, AppEnv} from '../kit/guards';
-import {getTurnstile, verifyTurnstile} from '../lib/form-submit';
 import {notFound, valid} from '../lib/http';
 import {ipKey, rateLimit} from '../lib/rate-limit';
 import {
@@ -172,7 +171,6 @@ export const chatPublic = new Hono<AppEnv>()
       meta,
       hp: z.string().optional(),
       startedAt: z.number().optional(),
-      turnstileToken: z.string().max(4000).optional(),
     })),
     async (c) => {
       const db = c.var.db;
@@ -187,10 +185,6 @@ export const chatPublic = new Hono<AppEnv>()
       if (body.token && !identity) throw new HTTPException(401, {message: 'Your chat session expired. Reload the page to start again.'});
       await rateLimit(db, await limits(c, identity, 'start'), 'You have started several chats in a short time. Please wait a while and try again.');
       if (bot(body.hp, body.startedAt)) throw new HTTPException(400, {message: 'Please try again'});
-      if (s.spamCheck) {
-        const ts = await getTurnstile(db);
-        if (ts && !(await verifyTurnstile(ts.secret, body.turnstileToken, ip(c)))) throw new HTTPException(400, {message: 'Please complete the spam check'});
-      }
       identity = identity ? await touchVisitor(db, identity, visitorMeta(c, body.meta), {force: true}) : await newVisitor(db, visitorMeta(c, body.meta));
       if (body.name || body.email) identity = await identifyVisitor(db, identity, {name: body.name, email: body.email || null});
       const fileIds = await claimFiles(db, identity.id, body.files);

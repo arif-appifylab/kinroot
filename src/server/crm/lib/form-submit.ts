@@ -44,32 +44,6 @@ export function closedReason(form: Form): string | null {
   return null;
 }
 
-// ─── Turnstile (optional spam protection, shared by all forms) ──────────────
-
-const TURNSTILE_KEY = 'forms.turnstile';
-export type TurnstileConfig = {siteKey: string; secret: string};
-
-export async function getTurnstile(db: Db): Promise<TurnstileConfig | null> {
-  const row = await db.setting.findUnique({where: {key: TURNSTILE_KEY}});
-  if (!row) return null;
-  const cfg = await decryptJson<TurnstileConfig>(row.value as string).catch(() => null);
-  return cfg?.siteKey && cfg.secret ? cfg : null;
-}
-
-export async function saveTurnstile(db: Db, cfg: TurnstileConfig | null) {
-  if (!cfg) return db.setting.deleteMany({where: {key: TURNSTILE_KEY}});
-  const value = await encryptJson(cfg);
-  return db.setting.upsert({where: {key: TURNSTILE_KEY}, create: {key: TURNSTILE_KEY, value}, update: {value}});
-}
-
-export async function verifyTurnstile(secret: string, token: string | undefined, ip: string | null) {
-  if (!token) return false;
-  const body = new URLSearchParams({secret, response: token, ...(ip ? {remoteip: ip} : {})});
-  const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {method: 'POST', body, signal: AbortSignal.timeout(8000)}).catch(() => null);
-  const data = (await res?.json().catch(() => null)) as {success?: boolean} | null;
-  return !!data?.success;
-}
-
 // ─── Uploaded files (answers carry {id, token}) ─────────────────────────────
 
 export const fileToken = (id: string) => sign(`formfile:${id}`);
@@ -81,7 +55,6 @@ export type SubmitInput = {
   meta: Record<string, string | undefined>;
   honeypot?: string;
   startedAt?: number;
-  turnstileToken?: string;
   ip: string | null;
   userAgent: string | null;
   origin: string;
@@ -150,12 +123,6 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput) {
   // Spam: a filled honeypot or an inhumanly fast submit is dropped silently.
   const tooFast = input.startedAt && Date.now() - input.startedAt < 1500;
   if (input.honeypot || tooFast) return {spam: true as const, ending: pickEnding(settings, fields, {})};
-  if (settings.spamCheck) {
-    const ts = await getTurnstile(db);
-    if (ts && !(await verifyTurnstile(ts.secret, input.turnstileToken, input.ip))) {
-      throw new HTTPException(400, {message: 'Please complete the spam check and try again.'});
-    }
-  }
 
   // Answers → typed values. Hidden fields fall back to their default.
   const answers: Answers = {};

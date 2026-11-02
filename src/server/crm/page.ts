@@ -6,11 +6,19 @@ import {app} from '../app';
  * JSON, or null on any error (the page renders its fallback).
  */
 export async function crmRead<T>(request: Request, path: string): Promise<T | null> {
+  return (await crmGet<T>(request, path)).data;
+}
+
+/**
+ * The same with the answer's status, for pages that must tell "not there" (404) from "the
+ * database is down" (503, never a 404): `status` is 0 when the call itself failed.
+ */
+export async function crmGet<T>(request: Request, path: string): Promise<{status: number; data: T | null}> {
   try {
     const res = await app.request(new URL(`/site-api/crm${path}`, request.url).toString(), {headers: {'user-agent': request.headers.get('user-agent') ?? ''}});
-    return res.ok ? ((await res.json()) as T) : null;
+    return {status: res.status, data: res.ok ? ((await res.json()) as T) : null};
   } catch {
-    return null;
+    return {status: 0, data: null};
   }
 }
 

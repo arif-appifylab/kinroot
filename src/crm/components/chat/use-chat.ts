@@ -70,7 +70,7 @@ export type ChatState = {
   error: string | null;
   sending: boolean;
   unread: number;
-  start: (input: {text: string; files: UploadedFile[]; name?: string; email?: string; turnstileToken?: string; hp?: string; startedAt?: number}) => Promise<boolean>;
+  start: (input: {text: string; files: UploadedFile[]; name?: string; email?: string; hp?: string; startedAt?: number}) => Promise<boolean>;
   send: (text: string, files: UploadedFile[]) => Promise<boolean>;
   upload: (file: File) => Promise<UploadedFile | null>;
   identify: (input: {name?: string; email: string}) => Promise<boolean>;
@@ -242,7 +242,7 @@ export function useVisitorChat({meta, open, continueToken}: {meta: PageMeta; ope
     setSending(true);
     setError(null);
     try {
-      const r = await call<{session: VisitorSession}>('/start', {...body(), token: tokenRef.current, text: input.text, files: input.files.map((f) => ({id: f.id, token: f.token})), name: input.name || null, email: input.email || null, turnstileToken: input.turnstileToken, hp: input.hp, startedAt: input.startedAt});
+      const r = await call<{session: VisitorSession}>('/start', {...body(), token: tokenRef.current, text: input.text, files: input.files.map((f) => ({id: f.id, token: f.token})), name: input.name || null, email: input.email || null, hp: input.hp, startedAt: input.startedAt});
       adopt(r.session);
       return true;
     } catch (e) {

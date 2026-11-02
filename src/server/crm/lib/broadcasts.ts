@@ -25,6 +25,9 @@ import {listContactWhere} from './segments';
 
 /** Emails per job run; small so one run stays well inside a Worker's time budget. */
 export const BATCH = 25;
+
+/** A job run has 60 seconds (docs/agent/background-jobs.md): sending stops after this, the next batch carries on. */
+const SEND_BUDGET_MS = 40_000;
 /** A list bigger than this needs splitting (or a dedicated newsletter tool). */
 export const MAX_RECIPIENTS = 20_000;
 /** Delivery errors in a row before the broadcast pauses (the account is probably down). */
@@ -173,16 +176,25 @@ export async function sendBroadcastBatch(db: Db, p: {broadcastId?: unknown}) {
   const batch = await db.broadcastRecipient.findMany({where: {broadcastId: id, status: 'PENDING'}, orderBy: [{createdAt: 'asc'}, {id: 'asc'}], take: Math.min(BATCH, room)});
   let failedInARow = 0;
   let lastError = '';
+  // One query each for the whole batch (not one per recipient): who unsubscribed meanwhile, which contacts still exist.
+  const [optedOutRows, liveContacts] = await Promise.all([
+    batch.length ? db.contact.findMany({where: {email: {in: batch.map((r) => r.email), mode: 'insensitive'}, emailOptOut: true}, select: {email: true}}) : [],
+    db.contact.findMany({where: {id: {in: batch.flatMap((r) => (r.contactId ? [r.contactId] : []))}}, select: {id: true}}),
+  ]);
+  const optedOut = new Set(optedOutRows.flatMap((c) => (c.email ? [c.email.toLowerCase()] : [])));
+  const live = new Set(liveContacts.map((c) => c.id));
+  const started = Date.now();
   for (const r of batch) {
+    // A job run has 60 seconds: past the budget, the rest goes to the next batch (queued below).
+    if (Date.now() - started > SEND_BUDGET_MS) break;
     // Claim the row; a cancel (PENDING → CANCELED) or a parallel run makes this a no-op.
     const claimed = await db.broadcastRecipient.updateMany({where: {id: r.id, status: 'PENDING'}, data: {status: 'SENDING'}});
     if (!claimed.count) continue;
-    const optedOut = await db.contact.count({where: {email: {equals: r.email, mode: 'insensitive'}, emailOptOut: true}});
-    if (optedOut) {
+    if (optedOut.has(r.email.toLowerCase())) {
       await db.broadcastRecipient.update({where: {id: r.id}, data: {status: 'SKIPPED', error: 'Unsubscribed before it was sent'}});
       continue;
     }
-    const contact = r.contactId ? await db.contact.findUnique({where: {id: r.contactId}, select: {id: true}}) : null;
+    const contact = r.contactId && live.has(r.contactId) ? {id: r.contactId} : null;
     try {
       const message = await sendEmail(db, sender, b.origin, {
         accountId: account.id,

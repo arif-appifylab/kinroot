@@ -6,7 +6,7 @@ import type {Prisma} from '../../../generated/prisma/client';
 import {answerText, defaultSettings, FORM_TEMPLATES, slugify, type FieldType, type StoredAnswer} from '@/lib/forms';
 import {currentUser, isAdmin, requireRole, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
-import {formFields, formSettings, getTurnstile, saveTurnstile} from '../lib/form-submit';
+import {formFields, formSettings} from '../lib/form-submit';
 import {notFound, valid} from '../lib/http';
 import {moveToBin} from '../lib/recycle-bin';
 import {userSelect} from '../lib/users';
@@ -116,25 +116,6 @@ export const forms = new Hono<AppEnv>()
     });
     await audit(c.var.db, c, {action: 'form.created', entity: 'form', recordId: form.id, label: name});
     return c.json({form}, 201);
-  })
-
-  // Turnstile keys are shared by every form; the secret never leaves the server.
-  .get('/turnstile', requireRole('ADMIN'), async (c) => {
-    const cfg = await getTurnstile(c.var.db);
-    return c.json({siteKey: cfg?.siteKey ?? '', configured: !!cfg});
-  })
-  .put('/turnstile', requireRole('ADMIN'), valid('json', z.object({siteKey: z.string().trim().max(200), secret: z.string().trim().max(300).optional()})), async (c) => {
-    const {siteKey, secret} = c.req.valid('json');
-    await audit(c.var.db, c, {action: 'settings.turnstile', meta: {siteKey, secretChanged: !!secret}});
-    if (!siteKey) {
-      await saveTurnstile(c.var.db, null);
-      return c.json({siteKey: '', configured: false});
-    }
-    const current = await getTurnstile(c.var.db);
-    const next = {siteKey, secret: secret || current?.secret || ''};
-    if (!next.secret) throw new HTTPException(400, {message: 'Paste the Turnstile secret key too'});
-    await saveTurnstile(c.var.db, next);
-    return c.json({siteKey, configured: true});
   })
 
   .get('/:id', async (c) => {
