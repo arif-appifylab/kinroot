@@ -164,6 +164,8 @@ export type SettingsResponse = {
   settings: AppSettings;
   oauth: {googleConfigured: boolean; microsoftConfigured: boolean; googleRedirectUri: string; microsoftRedirectUri: string};
   inboundWebhookUrl: string;
+  /** Which inbound signing secrets the owner added (admins only; names and yes / no). */
+  inboundSecrets: Record<string, boolean>;
 };
 
 export type Paged<T> = {rows: T[]; total: number; page: number; pageSize: number};

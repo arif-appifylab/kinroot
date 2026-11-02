@@ -5,6 +5,7 @@ import {sampleMerge, textToEditorHtml, toEmailHtml} from '@/lib/email-html';
 import {accentOf, wrapEmail, type EmailDesign, type EmailLayout} from '@/lib/email-layout';
 import {useEmailDesign, useMe} from '@/lib/queries';
 import {cn} from '@/lib/utils';
+import {EmailFrame} from '../email-frame';
 
 /** Toggle group used by the preview (and the layout picker). */
 export function Segmented<T extends string>({value, onChange, options, label}: {value: T; onChange: (v: T) => void; options: {value: T; label: string; icon?: React.ReactNode}[]; label: string}) {
@@ -59,9 +60,7 @@ export function EmailPreview({html, text, subject, preheader, layout, design: ov
     const sig = signatureHtml ? `<div style="margin-top:24px">${toEmailHtml(signatureHtml, theme)}</div>` : '';
     const content = sampleMerge(toEmailHtml(body, theme) + sig, me);
     const out = wrapEmail({content, layout, preheader: preheader ? sampleMerge(preheader, me) : null, design, brand: q.data.brand, unsubscribeUrl: '#unsubscribe'});
-    // Links in the preview must not navigate the frame.
-    const safe = out.replace('<head>', '<head><style>a{pointer-events:none}</style>');
-    return safe;
+    return out;
   }, [q.data, override, html, text, signatureHtml, layout, preheader, me]);
 
   return (
@@ -77,13 +76,10 @@ export function EmailPreview({html, text, subject, preheader, layout, design: ov
           </div>
         )}
         <div className="flex justify-center p-3">
-          <iframe
-            title="Email preview"
-            sandbox=""
-            srcDoc={doc}
-            className={cn('rounded-lg bg-white transition-[width] duration-300', device === 'mobile' ? 'w-[375px] max-w-full' : 'w-full')}
-            style={{height, colorScheme: 'light'}}
-          />
+          <div className={cn('transition-[width] duration-300', device === 'mobile' ? 'w-[375px] max-w-full' : 'w-full')}>
+            {/* Links in the preview never navigate. */}
+            <EmailFrame html={doc} interactive={false} />
+          </div>
         </div>
       </div>
     </div>

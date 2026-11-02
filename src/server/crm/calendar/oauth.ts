@@ -3,6 +3,7 @@ import {decryptJson, encryptJson} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {oauthClient, type OAuthKind} from '../email/oauth';
 import type {OAuthCreds} from '../email/providers';
+import {fetchOut} from '../kit/outbound';
 
 /**
  * Calendar OAuth. Same Google Cloud / Azure apps as the mailboxes
@@ -49,7 +50,7 @@ type TokenResponse = {access_token: string; refresh_token?: string; expires_in: 
 
 async function tokenRequest(kind: CalendarProvider, client: Client, params: Record<string, string>) {
   const url = kind === 'google' ? 'https://oauth2.googleapis.com/token' : `https://login.microsoftonline.com/${client.tenant}/oauth2/v2.0/token`;
-  const res = await fetch(url, {
+  const res = await fetchOut(url, {
     method: 'POST',
     headers: {'content-type': 'application/x-www-form-urlencoded'},
     body: new URLSearchParams({client_id: client.clientId, client_secret: client.clientSecret, ...params}),
@@ -64,7 +65,7 @@ export async function exchangeCalendarCode(kind: CalendarProvider, client: Clien
   if (!t.refresh_token) throw new Error('No refresh token returned. Remove the app from your account permissions and connect again.');
   const creds: OAuthCreds = {accessToken: t.access_token, refreshToken: t.refresh_token, expiresAt: Date.now() + t.expires_in * 1000, scope: t.scope};
   const profileUrl = kind === 'google' ? 'https://openidconnect.googleapis.com/v1/userinfo' : 'https://graph.microsoft.com/v1.0/me';
-  const profile = (await (await fetch(profileUrl, {headers: {authorization: `Bearer ${creds.accessToken}`}})).json()) as Record<string, string>;
+  const profile = (await (await fetchOut(profileUrl, {headers: {authorization: `Bearer ${creds.accessToken}`}})).json()) as Record<string, string>;
   const email = (kind === 'google' ? profile.email : profile.mail || profile.userPrincipalName)?.toLowerCase();
   if (!email) throw new Error('Could not read the calendar account address');
   return {creds, email};

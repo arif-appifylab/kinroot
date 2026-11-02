@@ -1,0 +1,19 @@
+---
+/**
+ * The website chat as a page of this site: opened by widget.js (a company's website) as a small
+ * window, or directly. The panel is Kinroot's (src/crm/public/chat-page.tsx); it talks to
+ * /site-api/crm/public/chat/*. Per visitor, so never cached.
+ */
+import ChatPage from '../../crm/public/chat-page';
+import CrmPublic from '../../layouts/CrmPublic.astro';
+import {crmBrand} from '../../server/crm/page';
+
+export const prerender = false;
+
+const brand = await crmBrand(Astro.request);
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+---
+
+<CrmPublic brand={brand} title="Chat" noindex>
+  <ChatPage client:only="react" />
+</CrmPublic>

@@ -120,7 +120,26 @@ const limits = async (c: AppContext, identity: ChannelIdentity | null, kind: 'st
 const bot = (hp?: string, startedAt?: number) => !!hp || (!!startedAt && Date.now() - startedAt < 1500);
 
 export const chatPublic = new Hono<AppEnv>()
-  .get('/chat/widget.js', (c) => c.body(WIDGET_JS, 200, {'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'public, max-age=300'}))
+  /**
+   * The loader a company puts on its website. The site answers no cross-site calls (no CORS), so
+   * the script carries its settings (on, allowed on the embedding page, colour, side), worked out
+   * from the page that asked for it (its Referer). Short cache: settings changes show up quickly.
+   */
+  .get('/chat/widget.js', async (c) => {
+    const db = c.var.db;
+    const s = await getChatSettings(db);
+    const page = c.req.header('referer') ?? null;
+    const allowed = embedAllowed(s, [hostOf(page)], publicOrigin(c.req.raw));
+    const cfg = {enabled: s.enabled, allowed, color: /^#[0-9a-f]{3,8}$/i.test(s.color ?? '') ? s.color : '#2563eb', position: s.position === 'left' ? 'left' : 'right'};
+    return c.body(WIDGET_JS.replace('__CONFIG__', JSON.stringify(cfg)), 200, {
+      'content-type': 'application/javascript; charset=utf-8',
+      'cache-control': 'public, max-age=60',
+      vary: 'Referer',
+    });
+  })
+
+  /** GET /site-api/crm/public/chat/link/:token: is a "continue the conversation" link still good? */
+  .get('/chat/link/:token', async (c) => c.json({valid: !!(await fromContinueToken(c.req.param('token').slice(0, 300)))}))
 
   /** Appearance, pre-chat form and availability. Answers even when off (enabled: false), so the widget can stay hidden. */
   .post('/chat/config', valid('json', z.object({meta})), async (c) => {
@@ -266,81 +285,59 @@ export const chatPublic = new Hono<AppEnv>()
   });
 
 /**
- * The embed snippet's script. It adds a launcher bubble and an iframe of
- * /chat/widget on our origin (so the chat UI and its storage live here),
- * tells the frame which page the visitor is on (also after single-page-app
- * navigation), and exposes window.CrmChat.open() / close() / toggle().
- *
+ * The website chat loader:
  *   <script src="https://crm.example.com/site-api/crm/public/chat/widget.js" async></script>
  *   optional: data-position="left" (overrides the setting), data-open="1"
+ *
+ * A chat button on the company's page. The chat itself is a page of this site (/chat/), opened as
+ * a small window: this site may not be framed by others (X-Frame-Options: DENY) nor answer their
+ * pages' calls (no CORS). The window posts its unread count back; the button shows it.
  */
 const WIDGET_JS = `(function () {
   if (window.CrmChat) return;
   var script = document.currentScript;
   var origin = new URL(script.src).origin;
+  var cfg = __CONFIG__;
   var forcedPosition = script.getAttribute('data-position');
   var openOnLoad = script.getAttribute('data-open') === '1';
-  var isOpen = false, ready = false, cfg = null, frame, btn, badge;
+  var win = null, btn, badge;
   var icon = '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>';
-  var closeIcon = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
-  function side() { return forcedPosition === 'left' || (!forcedPosition && cfg && cfg.position === 'left') ? 'left' : 'right'; }
-  function small() { return window.innerWidth < 480; }
-  function post(msg) { if (frame && frame.contentWindow) frame.contentWindow.postMessage(msg, origin); }
-  function page() { post({type: 'crm-chat:page', url: location.href.slice(0, 2000), title: document.title.slice(0, 200)}); }
-  function layout() {
-    var s = side();
-    btn.style.cssText = 'position:fixed;bottom:20px;' + s + ':20px;z-index:2147483000;width:56px;height:56px;border:0;border-radius:999px;cursor:pointer;display:' + (ready && cfg && cfg.enabled && cfg.allowed && !(isOpen && small()) ? 'flex' : 'none') + ';align-items:center;justify-content:center;color:#fff;background:' + ((cfg && cfg.color) || '#2563eb') + ';box-shadow:0 10px 30px rgba(15,23,42,.25);transition:transform .15s;';
-    frame.style.cssText = small()
-      ? 'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483001;background:#fff;color-scheme:light;display:' + (isOpen ? 'block' : 'none') + ';'
-      : 'position:fixed;bottom:88px;' + s + ':20px;width:380px;max-width:calc(100vw - 40px);height:min(640px, calc(100vh - 108px));border:0;border-radius:16px;z-index:2147483001;background:#fff;color-scheme:light;box-shadow:0 24px 60px rgba(15,23,42,.28);display:' + (isOpen ? 'block' : 'none') + ';';
-    btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-    btn.setAttribute('aria-label', isOpen ? 'Close chat' : 'Open chat');
-    btn.innerHTML = (isOpen ? closeIcon : icon);
-    btn.appendChild(badge);
-  }
-  function open() { if (!ready) { openOnLoad = true; return; } isOpen = true; layout(); post({type: 'crm-chat:open'}); setTimeout(function () { try { frame.focus(); } catch (e) {} }, 30); }
-  function close(refocus) { isOpen = false; layout(); post({type: 'crm-chat:close'}); if (refocus !== false) btn.focus(); }
-  function toggle() { isOpen ? close() : open(); }
-  function mount() {
-    var q = new URLSearchParams({embed: '1', page: location.href.slice(0, 2000), title: document.title.slice(0, 200)});
+  if (!cfg.enabled || !cfg.allowed) return;
+  function side() { return forcedPosition === 'left' || (!forcedPosition && cfg.position === 'left') ? 'left' : 'right'; }
+  function url() {
+    var q = new URLSearchParams({page: location.href.slice(0, 2000), title: document.title.slice(0, 200)});
     if (document.referrer) q.set('ref', document.referrer.slice(0, 1000));
-    frame = document.createElement('iframe');
-    frame.src = origin + '/chat/widget?' + q.toString();
-    frame.title = 'Chat';
-    frame.id = 'crm-chat-frame';
-    frame.setAttribute('allow', 'clipboard-write');
+    return origin + '/chat/?' + q.toString();
+  }
+  function open() {
+    if (win && !win.closed) { win.focus(); return; }
+    var w = 400, h = Math.min(680, screen.availHeight - 80);
+    var left = side() === 'left' ? 20 : Math.max(0, screen.availWidth - w - 20);
+    win = window.open(url(), 'crm-chat', 'popup=yes,width=' + w + ',height=' + h + ',left=' + left + ',top=' + Math.max(0, screen.availHeight - h - 40));
+    if (!win) location.href = url();
+  }
+  function mount() {
     btn = document.createElement('button');
     btn.type = 'button';
-    btn.setAttribute('aria-controls', 'crm-chat-frame');
-    btn.addEventListener('click', toggle);
+    btn.setAttribute('aria-label', 'Open chat');
+    btn.style.cssText = 'position:fixed;bottom:20px;' + side() + ':20px;z-index:2147483000;width:56px;height:56px;border:0;border-radius:999px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff;background:' + cfg.color + ';box-shadow:0 10px 30px rgba(15,23,42,.25);';
+    btn.innerHTML = icon;
     badge = document.createElement('span');
     badge.setAttribute('aria-hidden', 'true');
     badge.style.cssText = 'position:absolute;top:-2px;right:-2px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:#e11d48;color:#fff;font:700 12px/20px system-ui,sans-serif;text-align:center;display:none;box-sizing:border-box;';
-    document.body.appendChild(frame);
+    btn.appendChild(badge);
+    btn.addEventListener('click', open);
     document.body.appendChild(btn);
-    layout();
-    window.addEventListener('resize', layout);
-    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && isOpen) close(); });
-    // Single-page apps: tell the frame when the page changes.
-    ['pushState', 'replaceState'].forEach(function (k) {
-      var orig = history[k];
-      history[k] = function () { var r = orig.apply(this, arguments); setTimeout(page, 0); return r; };
-    });
-    window.addEventListener('popstate', page);
+    if (openOnLoad) open();
   }
   window.addEventListener('message', function (e) {
-    if (e.origin !== origin || !frame || e.source !== frame.contentWindow || !e.data || typeof e.data.type !== 'string') return;
-    var d = e.data;
-    if (d.type === 'crm-chat:ready') { ready = true; cfg = d.config || {}; layout(); page(); if (openOnLoad && cfg.enabled && cfg.allowed) open(); }
-    if (d.type === 'crm-chat:close') close();
-    if (d.type === 'crm-chat:unread') {
-      var n = Number(d.count) || 0;
-      badge.textContent = n > 9 ? '9+' : String(n);
-      badge.style.display = n > 0 && !isOpen ? 'block' : 'none';
-      btn.setAttribute('aria-label', (isOpen ? 'Close chat' : 'Open chat') + (n > 0 ? ' (' + n + ' unread)' : ''));
-    }
+    if (e.origin !== origin || !e.data || e.data.type !== 'crm-chat:unread' || !badge) return;
+    var n = Number(e.data.count) || 0;
+    badge.textContent = n > 9 ? '9+' : String(n);
+    badge.style.display = n > 0 ? 'block' : 'none';
+    btn.setAttribute('aria-label', 'Open chat' + (n > 0 ? ' (' + n + ' unread)' : ''));
   });
-  window.CrmChat = {open: open, close: function () { close(false); }, toggle: toggle};
+  window.CrmChat = {open: open, close: function () { if (win && !win.closed) win.close(); }, toggle: function () { win && !win.closed ? win.close() : open(); }};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();
 })();
 `;

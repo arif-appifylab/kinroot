@@ -1,6 +1,8 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 
 import type {PublicChatConfig, VisitorConversation, VisitorMessage, VisitorSession} from '@/lib/chat';
+import {siteFetch} from '../../../platform/browser';
+import {putFile, type UploadGrant} from '../../../platform/files-browser';
 
 /**
  * The visitor's side of website chat: config, the signed visitor token
@@ -36,10 +38,12 @@ export class ChatError extends Error {
   }
 }
 
-/** Not the app's `api` client: a visitor is never sent to /login. */
+/**
+ * Not the app's `api` client: a visitor is never sent to sign in. `siteFetch` carries the site's
+ * CSRF token, which every write to the Site API needs (the visitor's chat runs on this site).
+ */
 async function call<T>(path: string, body: unknown): Promise<T> {
-  const form = body instanceof FormData;
-  const res = await fetch(`/site-api/crm/public/chat${path}`, {method: 'POST', headers: form ? undefined : {'content-type': 'application/json'}, body: form ? body : JSON.stringify(body)});
+  const res = await siteFetch(`/site-api/crm/public/chat${path}`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
   const data = (await res.json().catch(() => ({}))) as {error?: string};
   if (!res.ok) throw new ChatError(data.error ?? `Something went wrong (${res.status})`, res.status);
   return data as T;
@@ -271,13 +275,19 @@ export function useVisitorChat({meta, open, continueToken}: {meta: PageMeta; ope
       setError(`${file.name} is larger than 5 MB`);
       return null;
     }
-    const form = new FormData();
-    form.append('file', file);
-    if (tokenRef.current) form.append('token', tokenRef.current);
-    if (metaRef.current.page) form.append('page', metaRef.current.page);
-    if (metaRef.current.ancestor) form.append('ancestor', metaRef.current.ancestor);
     try {
-      const r = await call<{file: UploadedFile; token: string}>('/upload', form);
+      // Storage takes the bytes directly (docs/agent/files.md): ask, PUT, confirm.
+      const r = await call<{fileId: string; upload: UploadGrant['upload']; file: UploadedFile; token: string}>('/upload', {
+        name: file.name,
+        contentType: file.type,
+        size: file.size,
+        token: tokenRef.current,
+        page: metaRef.current.page,
+        ancestor: metaRef.current.ancestor,
+      });
+      const put = await putFile(r.upload, file);
+      if (!put.ok) throw new ChatError(put.message, put.status);
+      await call(`/upload/${r.fileId}/complete`, {});
       if (!tokenRef.current) {
         tokenRef.current = r.token;
         writeToken(r.token);

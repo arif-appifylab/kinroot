@@ -2,33 +2,34 @@ import {Hono} from 'hono';
 import {z} from 'zod';
 
 import {publicOrigin} from '../kit/config';
-import {decryptJson, encryptJson} from '../kit/crypto';
+import {config as site} from '../../../platform/config';
+import {INBOUND_SECRETS} from '../email/inbound-auth';
+import {oauthClient} from '../email/oauth';
 import {currentUser, isAdmin, requireRole, type AppEnv} from '../kit/guards';
 import {diff} from '../lib/activity';
 import {audit} from '../lib/audit';
 import {valid} from '../lib/http';
 import {clearBrandCache} from '../lib/brand';
-import {getSettings, saveSettings, SECRETS_KEY} from '../lib/settings';
-
-export type OAuthSecrets = {googleClientSecret?: string; microsoftClientSecret?: string};
+import {getSettings, saveSettings} from '../lib/settings';
 
 export const settings = new Hono<AppEnv>()
   .get('/', async (c) => {
     const db = c.var.db;
-    const s = await getSettings(db);
-    const secretsRow = await db.setting.findUnique({where: {key: SECRETS_KEY}});
-    const secrets = secretsRow ? await decryptJson<OAuthSecrets>(secretsRow.value as string).catch(() => ({}) as OAuthSecrets) : {};
+    const [s, google, microsoft] = await Promise.all([getSettings(db), oauthClient(db, 'google'), oauthClient(db, 'microsoft')]);
     const origin = publicOrigin(c.req.raw);
     const admin = isAdmin(currentUser(c));
     return c.json({
       settings: admin ? s : {...s, inboundToken: ''},
       oauth: {
-        googleConfigured: !!(s.googleClientId && secrets.googleClientSecret),
-        microsoftConfigured: !!(s.microsoftClientId && secrets.microsoftClientSecret),
+        // The client secrets are the owner's secrets (GOOGLE_CLIENT_SECRET, MICROSOFT_CLIENT_SECRET), never stored here.
+        googleConfigured: !!google,
+        microsoftConfigured: !!microsoft,
         googleRedirectUri: `${origin}/site-api/crm/email/oauth/google/callback`,
         microsoftRedirectUri: `${origin}/site-api/crm/email/oauth/microsoft/callback`,
       },
       inboundWebhookUrl: admin ? `${origin}/site-api/crm/inbound/${s.inboundToken}` : '',
+      // Which signing secrets the owner added (names and yes / no only): email/inbound-auth.ts.
+      inboundSecrets: admin ? Object.fromEntries(INBOUND_SECRETS.map((n) => [n, !!site.ownerSecret(n)])) : {},
     });
   })
 
@@ -53,30 +54,15 @@ export const settings = new Hono<AppEnv>()
       googleClientId: z.string().trim().max(300).optional(),
       microsoftClientId: z.string().trim().max(300).optional(),
       microsoftTenant: z.string().trim().max(100).optional(),
-      googleClientSecret: z.string().trim().max(300).optional(),
-      microsoftClientSecret: z.string().trim().max(300).optional(),
     })),
     async (c) => {
       const db = c.var.db;
-      const {googleClientSecret, microsoftClientSecret, ...patch} = c.req.valid('json');
+      const patch = c.req.valid('json');
       const before = await getSettings(db);
       await saveSettings(db, patch);
       const changes = diff(before, patch);
       if (changes.length) await audit(db, c, {action: 'settings.updated', meta: {changes}});
-      if (googleClientSecret !== undefined) await audit(db, c, {action: 'settings.oauth_secret', label: 'Google', meta: {cleared: !googleClientSecret}});
-      if (microsoftClientSecret !== undefined) await audit(db, c, {action: 'settings.oauth_secret', label: 'Microsoft', meta: {cleared: !microsoftClientSecret}});
       await clearBrandCache();
-      if (googleClientSecret !== undefined || microsoftClientSecret !== undefined) {
-        const row = await db.setting.findUnique({where: {key: SECRETS_KEY}});
-        const current = row ? await decryptJson<OAuthSecrets>(row.value as string).catch(() => ({}) as OAuthSecrets) : {};
-        const next: OAuthSecrets = {
-          ...current,
-          ...(googleClientSecret !== undefined && {googleClientSecret}),
-          ...(microsoftClientSecret !== undefined && {microsoftClientSecret}),
-        };
-        const value = await encryptJson(next);
-        await db.setting.upsert({where: {key: SECRETS_KEY}, create: {key: SECRETS_KEY, value}, update: {value}});
-      }
       return c.json({settings: await getSettings(db)});
     },
   );

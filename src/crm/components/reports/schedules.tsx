@@ -29,6 +29,7 @@ import {
 import type {Jsonify, UserLite} from '@/lib/types';
 import {useBrand} from '@/lib/use-brand';
 import {cn} from '@/lib/utils';
+import {EmailFrame} from '../email-frame';
 
 /** A schedule as the API lists it (src/server/routes/report-schedules.ts). */
 export type ScheduleRow = Jsonify<P.ReportSchedule> & {
@@ -437,7 +438,9 @@ function EmailFramePreview({data, loading, error}: {data?: {subject: string; htm
           <p className="p-6 text-sm text-destructive">{error}</p>
         ) : doc ? (
           <div className="flex justify-center p-3">
-            <iframe title="Email preview" sandbox="" srcDoc={doc} className={cn('h-[560px] rounded-lg bg-white transition-[width] duration-300', device === 'mobile' ? 'w-[375px] max-w-full' : 'w-full')} style={{colorScheme: 'light'}} />
+            <div className={cn('max-h-[560px] overflow-auto rounded-lg transition-[width] duration-300', device === 'mobile' ? 'w-[375px] max-w-full' : 'w-full')}>
+              <EmailFrame html={doc} interactive={false} />
+            </div>
           </div>
         ) : (
           <Skeleton className="m-3 h-[560px]" />

@@ -1,6 +1,6 @@
 /**
  * Settings → Email: how replies come back for each account. Gmail / Outlook
- * sync their mailbox; SMTP and API accounts set a Reply-To inbound address
+ * sync their mailbox; API accounts set a Reply-To inbound address
  * that an email service posts to the inbound webhook.
  */
 import {AlertTriangle, Copy, Loader2, MessageSquareReply, RefreshCw, Webhook} from 'lucide-react';

@@ -1,6 +1,7 @@
 import type {Interval} from '@/lib/scheduling';
 import type {OAuthCreds} from '../email/providers';
 import type {CalendarProvider} from './oauth';
+import {fetchOut} from '../kit/outbound';
 
 /**
  * Google Calendar API and Microsoft Graph behind one small interface:
@@ -41,7 +42,7 @@ const GOOGLE = 'https://www.googleapis.com/calendar/v3';
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 
 async function call<T>(creds: OAuthCreds, url: string, init: RequestInit = {}, provider: CalendarProvider = 'google'): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetchOut(url, {
     ...init,
     headers: {
       authorization: `Bearer ${creds.accessToken}`,

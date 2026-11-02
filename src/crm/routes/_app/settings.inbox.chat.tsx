@@ -128,8 +128,9 @@ function Snippet({url}: {url: string}) {
           <li><code className="rounded bg-slate-100 px-1">data-position="left"</code> on the script tag puts the bubble on the left on that site, whatever is set here.</li>
           <li><code className="rounded bg-slate-100 px-1">data-open="1"</code> opens the chat as soon as the page loads.</li>
           <li><code className="rounded bg-slate-100 px-1">window.CrmChat.open()</code>, <code className="rounded bg-slate-100 px-1">.close()</code> and <code className="rounded bg-slate-100 px-1">.toggle()</code> control it from your own buttons.</li>
-          <li>The chat window itself is <code className="rounded bg-slate-100 px-1">/chat/widget?embed=1</code> on this app, inside an iframe. Visitors are remembered in that window's storage, so they see their conversation when they come back.</li>
-          <li>Pages built in this app use <code className="rounded bg-slate-100 px-1">&lt;ChatWidget /&gt;</code> from <code className="rounded bg-slate-100 px-1">src/components/chat/chat-widget.tsx</code> instead of the snippet.</li>
+          <li>The bubble opens the chat in a small window: <code className="rounded bg-slate-100 px-1">/chat/</code> on this site (it can't sit inside another website's page). Visitors are remembered there, so they see their conversation when they come back.</li>
+          <li>The settings (on / off, colour, side, allowed websites) are read when a page loads the script: changes show within a minute.</li>
+          <li>Pages built in this app use <code className="rounded bg-slate-100 px-1">&lt;ChatWidget /&gt;</code> from <code className="rounded bg-slate-100 px-1">src/crm/components/chat/chat-widget.tsx</code> instead of the snippet.</li>
         </ul>
       </details>
     </div>

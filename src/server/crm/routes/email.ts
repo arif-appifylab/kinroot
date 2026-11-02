@@ -14,7 +14,7 @@ import {getSettings} from '../lib/settings';
 import {userSelect} from '../lib/users';
 import {emailBrand, getEmailDesign, saveEmailDesign} from '../email/design';
 import {accountCredentials, authorizeUrl, exchangeCode, oauthClient, type OAuthKind} from '../email/oauth';
-import {PROVIDER_INFO, verifyCredentials, type Credentials, type SmtpCreds} from '../email/providers';
+import {PROVIDER_INFO, secretsPresent, verifyCredentials, type Credentials} from '../email/providers';
 import {htmlToText} from '../email/render';
 import {receiveInbound} from '../email/replies';
 import {sendEmail, usableAccounts} from '../email/service';
@@ -24,20 +24,13 @@ import {notOthersPersonal} from '../inbox/scope';
 
 const email = z.email().transform((v) => v.toLowerCase());
 
-// Option 1 + 2: credentials typed in by the user. Option 3 (OAuth) goes through /oauth/*.
+// API accounts: only what is not secret is typed in (the key is the owner's secret, providers.ts
+// `API_KEY_SECRETS`). OAuth mailboxes go through /oauth/*. Custom SMTP is not available.
 const credentialsInput = z.discriminatedUnion('provider', [
-  z.object({
-    provider: z.literal('SMTP'),
-    host: z.string().trim().min(1),
-    port: z.coerce.number().int().min(1).max(65535),
-    security: z.enum(['tls', 'starttls', 'none']),
-    username: z.string().trim().optional(),
-    password: z.string().optional(),
-  }),
-  z.object({provider: z.literal('RESEND'), apiKey: z.string().trim().min(10)}),
-  z.object({provider: z.literal('POSTMARK'), serverToken: z.string().trim().min(10), messageStream: z.string().trim().optional()}),
-  z.object({provider: z.literal('SENDGRID'), apiKey: z.string().trim().min(10)}),
-  z.object({provider: z.literal('MAILGUN'), apiKey: z.string().trim().min(10), domain: z.string().trim().min(3), region: z.enum(['us', 'eu']).default('us')}),
+  z.object({provider: z.literal('RESEND')}),
+  z.object({provider: z.literal('POSTMARK'), messageStream: z.string().trim().max(100).optional()}),
+  z.object({provider: z.literal('SENDGRID')}),
+  z.object({provider: z.literal('MAILGUN'), domain: z.string().trim().min(3).max(253).regex(/^[a-z0-9.-]+$/i, 'a domain name like mg.example.com'), region: z.enum(['us', 'eu']).default('us')}),
 ]);
 
 const accountMeta = z.object({
@@ -101,6 +94,9 @@ async function setDefault(c: AppContext, account: EmailAccount) {
 
 export const emailRoutes = new Hono<AppEnv>()
   // ─── Accounts ───
+  /** Which provider keys and OAuth client secrets the owner has added (names and booleans only). */
+  .get('/secrets', (c) => c.json({secrets: secretsPresent()}))
+
   .get('/accounts', async (c) => {
     const rows = await usableAccounts(c.var.db, currentUser(c));
     return c.json({rows: rows.map(safeAccount)});

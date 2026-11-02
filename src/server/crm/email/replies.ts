@@ -4,7 +4,7 @@ import type {Db} from '../kit/db';
 import {escapeHtml} from '@/lib/email-html';
 import {parseAddressList, stripAngle, type Address} from './mime';
 import {accountCredentials} from './oauth';
-import {fetchResendReceived, type ResendCreds} from './providers';
+import {fetchResendReceived} from './providers';
 import {enqueue, kickJobs} from '../lib/jobs';
 import {getSettings} from '../lib/settings';
 import {ingestMessage, sendSystemEmail, type IncomingMessage} from './service';
@@ -31,7 +31,7 @@ export async function resendIncoming(db: Db, data: {email_id?: string; to?: stri
   ];
   for (const account of accounts) {
     try {
-      const e = await fetchResendReceived((await accountCredentials(db, account)) as ResendCreds, data.email_id);
+      const e = await fetchResendReceived(await accountCredentials(db, account), data.email_id);
       const h = Object.fromEntries(Object.entries(e.headers ?? {}).map(([k, v]) => [k.toLowerCase(), String(v)]));
       const message: IncomingMessage = {
         from: parseAddressList(e.from)[0] ?? {email: 'unknown@unknown'},

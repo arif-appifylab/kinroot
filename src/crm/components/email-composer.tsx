@@ -46,7 +46,7 @@ export function EmailComposer({to: initialTo = [], subject: initialSubject = '',
     return (
       <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-5 text-center">
         <p className="text-sm font-semibold text-slate-800">Connect an email account to start sending</p>
-        <p className="mt-1 text-xs text-muted-foreground">Custom SMTP, Resend, Postmark, SendGrid, Mailgun, Gmail or Outlook.</p>
+        <p className="mt-1 text-xs text-muted-foreground">Resend, Postmark, SendGrid, Mailgun, Gmail or Outlook.</p>
         <Button asChild size="sm" className="mt-3">
           <Link to="/settings/email">Connect email</Link>
         </Button>

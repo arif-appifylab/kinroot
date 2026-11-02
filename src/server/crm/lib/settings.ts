@@ -92,7 +92,6 @@ export async function saveSettings(db: Db, patch: Partial<AppSettings>) {
 }
 
 // OAuth client secrets live in their own encrypted setting, never in the main settings row.
-export const SECRETS_KEY = 'oauth-secrets';
 
 /** Values typed straight into a dropdown become options for everyone next time. */
 export async function rememberOption(db: Db, list: 'sources' | 'lostReasons' | 'industries' | 'companyTypes' | 'taskQueues', value: string | null | undefined) {

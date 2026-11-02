@@ -33,6 +33,7 @@ import {publicFileUrl} from '../routes/files';
 import {filesFor, identityLabel, linkChannelContact, receiveChannelMessage, refreshChannelActivity, sendChannelMessage} from './channel-messages';
 import {conversationLink, eventData, threadEvent} from './conversations';
 import {hasTeamAccess, inboxContext} from './settings';
+import {cache} from '../../../platform/cache';
 
 /**
  * Website live chat (module 10b). The visitor's browser talks to
@@ -45,15 +46,25 @@ import {hasTeamAccess, inboxContext} from './settings';
 
 const KEY = 'chat';
 
+/** The Site Cache key of the chat settings (docs/agent/cache.md); `saveChatSettings` clears it. */
+const CACHE_KEY = 'crm:chat-settings';
+
+/**
+ * Read on every visitor poll and every page that loads widget.js, changed rarely: kept in the
+ * Site Cache for 10 minutes, cleared the moment Settings → Inbox → Chat saves.
+ */
 export async function getChatSettings(db: Db): Promise<ChatSettings> {
-  const row = await db.setting.findUnique({where: {key: KEY}});
-  const stored = (row?.value ?? {}) as Partial<ChatSettings>;
-  return {...DEFAULT_CHAT_SETTINGS, ...stored, hours: {...DEFAULT_CHAT_SETTINGS.hours, ...(stored.hours ?? {})}};
+  return cache.getOrSet(CACHE_KEY, 600, async () => {
+    const row = await db.setting.findUnique({where: {key: KEY}});
+    const stored = (row?.value ?? {}) as Partial<ChatSettings>;
+    return {...DEFAULT_CHAT_SETTINGS, ...stored, hours: {...DEFAULT_CHAT_SETTINGS.hours, ...(stored.hours ?? {})}};
+  });
 }
 
 export async function saveChatSettings(db: Db, value: ChatSettings) {
   const json = value as unknown as Prisma.InputJsonValue;
   await db.setting.upsert({where: {key: KEY}, create: {key: KEY, value: json}, update: {value: json}});
+  await cache.del(CACHE_KEY);
   return value;
 }
 

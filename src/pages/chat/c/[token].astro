@@ -1,0 +1,22 @@
+---
+/**
+ * "Continue the conversation" from an email sent to a chat visitor: /chat/c/<signed token>. The link
+ * is checked in-process (Kinroot's own Site API route); an expired one says so.
+ */
+import ChatPage from '../../../crm/public/chat-page';
+import CrmPublic from '../../../layouts/CrmPublic.astro';
+import {crmBrand, crmRead} from '../../../server/crm/page';
+
+export const prerender = false;
+
+const token = Astro.params.token ?? '';
+const [brand, link] = await Promise.all([crmBrand(Astro.request), crmRead<{valid: boolean}>(Astro.request, `/public/chat/link/${encodeURIComponent(token)}`)]);
+const valid = link?.valid === true;
+if (!valid) Astro.response.status = 410;
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+---
+
+<CrmPublic brand={brand} title="Chat" noindex>
+  <ChatPage client:only="react" continueToken={token} valid={valid} />
+</CrmPublic>

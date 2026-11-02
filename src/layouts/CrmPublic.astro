@@ -1,0 +1,37 @@
+---
+/**
+ * The <head> and body for Kinroot's PUBLIC pages (chat, later booking, support, forms): Kinroot's
+ * styles and brand, light by default (they sit on a company's website), no site header or footer.
+ * Pages that are links someone was sent (a chat, a booking to manage) pass `noindex`.
+ */
+import '../crm/styles.css';
+
+import {BRAND, type Brand} from '../crm/lib/brand';
+
+interface Props {
+  brand: Brand;
+  title: string;
+  description?: string;
+  noindex?: boolean;
+}
+
+const {brand, title, description, noindex = false} = Astro.props;
+const name = brand.name || BRAND.name;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{`${title} · ${name}`}</title>
+    {description && <meta name="description" content={description} />}
+    {noindex && <meta name="robots" content="noindex" />}
+    <meta name="theme-color" content={brand.primary || BRAND.primary} />
+    <link rel="icon" href={brand.logo || '/kinroot-mark.svg'} />
+    {(brand.primary || brand.secondary) && <link rel="stylesheet" href="/site-api/crm/public/brand.css" />}
+  </head>
+  <body class="bg-background text-foreground">
+    <slot />
+  </body>
+</html>

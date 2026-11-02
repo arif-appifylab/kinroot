@@ -4,6 +4,7 @@ import type {Db} from '../kit/db';
 import {config as site} from '../../../platform/config';
 import {getSettings} from '../lib/settings';
 import type {Credentials, OAuthCreds} from './providers';
+import {fetchOut} from '../kit/outbound';
 
 export type OAuthKind = 'google' | 'microsoft';
 
@@ -61,7 +62,7 @@ const tokenUrl = (kind: OAuthKind, tenant: string) =>
 type TokenResponse = {access_token: string; refresh_token?: string; expires_in: number; scope?: string; error?: string; error_description?: string};
 
 async function tokenRequest(kind: OAuthKind, client: {clientId: string; clientSecret: string; tenant: string}, params: Record<string, string>) {
-  const res = await fetch(tokenUrl(kind, client.tenant), {
+  const res = await fetchOut(tokenUrl(kind, client.tenant), {
     method: 'POST',
     headers: {'content-type': 'application/x-www-form-urlencoded'},
     body: new URLSearchParams({client_id: client.clientId, client_secret: client.clientSecret, ...params}),
@@ -77,7 +78,7 @@ export async function exchangeCode(kind: OAuthKind, client: {clientId: string; c
   const creds: OAuthCreds = {accessToken: t.access_token, refreshToken: t.refresh_token, expiresAt: Date.now() + t.expires_in * 1000, scope: t.scope};
 
   const profileUrl = kind === 'google' ? 'https://openidconnect.googleapis.com/v1/userinfo' : 'https://graph.microsoft.com/v1.0/me';
-  const profile = (await (await fetch(profileUrl, {headers: {authorization: `Bearer ${creds.accessToken}`}})).json()) as Record<string, string>;
+  const profile = (await (await fetchOut(profileUrl, {headers: {authorization: `Bearer ${creds.accessToken}`}})).json()) as Record<string, string>;
   const email = (kind === 'google' ? profile.email : profile.mail || profile.userPrincipalName)?.toLowerCase();
   const name = kind === 'google' ? profile.name : profile.displayName;
   if (!email) throw new Error('Could not read the mailbox address');

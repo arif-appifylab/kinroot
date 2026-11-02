@@ -12,8 +12,8 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | 1 | Foundation: schema + migration, team model, Tailwind + Kinroot UI kit, `/crm` host page and router, CSP check | done |
 | 2 | Server: all of Kinroot's server code moved to `src/server/crm`, compiling and mounted at `/site-api/crm`; kit on the template's auth, database, jobs and storage; team, invites, uploads, exports / imports storage; integration tests | done |
 | 3 | Core CRM screens: shell, setup, invite, no-access, profile, contacts, companies, deals, pipelines, notes, tasks, timeline, views, ⌘K search, custom fields, dashboard, team (all signed-in screens compile; public pages are their phases) | done |
-| 4 | Email: providers, templates + editor, tracking, inbound replies, Gmail / Outlook sync; inbox; live chat | next |
-| 5 | Forms, lists and segments, broadcasts | |
+| 4 | Email: providers, templates + editor, tracking, inbound replies, Gmail / Outlook sync; inbox; live chat | done |
+| 5 | Forms, lists and segments, broadcasts | next |
 | 6 | Tickets + support portal, meetings + booking pages, calendar sync | |
 | 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | |
 | 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | |
@@ -89,14 +89,31 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
   (validated `#hex` colours only); the root route loads it for `useBrand()`, the host page for the head.
 - "Last seen" in Settings → Team is refreshed on requests, at most every 10 minutes.
 
+## Decisions (phase 4)
+
+- SMTP removed (`email/smtp.ts`, `email/socket.ts` deleted); old SMTP accounts refuse to send with a message.
+- API keys: owner secrets `RESEND_API_KEY`, `POSTMARK_SERVER_TOKEN`, `SENDGRID_API_KEY`, `MAILGUN_API_KEY`
+  (`email/providers.ts` `withKey`); an account stores only its non-secret settings. Settings → Email shows
+  which are added (`GET /email/secrets`, names and yes / no) and no key fields.
+- Every call to a mail / calendar service has a 15 s timeout (`kit/outbound.ts` `fetchOut`).
+- Inbound webhook: the URL token plus the sender's proof (`email/inbound-auth.ts`): Resend Svix signature
+  (`RESEND_WEBHOOK_SECRET`), Mailgun signature (`MAILGUN_WEBHOOK_SIGNING_KEY`), Postmark / SendGrid Basic
+  credentials in the URL (`INBOUND_BASIC_AUTH`, `user:password`). Unit tests in `tests/crm-inbound-auth.test.ts`.
+- Email HTML (inbox, editor preview, report email preview) renders in a shadow root (`components/email-frame.tsx`),
+  not a `srcdoc` iframe, which inherited the CSP and lost every inline style.
+- Live chat: `widget.js` carries its settings (worked out from the embedding page's Referer) and its button
+  opens `/chat/` (an Astro page, `src/pages/chat/`) as a small window; `/chat/c/<token>` continues a chat from an
+  email. Visitor calls go through `siteFetch` (CSRF); chat settings are in the Site Cache (10 min, cleared on save).
+
 ## Open items (tracked)
 
 - `$queryRawUnsafe` in `lib/reports.ts`, `routes/reports.ts`, `lib/automations.ts` (phase 7): to tagged `Prisma.sql`.
 - Plain `<a href>` links to `/site-api/crm/...` downloads (exports, files) carry the session by cookie: fine live, signed out in the editor Preview.
 - Email preview frame (`components/inbox/parts.tsx`) inherits the page CSP: check its styles in phase 4.
 - `routes/incoming-webhooks.ts`, `routes/data-in.ts` store raw IPs in their request logs (phase 8).
-- SMTP code (`email/smtp.ts`, `email/socket.ts`) still present, unreachable once phase 4 removes the provider.
-- Settings → Email still has fields for OAuth client secrets and provider keys (phase 4).
+- Turnstile (spam check on forms and chat) still in the code: removed in phase 5 (outside script blocked by the CSP).
+- Brand logo is still a data URL in the settings row (file bytes in the database): move to a public storage file.
+- The sonner toast library logs one CSP message per page load (its CSS loads from our stylesheet; harmless).
 - Automation merge field `{{owner.email}}` puts the record owner's address in emails to contacts, as before.
 
 ## Visible changes the rules force (approved by the owner)

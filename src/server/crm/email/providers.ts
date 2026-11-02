@@ -1,16 +1,22 @@
 import type {EmailProvider} from '../../../generated/prisma/client';
 import {toB64} from '../kit/crypto';
 import {buildMime, formatAddress, mimeToBase64Url, type OutgoingMessage} from './mime';
-import {smtpSend, type SmtpConfig} from './smtp';
+import {config as site} from '../../../platform/config';
+import {fetchOut} from '../kit/outbound';
 
 /**
- * Three ways to connect email, one interface:
- *   1. Custom SMTP: any mail server
- *   2. Transactional API: Resend, Postmark, SendGrid, Mailgun (HTTPS, best deliverability)
- *   3. Mailbox OAuth: Gmail / Microsoft 365 (send from the real inbox + two-way sync)
+ * Two ways to connect email, one interface:
+ *   1. Transactional API: Resend, Postmark, SendGrid, Mailgun (HTTPS, best deliverability)
+ *   2. Mailbox OAuth: Gmail / Microsoft 365 (send from the real inbox + two-way sync)
+ * Custom SMTP is not available: the site may open no raw TCP connections (AGENTS.md › Environment).
+ *
+ * API keys never live in the database: each provider's key is a secret the owner adds in the
+ * dashboard (`API_KEY_SECRETS`), read when sending (`withKey`). An account keeps only what is not
+ * secret (Postmark's message stream, Mailgun's domain and region).
  */
 
-export type SmtpCreds = SmtpConfig;
+/** An old SMTP account's settings (no longer used to send). */
+export type SmtpCreds = {host: string; port: number; security: string; username?: string; password?: string};
 export type ResendCreds = {apiKey: string};
 export type PostmarkCreds = {serverToken: string; messageStream?: string};
 export type SendgridCreds = {apiKey: string};
@@ -29,7 +35,7 @@ export type SendResult = {externalId?: string | null; externalThreadId?: string 
  * webhook /site-api/crm/inbound/:token. `inboundWebhook`: the account uses that route.
  */
 export const PROVIDER_INFO: Record<EmailProvider, {label: string; kind: 'smtp' | 'api' | 'oauth'; inbound: string; inboundWebhook: boolean}> = {
-  SMTP: {label: 'Custom SMTP', kind: 'smtp', inbound: 'Replies via a Reply-To inbound address', inboundWebhook: true},
+  SMTP: {label: 'Custom SMTP (not available)', kind: 'smtp', inbound: 'Replies via a Reply-To inbound address', inboundWebhook: true},
   RESEND: {label: 'Resend', kind: 'api', inbound: 'Replies via Resend Receiving (Reply-To)', inboundWebhook: true},
   POSTMARK: {label: 'Postmark', kind: 'api', inbound: 'Replies via Postmark inbound (Reply-To)', inboundWebhook: true},
   SENDGRID: {label: 'SendGrid', kind: 'api', inbound: 'Replies via SendGrid Inbound Parse (Reply-To)', inboundWebhook: true},
@@ -48,8 +54,35 @@ export function isReservedAddress(email: string) {
   return /(^|\.)example\.(com|net|org)$/.test(domain) || /(^|\.)(test|example|invalid|localhost)$/.test(domain);
 }
 
-/** Only SMTP (which may be a local sink) can deliver to reserved test domains. */
-export const reachesReserved = (provider: EmailProvider) => provider === 'SMTP';
+/** Only a local SMTP sink could deliver to reserved test domains, and SMTP is not available here. */
+export const reachesReserved = (_provider: EmailProvider) => false;
+
+/** The secret each API provider's key comes from (added by the owner in the dashboard, live and Preview). */
+export const API_KEY_SECRETS = {
+  RESEND: 'RESEND_API_KEY',
+  POSTMARK: 'POSTMARK_SERVER_TOKEN',
+  SENDGRID: 'SENDGRID_API_KEY',
+  MAILGUN: 'MAILGUN_API_KEY',
+} as const satisfies Partial<Record<EmailProvider, string>>;
+
+type ApiProvider = keyof typeof API_KEY_SECRETS;
+const isApi = (p: EmailProvider): p is ApiProvider => p in API_KEY_SECRETS;
+
+/** Which provider keys (and OAuth client secrets) the owner has added: booleans only, for Settings → Email. */
+export function secretsPresent() {
+  const names = [...Object.values(API_KEY_SECRETS), 'GOOGLE_CLIENT_SECRET', 'MICROSOFT_CLIENT_SECRET'];
+  return Object.fromEntries(names.map((n) => [n, !!site.ownerSecret(n)])) as Record<string, boolean>;
+}
+
+/** The account's stored settings plus its provider's key from the owner's secret (a refused send when missing). */
+export function withKey(provider: EmailProvider, stored: Credentials): Credentials {
+  if (provider === 'SMTP') throw new ProviderError('Custom SMTP is not available on this site. Connect Resend, Postmark, SendGrid, Mailgun, Gmail or Outlook instead.', 400);
+  if (!isApi(provider)) return stored;
+  const name = API_KEY_SECRETS[provider];
+  const key = site.ownerSecret(name);
+  if (!key) throw new ProviderError(`Add the ${name} secret in the site dashboard to send with ${PROVIDER_INFO[provider].label}.`, 400);
+  return provider === 'POSTMARK' ? {...stored, serverToken: key} : {...stored, apiKey: key};
+}
 
 /** A refused request: 4xx other than 429 won't succeed on retry, so jobs fail it straight away. */
 export class ProviderError extends Error {
@@ -84,7 +117,7 @@ const threadHeaders = (m: OutgoingMessage) => ({
 });
 
 async function sendResend(c: ResendCreds, m: OutgoingMessage): Promise<SendResult> {
-  const res = await fetch('https://api.resend.com/emails', {
+  const res = await fetchOut('https://api.resend.com/emails', {
     method: 'POST',
     headers: {authorization: `Bearer ${c.apiKey}`, 'content-type': 'application/json'},
     body: JSON.stringify({
@@ -105,7 +138,7 @@ async function sendResend(c: ResendCreds, m: OutgoingMessage): Promise<SendResul
 }
 
 async function sendPostmark(c: PostmarkCreds, m: OutgoingMessage): Promise<SendResult> {
-  const res = await fetch('https://api.postmarkapp.com/email', {
+  const res = await fetchOut('https://api.postmarkapp.com/email', {
     method: 'POST',
     headers: {'x-postmark-server-token': c.serverToken, 'content-type': 'application/json', accept: 'application/json'},
     body: JSON.stringify({
@@ -129,7 +162,7 @@ async function sendPostmark(c: PostmarkCreds, m: OutgoingMessage): Promise<SendR
 
 async function sendSendgrid(c: SendgridCreds, m: OutgoingMessage): Promise<SendResult> {
   const list = (xs?: string[]) => (xs?.length ? xs.map((email) => ({email})) : undefined);
-  const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+  const res = await fetchOut('https://api.sendgrid.com/v3/mail/send', {
     method: 'POST',
     headers: {authorization: `Bearer ${c.apiKey}`, 'content-type': 'application/json'},
     body: JSON.stringify({
@@ -163,7 +196,7 @@ async function sendMailgun(c: MailgunCreds, m: OutgoingMessage): Promise<SendRes
   form.set('text', m.text);
   for (const [k, v] of Object.entries(threadHeaders(m))) form.set(`h:${k}`, v);
   for (const a of m.attachments ?? []) form.append('attachment', new Blob([a.content as Uint8Array<ArrayBuffer>], {type: a.contentType}), a.filename);
-  const res = await fetch(`https://${host}/v3/${c.domain}/messages`, {
+  const res = await fetchOut(`https://${host}/v3/${c.domain}/messages`, {
     method: 'POST',
     headers: {authorization: `Basic ${btoa(`api:${c.apiKey}`)}`},
     body: form,
@@ -173,8 +206,9 @@ async function sendMailgun(c: MailgunCreds, m: OutgoingMessage): Promise<SendRes
 }
 
 /** Resend Receiving: the `email.received` webhook only has metadata; the content comes from this API. */
-export async function fetchResendReceived(c: ResendCreds, emailId: string) {
-  const res = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}`, {headers: {authorization: `Bearer ${c.apiKey}`}});
+export async function fetchResendReceived(stored: Credentials, emailId: string) {
+  const c = withKey('RESEND', stored) as ResendCreds;
+  const res = await fetchOut(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}`, {headers: {authorization: `Bearer ${c.apiKey}`}});
   return (await (await expectOk(res, 'Resend')).json()) as {
     id: string;
     from: string;
@@ -192,7 +226,7 @@ export async function fetchResendReceived(c: ResendCreds, emailId: string) {
 // ─── Mailbox APIs (token refresh is handled by the caller, see oauth.ts) ────
 
 async function sendGmail(c: OAuthCreds, m: OutgoingMessage, threadId?: string | null): Promise<SendResult> {
-  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+  const res = await fetchOut('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method: 'POST',
     headers: {authorization: `Bearer ${c.accessToken}`, 'content-type': 'application/json'},
     body: JSON.stringify({raw: mimeToBase64Url(buildMime(m, {includeBcc: true})), threadId: threadId ?? undefined}),
@@ -203,7 +237,7 @@ async function sendGmail(c: OAuthCreds, m: OutgoingMessage, threadId?: string | 
 
 async function sendOutlook(c: OAuthCreds, m: OutgoingMessage): Promise<SendResult> {
   const recipients = (xs?: string[]) => (xs ?? []).map((address) => ({emailAddress: {address}}));
-  const res = await fetch('https://graph.microsoft.com/v1.0/me/sendMail', {
+  const res = await fetchOut('https://graph.microsoft.com/v1.0/me/sendMail', {
     method: 'POST',
     headers: {authorization: `Bearer ${c.accessToken}`, 'content-type': 'application/json'},
     body: JSON.stringify({
@@ -225,13 +259,11 @@ async function sendOutlook(c: OAuthCreds, m: OutgoingMessage): Promise<SendResul
 
 // ─── Dispatch ───────────────────────────────────────────────────────────────
 
-export async function deliver(provider: EmailProvider, creds: Credentials, m: OutgoingMessage, opts: {externalThreadId?: string | null} = {}): Promise<SendResult> {
+export async function deliver(provider: EmailProvider, stored: Credentials, m: OutgoingMessage, opts: {externalThreadId?: string | null} = {}): Promise<SendResult> {
+  const creds = withKey(provider, stored);
   switch (provider) {
-    case 'SMTP': {
-      const recipients = [...m.to, ...(m.cc ?? []), ...(m.bcc ?? [])];
-      await smtpSend(creds as SmtpCreds, {from: m.from.email, to: recipients, data: buildMime(m)});
+    case 'SMTP':
       return {};
-    }
     case 'RESEND':
       return sendResend(creds as ResendCreds, m);
     case 'POSTMARK':
@@ -248,35 +280,36 @@ export async function deliver(provider: EmailProvider, creds: Credentials, m: Ou
 }
 
 /** Cheap credential check that doesn't send anything. */
-export async function verifyCredentials(provider: EmailProvider, creds: Credentials): Promise<string> {
+export async function verifyCredentials(provider: EmailProvider, stored: Credentials): Promise<string> {
+  const creds = withKey(provider, stored);
   switch (provider) {
     case 'SMTP':
-      return (await smtpSend(creds as SmtpCreds)).response;
+      return '';
     case 'RESEND': {
       // Sending-only keys can't list domains (401/403 "restricted"), which still proves the key is real.
-      const res = await fetch('https://api.resend.com/domains', {headers: {authorization: `Bearer ${(creds as ResendCreds).apiKey}`}});
+      const res = await fetchOut('https://api.resend.com/domains', {headers: {authorization: `Bearer ${(creds as ResendCreds).apiKey}`}});
       if (res.ok) return 'API key is valid';
       const body = (await res.json().catch(() => ({}))) as {name?: string; message?: string};
       if (body.name === 'restricted_api_key') return 'API key is valid (sending only)';
       throw new Error(`Resend ${res.status}: ${body.message ?? res.statusText}`);
     }
     case 'POSTMARK':
-      await expectOk(await fetch('https://api.postmarkapp.com/server', {headers: {'x-postmark-server-token': (creds as PostmarkCreds).serverToken, accept: 'application/json'}}), 'Postmark');
+      await expectOk(await fetchOut('https://api.postmarkapp.com/server', {headers: {'x-postmark-server-token': (creds as PostmarkCreds).serverToken, accept: 'application/json'}}), 'Postmark');
       return 'Server token is valid';
     case 'SENDGRID':
-      await expectOk(await fetch('https://api.sendgrid.com/v3/scopes', {headers: {authorization: `Bearer ${(creds as SendgridCreds).apiKey}`}}), 'SendGrid');
+      await expectOk(await fetchOut('https://api.sendgrid.com/v3/scopes', {headers: {authorization: `Bearer ${(creds as SendgridCreds).apiKey}`}}), 'SendGrid');
       return 'API key is valid';
     case 'MAILGUN': {
       const c = creds as MailgunCreds;
       const host = c.region === 'eu' ? 'api.eu.mailgun.net' : 'api.mailgun.net';
-      await expectOk(await fetch(`https://${host}/v3/domains/${c.domain}`, {headers: {authorization: `Basic ${btoa(`api:${c.apiKey}`)}`}}), 'Mailgun');
+      await expectOk(await fetchOut(`https://${host}/v3/domains/${c.domain}`, {headers: {authorization: `Basic ${btoa(`api:${c.apiKey}`)}`}}), 'Mailgun');
       return `Domain ${c.domain} is reachable`;
     }
     case 'GMAIL':
-      await expectOk(await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {headers: {authorization: `Bearer ${(creds as OAuthCreds).accessToken}`}}), 'Gmail');
+      await expectOk(await fetchOut('https://gmail.googleapis.com/gmail/v1/users/me/profile', {headers: {authorization: `Bearer ${(creds as OAuthCreds).accessToken}`}}), 'Gmail');
       return 'Mailbox connected';
     case 'OUTLOOK':
-      await expectOk(await fetch('https://graph.microsoft.com/v1.0/me', {headers: {authorization: `Bearer ${(creds as OAuthCreds).accessToken}`}}), 'Microsoft Graph');
+      await expectOk(await fetchOut('https://graph.microsoft.com/v1.0/me', {headers: {authorization: `Bearer ${(creds as OAuthCreds).accessToken}`}}), 'Microsoft Graph');
       return 'Mailbox connected';
   }
 }

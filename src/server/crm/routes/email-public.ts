@@ -7,8 +7,17 @@ import {logActivity} from '../lib/activity';
 import {emit} from '../lib/events';
 import {getSettings} from '../lib/settings';
 import {parseAddressList, stripAngle, type Address} from '../email/mime';
+import {verifyInbound} from '../email/inbound-auth';
 import {receiveInbound, resendIncoming} from '../email/replies';
 import type {IncomingMessage} from '../email/service';
+
+/** Constant-time comparison of the URL token with the saved one. */
+function sameToken(a: string, b: string) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
 
 // 1×1 transparent GIF
 const PIXEL = Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), (ch) => ch.charCodeAt(0));
@@ -136,9 +145,14 @@ export const emailPublic = new Hono<AppEnv>()
   .post('/inbound/:token', async (c) => {
     const db = c.var.db;
     const settings = await getSettings(db);
-    if (c.req.param('token') !== settings.inboundToken) return c.json({error: 'Unknown inbound address'}, 404);
-    const type = c.req.header('content-type') ?? '';
-    const body = type.includes('json') ? ((await c.req.json()) as Record<string, unknown>) : ((await c.req.parseBody()) as Record<string, unknown>);
+    if (!settings.inboundToken || !sameToken(c.req.param('token'), settings.inboundToken)) return c.json({error: 'Unknown inbound address'}, 404);
+    // Only the mail service may post here: its signature (or Basic credentials) before the body is used.
+    const verified = await verifyInbound(c);
+    if (!verified.ok) {
+      console.warn(`[inbound] refused: ${verified.reason}`);
+      return c.json({error: 'Not signed by your mail service. See Settings → Email → Inbound webhook.'}, 401);
+    }
+    const body = verified.body;
     // Resend Receiving sends an event without the content; it is fetched from the API.
     const resend = body.type === 'email.received' && body.data ? await resendIncoming(db, body.data as {email_id?: string; to?: string[]}) : null;
     const parsed = resend?.message ?? (body.type === 'email.received' ? null : parseInbound(body));

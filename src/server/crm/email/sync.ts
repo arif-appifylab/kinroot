@@ -5,6 +5,7 @@ import {parseAddressList, stripAngle} from './mime';
 import {accountCredentials} from './oauth';
 import type {OAuthCreds} from './providers';
 import {ingestMessage, type IncomingMessage} from './service';
+import {fetchOut} from '../kit/outbound';
 
 const MAX_PER_RUN = 40; // keeps one run well inside a Worker's request budget
 const FIRST_SYNC_DAYS = 14;
@@ -24,7 +25,7 @@ async function syncGmail(db: Db, account: EmailAccount, creds: OAuthCreds) {
   const since = account.lastSyncedAt ?? new Date(Date.now() - FIRST_SYNC_DAYS * 86400_000);
   const q = `after:${Math.floor(since.getTime() / 1000) - 60} -in:chats -in:spam -in:trash`;
   const auth = {authorization: `Bearer ${creds.accessToken}`};
-  const list = (await (await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${MAX_PER_RUN}&q=${encodeURIComponent(q)}`, {headers: auth})).json()) as {
+  const list = (await (await fetchOut(`https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${MAX_PER_RUN}&q=${encodeURIComponent(q)}`, {headers: auth})).json()) as {
     messages?: {id: string; threadId: string}[];
     error?: {message: string};
   };
@@ -34,7 +35,7 @@ async function syncGmail(db: Db, account: EmailAccount, creds: OAuthCreds) {
   let newest = since;
   for (const {id} of [...(list.messages ?? [])].reverse()) {
     if (await db.emailMessage.findFirst({where: {accountId: account.id, externalId: id}, select: {id: true}})) continue;
-    const msg = (await (await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`, {headers: auth})).json()) as {
+    const msg = (await (await fetchOut(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=full`, {headers: auth})).json()) as {
       id: string;
       threadId: string;
       internalDate: string;
@@ -83,7 +84,7 @@ async function syncOutlook(db: Db, account: EmailAccount, creds: OAuthCreds) {
     $top: String(MAX_PER_RUN),
     $select: 'id,conversationId,subject,internetMessageId,receivedDateTime,from,toRecipients,ccRecipients,body',
   });
-  const res = (await (await fetch(`https://graph.microsoft.com/v1.0/me/messages?${params}`, {headers: {authorization: `Bearer ${creds.accessToken}`}})).json()) as {
+  const res = (await (await fetchOut(`https://graph.microsoft.com/v1.0/me/messages?${params}`, {headers: {authorization: `Bearer ${creds.accessToken}`}})).json()) as {
     value?: GraphMessage[];
     error?: {message: string};
   };

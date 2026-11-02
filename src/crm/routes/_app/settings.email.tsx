@@ -1,3 +1,4 @@
+import {useQuery} from '@tanstack/react-query';
 import {createFileRoute} from '@tanstack/react-router';
 import {ArrowRight, CheckCircle2, Copy, Inbox, KeyRound, Loader2, Mail, MessageSquareReply, MoreHorizontal, PenLine, RefreshCw, Send, Server, Star, Trash2, Zap} from 'lucide-react';
 import {useEffect, useState} from 'react';
@@ -26,20 +27,36 @@ export const Route = createFileRoute('/_app/settings/email')({
   component: EmailSettings,
 });
 
+/** The secret each sending API's key comes from (the server's API_KEY_SECRETS); the owner adds it in the site dashboard. */
+const KEY_SECRET = {RESEND: 'RESEND_API_KEY', POSTMARK: 'POSTMARK_SERVER_TOKEN', SENDGRID: 'SENDGRID_API_KEY', MAILGUN: 'MAILGUN_API_KEY'} as const;
+
+/** Which of those secrets (and the OAuth client secrets) are added: names and yes / no only. */
+function useSecrets() {
+  return useQuery({queryKey: [...keys.email, 'secrets'], queryFn: () => api.get<{secrets: Record<string, boolean>}>('/email/secrets'), select: (d) => d.secrets});
+}
+
+/** "Uses the X secret: added / not added yet". Keys are never typed into the CRM. */
+function SecretLine({name, present}: {name: string; present: boolean | undefined}) {
+  return (
+    <p className={cn('flex items-start gap-2 rounded-lg px-3 py-2 text-xs', present ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-800')}>
+      {present ? <CheckCircle2 className="size-4 shrink-0" /> : <KeyRound className="size-4 shrink-0" />}
+      <span>
+        {present ? (
+          <>Uses the <code className="font-semibold">{name}</code> secret added in the site dashboard.</>
+        ) : (
+          <>Add the <code className="font-semibold">{name}</code> secret in the site dashboard (the site owner can), then come back here. Keys are kept there, never in the CRM.</>
+        )}
+      </span>
+    </p>
+  );
+}
+
 const API_PROVIDERS: {id: Extract<EmailProvider, 'RESEND' | 'POSTMARK' | 'SENDGRID' | 'MAILGUN'>; name: string; note: string}[] = [
   {id: 'RESEND', name: 'Resend', note: 'Developer-friendly, quick domain setup'},
   {id: 'POSTMARK', name: 'Postmark', note: 'Best-in-class deliverability + inbound'},
   {id: 'SENDGRID', name: 'SendGrid', note: 'High volume, Inbound Parse'},
   {id: 'MAILGUN', name: 'Mailgun', note: 'US or EU region, inbound routes'},
 ];
-
-const SMTP_PRESETS = [
-  {name: 'Google Workspace', host: 'smtp.gmail.com', port: 587, security: 'starttls'},
-  {name: 'Microsoft 365', host: 'smtp.office365.com', port: 587, security: 'starttls'},
-  {name: 'Zoho Mail', host: 'smtp.zoho.com', port: 465, security: 'tls'},
-  {name: 'Amazon SES', host: 'email-smtp.us-east-1.amazonaws.com', port: 587, security: 'starttls'},
-  {name: 'cPanel / other', host: '', port: 465, security: 'tls'},
-] as const;
 
 function copy(text: string) {
   navigator.clipboard.writeText(text);
@@ -99,23 +116,22 @@ function SenderFields({meta, setMeta}: {meta: Meta; setMeta: (m: Meta) => void})
   );
 }
 
-function SetupDialog({kind, onClose}: {kind: 'smtp' | 'api'; onClose: () => void}) {
+function SetupDialog({onClose}: {onClose: () => void}) {
   const {me} = useMe();
+  const secrets = useSecrets();
   const [meta, setMeta] = useState<Meta>({fromName: me.name, fromEmail: me.email, shared: false});
-  const [smtp, setSmtp] = useState({host: '', port: '587', security: 'starttls', username: me.email, password: ''});
   const [provider, setProvider] = useState<(typeof API_PROVIDERS)[number]['id']>('RESEND');
-  const [key, setKey] = useState({apiKey: '', serverToken: '', messageStream: '', domain: '', region: 'us'});
+  const [key, setKey] = useState({messageStream: '', domain: '', region: 'us'});
+  const secret = KEY_SECRET[provider];
 
   const create = useApiMutation(
     () => {
       const credentials =
-        kind === 'smtp'
-          ? {provider: 'SMTP', ...smtp, port: Number(smtp.port)}
-          : provider === 'POSTMARK'
-            ? {provider, serverToken: key.serverToken, messageStream: key.messageStream || undefined}
-            : provider === 'MAILGUN'
-              ? {provider, apiKey: key.apiKey, domain: key.domain, region: key.region}
-              : {provider, apiKey: key.apiKey};
+        provider === 'POSTMARK'
+          ? {provider, messageStream: key.messageStream || undefined}
+          : provider === 'MAILGUN'
+            ? {provider, domain: key.domain, region: key.region}
+            : {provider};
       return api.post<{account: EmailAccount}>('/email/accounts', {credentials, account: meta});
     },
     {
@@ -133,73 +149,36 @@ function SetupDialog({kind, onClose}: {kind: 'smtp' | 'api'; onClose: () => void
       <DialogContent size="md">
         <form onSubmit={(e) => (e.preventDefault(), create.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
-            <DialogTitle>{kind === 'smtp' ? 'Connect custom SMTP' : 'Connect a sending API'}</DialogTitle>
-            <DialogDescription>{kind === 'smtp' ? 'Works with any mail server. We test the login before saving.' : 'Deliver through a transactional email service using your verified domain.'}</DialogDescription>
+            <DialogTitle>Connect a sending API</DialogTitle>
+            <DialogDescription>Deliver through a transactional email service using your verified domain.</DialogDescription>
           </DialogHeader>
           <DialogBody>
-            {kind === 'smtp' ? (
-              <>
-                <div className="flex flex-wrap gap-1.5">
-                  {SMTP_PRESETS.map((p) => (
-                    <button key={p.name} type="button" onClick={() => setSmtp({...smtp, host: p.host, port: String(p.port), security: p.security})} className={cn('cursor-pointer rounded-full border px-3 py-1 text-xs font-semibold transition-colors', smtp.host === p.host && p.host ? 'border-primary bg-accent text-primary' : 'border-border text-slate-600 hover:border-slate-300')}>
-                      {p.name}
-                    </button>
-                  ))}
-                </div>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1fr_100px]">
-                  <Field label="SMTP host" htmlFor="s-host"><Input id="s-host" required value={smtp.host} onChange={(e) => setSmtp({...smtp, host: e.target.value})} placeholder="mail.yourdomain.com" /></Field>
-                  <Field label="Port" htmlFor="s-port"><Input id="s-port" required type="number" value={smtp.port} onChange={(e) => setSmtp({...smtp, port: e.target.value})} /></Field>
-                </div>
-                <Field label="Security" htmlFor="s-sec" hint="Port 465 → SSL/TLS. Port 587 → STARTTLS. Port 25 is blocked on the hosting network.">
-                  <NativeSelect id="s-sec" value={smtp.security} onChange={(e) => setSmtp({...smtp, security: e.target.value})}>
-                    <option value="tls">SSL / TLS</option>
-                    <option value="starttls">STARTTLS</option>
-                    <option value="none">None (not recommended)</option>
-                  </NativeSelect>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {API_PROVIDERS.map((p) => (
+                <button key={p.id} type="button" onClick={() => setProvider(p.id)} className={cn('cursor-pointer rounded-xl border p-3 text-left transition-all', provider === p.id ? 'border-primary bg-accent/60 ring-2 ring-primary/15' : 'border-border hover:border-slate-300')}>
+                  <p className="text-sm font-bold text-slate-900">{p.name}</p>
+                  <p className="text-xs text-muted-foreground">{p.note}</p>
+                </button>
+              ))}
+            </div>
+            <SecretLine name={secret} present={secrets.data?.[secret]} />
+            {provider === 'POSTMARK' && (
+              <Field label="Message stream" htmlFor="k-stream" hint="Default: outbound"><Input id="k-stream" value={key.messageStream} onChange={(e) => setKey({...key, messageStream: e.target.value})} placeholder="outbound" /></Field>
+            )}
+            <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">Sending APIs don't receive mail. After connecting, open the account's menu → <b>How replies come back</b> to add your provider's inbound address as the reply-to.</p>
+            {provider === 'MAILGUN' && (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Field label="Sending domain" htmlFor="k-domain"><Input id="k-domain" required value={key.domain} onChange={(e) => setKey({...key, domain: e.target.value})} placeholder="mg.yourdomain.com" /></Field>
+                <Field label="Region" htmlFor="k-region">
+                  <NativeSelect id="k-region" value={key.region} onChange={(e) => setKey({...key, region: e.target.value})}><option value="us">US</option><option value="eu">EU</option></NativeSelect>
                 </Field>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <Field label="Username" htmlFor="s-user"><Input id="s-user" value={smtp.username} onChange={(e) => setSmtp({...smtp, username: e.target.value})} autoComplete="off" /></Field>
-                  <Field label="Password / app password" htmlFor="s-pass"><Input id="s-pass" type="password" value={smtp.password} onChange={(e) => setSmtp({...smtp, password: e.target.value})} autoComplete="new-password" /></Field>
-                </div>
-                <p className="flex gap-2 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                  <MessageSquareReply className="size-4 shrink-0 text-primary" />
-                  <span>SMTP only sends. After connecting, open the account's menu → <b>How replies come back</b> to add a reply-to inbound address so replies reach the CRM.</span>
-                </p>
-              </>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {API_PROVIDERS.map((p) => (
-                    <button key={p.id} type="button" onClick={() => setProvider(p.id)} className={cn('cursor-pointer rounded-xl border p-3 text-left transition-all', provider === p.id ? 'border-primary bg-accent/60 ring-2 ring-primary/15' : 'border-border hover:border-slate-300')}>
-                      <p className="text-sm font-bold text-slate-900">{p.name}</p>
-                      <p className="text-xs text-muted-foreground">{p.note}</p>
-                    </button>
-                  ))}
-                </div>
-                {provider === 'POSTMARK' ? (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <Field label="Server API token" htmlFor="k-token"><Input id="k-token" required type="password" value={key.serverToken} onChange={(e) => setKey({...key, serverToken: e.target.value})} /></Field>
-                    <Field label="Message stream" htmlFor="k-stream" hint="Default: outbound"><Input id="k-stream" value={key.messageStream} onChange={(e) => setKey({...key, messageStream: e.target.value})} placeholder="outbound" /></Field>
-                  </div>
-                ) : (
-                  <Field label="API key" htmlFor="k-key"><Input id="k-key" required type="password" value={key.apiKey} onChange={(e) => setKey({...key, apiKey: e.target.value})} /></Field>
-                )}
-                <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">Sending APIs don't receive mail. After connecting, open the account's menu → <b>How replies come back</b> to add your provider's inbound address as the reply-to.</p>
-                {provider === 'MAILGUN' && (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <Field label="Sending domain" htmlFor="k-domain"><Input id="k-domain" required value={key.domain} onChange={(e) => setKey({...key, domain: e.target.value})} placeholder="mg.yourdomain.com" /></Field>
-                    <Field label="Region" htmlFor="k-region">
-                      <NativeSelect id="k-region" value={key.region} onChange={(e) => setKey({...key, region: e.target.value})}><option value="us">US</option><option value="eu">EU</option></NativeSelect>
-                    </Field>
-                  </div>
-                )}
-              </>
+              </div>
             )}
             <SenderFields meta={meta} setMeta={setMeta} />
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={create.isPending}>{create.isPending ? <Loader2 className="animate-spin" /> : <Zap />} Test & connect</Button>
+            <Button type="submit" disabled={create.isPending || !secrets.data?.[secret]}>{create.isPending ? <Loader2 className="animate-spin" /> : <Zap />} Test & connect</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -230,7 +209,7 @@ function OAuthDialog({onClose}: {onClose: () => void}) {
               <span className={cn('flex size-11 items-center justify-center rounded-xl', p.color)}><Mail className="size-5" /></span>
               <div className="flex-1">
                 <p className="text-sm font-bold text-slate-900">{p.name}</p>
-                <p className="text-xs text-muted-foreground">{p.ok ? 'Sign in and grant access' : isAdmin ? 'Add the OAuth app below first' : 'Ask an admin to set up the OAuth app'}</p>
+                <p className="text-xs text-muted-foreground">{p.ok ? 'Sign in and grant access' : isAdmin ? 'Set up the OAuth app below first' : 'Ask an admin to set up the OAuth app'}</p>
               </div>
               <ArrowRight className="size-4 text-slate-400 transition-transform group-hover:translate-x-1" />
             </button>
@@ -330,8 +309,9 @@ function EmailSettings() {
   const {isAdmin} = useMe();
   const accounts = useEmailAccounts();
   const settings = useSettings();
-  const [dialog, setDialog] = useState<'smtp' | 'api' | 'oauth' | null>(null);
-  const [oauthForm, setOauthForm] = useState({googleClientId: '', googleClientSecret: '', microsoftClientId: '', microsoftClientSecret: '', microsoftTenant: 'common'});
+  const [dialog, setDialog] = useState<'api' | 'oauth' | null>(null);
+  const secrets = useSecrets();
+  const [oauthForm, setOauthForm] = useState({googleClientId: '', microsoftClientId: '', microsoftTenant: 'common'});
   const [bcc, setBcc] = useState('');
 
   useEffect(() => {
@@ -351,27 +331,18 @@ function EmailSettings() {
 
   return (
     <div>
-      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+      <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2">
         <OptionCard
           step={1}
-          tone="blue"
-          icon={<Server />}
-          title="Custom SMTP"
-          description="Use any mail server you already have: cPanel, Zoho, Workspace, SES…"
-          bullets={['Works with every provider', 'Replies via a reply-to inbound address', 'Password stored encrypted']}
-          onClick={() => setDialog('smtp')}
-        />
-        <OptionCard
-          step={2}
           tone="teal"
           icon={<Zap />}
           title="Transactional API"
           description="Resend, Postmark, SendGrid or Mailgun over HTTPS."
-          bullets={['Best deliverability', "Replies via the provider's inbound address", 'Great for templates at volume']}
+          bullets={['Best deliverability', "Replies via the provider's inbound address", 'The API key stays in the site dashboard']}
           onClick={() => setDialog('api')}
         />
         <OptionCard
-          step={3}
+          step={2}
           tone="violet"
           icon={<Inbox />}
           title="Gmail or Outlook"
@@ -387,7 +358,7 @@ function EmailSettings() {
         ) : accounts.data?.length ? (
           <div className="divide-y divide-slate-100">{accounts.data.map((a) => <AccountRow key={a.id} account={a} />)}</div>
         ) : (
-          <p className="text-sm text-muted-foreground">No email accounts yet. Pick one of the three options above.</p>
+          <p className="text-sm text-muted-foreground">No email accounts yet. Pick one of the two options above.</p>
         )}
       </SettingsSection>
 
@@ -395,9 +366,22 @@ function EmailSettings() {
         <>
           <EmailDesignSection />
 
-          <SettingsSection title="Inbound webhook & BCC logging" description="Gmail and Outlook sync on their own. SMTP and API accounts get replies through a reply-to inbound address; inbound addresses (Reply-To, BCC logging) post to this webhook.">
+          <SettingsSection title="Inbound webhook & BCC logging" description="Gmail and Outlook sync on their own. API accounts get replies through a reply-to inbound address; inbound addresses (Reply-To, BCC logging) post to this webhook.">
             <div className="grid gap-4">
               <CopyField label="Inbound webhook URL" value={settings.data.inboundWebhookUrl} hint="Postmark: Inbound stream → Webhook. Mailgun: Routes → forward(). SendGrid: Inbound Parse. Resend: Receiving → webhook for email.received. Treat this URL as a secret." />
+              <div className="grid gap-2">
+                <p className="text-xs text-muted-foreground">
+                  The webhook only takes mail your service signed. Add the secret for the service you use in the site dashboard:
+                </p>
+                <SecretLine name="RESEND_WEBHOOK_SECRET" present={settings.data.inboundSecrets.RESEND_WEBHOOK_SECRET} />
+                <SecretLine name="MAILGUN_WEBHOOK_SIGNING_KEY" present={settings.data.inboundSecrets.MAILGUN_WEBHOOK_SIGNING_KEY} />
+                <SecretLine name="INBOUND_BASIC_AUTH" present={settings.data.inboundSecrets.INBOUND_BASIC_AUTH} />
+                <p className="text-xs text-muted-foreground">
+                  Resend: the webhook's signing secret (<code>whsec_…</code>). Mailgun: the HTTP webhook signing key. Postmark and SendGrid don't sign inbound mail: choose a
+                  <code> user:password</code>, add it as <code>INBOUND_BASIC_AUTH</code>, and put it in front of the host in the URL you give them
+                  (<code>https://user:password@your-site/…</code>).
+                </p>
+              </div>
               <Field label="BCC logging address" htmlFor="bcc" hint="The inbound address you created at the provider (e.g. log@inbound.yourdomain.com). Reps BCC it from any mail client and the email lands on the contact's timeline.">
                 <div className="flex gap-2">
                   <Input id="bcc" type="email" value={bcc} onChange={(e) => setBcc(e.target.value)} placeholder="log@inbound.yourdomain.com" />
@@ -407,7 +391,7 @@ function EmailSettings() {
             </div>
           </SettingsSection>
 
-          <SettingsSection title="OAuth apps for Gmail & Outlook" description="One-time admin setup. Create an OAuth client in Google Cloud / Microsoft Entra and paste the details.">
+          <SettingsSection title="OAuth apps for Gmail & Outlook" description="One-time admin setup. Create an OAuth client in Google Cloud / Microsoft Entra: its client ID goes here, its secret in the site dashboard.">
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <div className="grid content-start gap-3 rounded-xl bg-slate-50 p-4">
                 <div className="flex items-center justify-between">
@@ -416,9 +400,9 @@ function EmailSettings() {
                 </div>
                 <CopyField label="Authorized redirect URI" value={oauth?.googleRedirectUri ?? ''} />
                 <Field label="Client ID" htmlFor="g-id"><Input id="g-id" value={oauthForm.googleClientId} onChange={(e) => setOauthForm({...oauthForm, googleClientId: e.target.value})} /></Field>
-                <Field label="Client secret" htmlFor="g-secret"><Input id="g-secret" type="password" value={oauthForm.googleClientSecret} onChange={(e) => setOauthForm({...oauthForm, googleClientSecret: e.target.value})} placeholder={oauth?.googleConfigured ? '•••••••• (saved)' : ''} /></Field>
+                <SecretLine name="GOOGLE_CLIENT_SECRET" present={secrets.data?.GOOGLE_CLIENT_SECRET} />
                 <p className="text-xs text-muted-foreground">Scopes: gmail.send, gmail.readonly. Public apps need Google's verification for these scopes; internal Workspace apps don't.</p>
-                <Button variant="secondary" onClick={() => saveSettings.mutate({googleClientId: oauthForm.googleClientId, ...(oauthForm.googleClientSecret && {googleClientSecret: oauthForm.googleClientSecret})})}>Save Google app</Button>
+                <Button variant="secondary" onClick={() => saveSettings.mutate({googleClientId: oauthForm.googleClientId})}>Save Google app</Button>
               </div>
               <div className="grid content-start gap-3 rounded-xl bg-slate-50 p-4">
                 <div className="flex items-center justify-between">
@@ -427,16 +411,16 @@ function EmailSettings() {
                 </div>
                 <CopyField label="Redirect URI (Web)" value={oauth?.microsoftRedirectUri ?? ''} />
                 <Field label="Application (client) ID" htmlFor="ms-id"><Input id="ms-id" value={oauthForm.microsoftClientId} onChange={(e) => setOauthForm({...oauthForm, microsoftClientId: e.target.value})} /></Field>
-                <Field label="Client secret value" htmlFor="ms-secret"><Input id="ms-secret" type="password" value={oauthForm.microsoftClientSecret} onChange={(e) => setOauthForm({...oauthForm, microsoftClientSecret: e.target.value})} placeholder={oauth?.microsoftConfigured ? '•••••••• (saved)' : ''} /></Field>
+                <SecretLine name="MICROSOFT_CLIENT_SECRET" present={secrets.data?.MICROSOFT_CLIENT_SECRET} />
                 <Field label="Tenant" htmlFor="ms-tenant" hint="common, organizations, or your tenant ID"><Input id="ms-tenant" value={oauthForm.microsoftTenant} onChange={(e) => setOauthForm({...oauthForm, microsoftTenant: e.target.value})} /></Field>
-                <Button variant="secondary" onClick={() => saveSettings.mutate({microsoftClientId: oauthForm.microsoftClientId, microsoftTenant: oauthForm.microsoftTenant, ...(oauthForm.microsoftClientSecret && {microsoftClientSecret: oauthForm.microsoftClientSecret})})}>Save Microsoft app</Button>
+                <Button variant="secondary" onClick={() => saveSettings.mutate({microsoftClientId: oauthForm.microsoftClientId, microsoftTenant: oauthForm.microsoftTenant})}>Save Microsoft app</Button>
               </div>
             </div>
           </SettingsSection>
         </>
       )}
 
-      {(dialog === 'smtp' || dialog === 'api') && <SetupDialog kind={dialog} onClose={() => setDialog(null)} />}
+      {dialog === 'api' && <SetupDialog onClose={() => setDialog(null)} />}
       {dialog === 'oauth' && <OAuthDialog onClose={() => setDialog(null)} />}
     </div>
   );
