@@ -1,21 +1,14 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../src/server/app';
-import {Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, userId} from './support/harness';
+import {resetCrm} from './support/crm';
+import {Browser, configureEnv, DATABASE_URL, db, signedIn, userId} from './support/harness';
 
 /**
  * Kinroot's team on top of the site's accounts (src/server/crm/kit/guards.ts): who gets into the
  * CRM, the Owner's first visit, invites bound to the signed-in account, and the email rule
  * (an address is seen only by its own person and the site's owner).
  */
-
-/** Kinroot's tables (PascalCase; the template's are snake_case), emptied with the template's. */
-async function resetCrm() {
-  await resetDatabase();
-  const tables = await db.$queryRaw<{t: string}[]>`SELECT tablename AS t FROM pg_tables WHERE schemaname = 'public' AND tablename ~ '^[A-Z]'`;
-  // Names come from the catalogue just read, quoted; never from input.
-  if (tables.length) await db.$executeRawUnsafe(`TRUNCATE ${tables.map(r => `"${r.t.replace(/"/g, '')}"`).join(', ')} CASCADE`);
-}
 
 /** Exactly these site roles (sign-up may have made the first account owner). */
 async function setRoles(email: string, ...slugs: string[]) {

@@ -1,36 +1,28 @@
-import {Link} from '@tanstack/react-router';
-import {Loader2, MailCheck} from 'lucide-react';
+import {LogIn, UserPlus} from 'lucide-react';
 import {useCallback, useEffect, useState} from 'react';
 
-import {api} from '@/lib/api';
+import {siteFetch} from '../../../platform/browser';
 import {STATUS, type TicketStatus} from '@/lib/tickets';
 import {cn} from '@/lib/utils';
 
 import {Button} from '../ui/button';
-import {Field, Input} from '../ui/form';
 
 export type PortalSession = {firstName: string; email: string | null};
 
-/**
- * Loads a portal page's data. A magic link arrives as ?t=<token>: it is traded
- * for an httpOnly cookie once, then dropped from the address bar.
- */
-export function usePortal<T extends {session: PortalSession | null}>(path: string, token: string | undefined) {
+/** Loads a portal page's data. The customer's session is the site's own sign-in (`/account/login/`). */
+export function usePortal<T extends {session: PortalSession | null}>(path: string) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
     try {
-      if (token) {
-        await api.post('/public/support/session', {token});
-        const url = new URL(window.location.href);
-        url.searchParams.delete('t');
-        window.history.replaceState(window.history.state, '', url.pathname + url.search);
-      }
-      setData(await api.get<T>(path));
+      const res = await siteFetch(`/site-api/crm${path}`);
+      const body = (await res.json().catch(() => ({}))) as T & {error?: string; message?: string};
+      if (!res.ok) throw new Error(body.message ?? body.error ?? 'Something went wrong. Try again.');
+      setData(body);
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [path, token]);
+  }, [path]);
   useEffect(() => void load(), [load]);
   return {data, setData, error, reload: load};
 }
@@ -45,60 +37,42 @@ export function CustomerStatus({status, className}: {status: TicketStatus; class
   );
 }
 
-/** "Email me a link" form, used when there's no valid session. */
-export function RequestLink({title = 'Find your requests', intro}: {title?: string; intro?: string}) {
-  const [email, setEmail] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function submit() {
-    setBusy(true);
-    setError(null);
-    try {
-      await api.post('/public/support/link', {email});
-      setSent(true);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (sent) {
-    return (
-      <div className="flex items-start gap-3 rounded-xl bg-green-50 p-4 text-sm text-green-800">
-        <MailCheck className="mt-0.5 size-4 shrink-0" />
-        <p>If we have requests for <span className="font-semibold">{email}</span>, a link to them is on its way. It works for 30 days.</p>
-      </div>
-    );
-  }
+/** Signing in is the site's: with a 6-digit code emailed to the address, or a password. */
+export function SignInPrompt({title = 'Find your requests', intro}: {title?: string; intro?: string}) {
+  const back = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
   return (
-    <form onSubmit={(e) => (e.preventDefault(), email && submit())} className="grid gap-3">
+    <div className="grid gap-3">
       <div>
         <h2 className="text-base font-bold text-slate-900">{title}</h2>
-        <p className="mt-0.5 text-sm text-muted-foreground">{intro ?? "Enter the email you contacted us from and we'll send you a link. No password needed."}</p>
+        <p className="mt-0.5 text-sm text-muted-foreground">{intro ?? 'Sign in with the email you contacted us from.'}</p>
       </div>
-      <Field label="Email" htmlFor="pl-email">
-        <div className="flex gap-2">
-          <Input id="pl-email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" />
-          <Button type="submit" variant="secondary" disabled={busy}>{busy && <Loader2 className="animate-spin" />} Email me a link</Button>
-        </div>
-      </Field>
-      {error && <p className="text-sm font-medium text-destructive">{error}</p>}
-    </form>
+      <div className="flex flex-wrap gap-2">
+        <Button asChild>
+          <a href={`/account/login/?next=${back}`}>
+            <LogIn /> Sign in
+          </a>
+        </Button>
+        <Button asChild variant="secondary">
+          <a href={`/account/register/?next=${back}`}>
+            <UserPlus /> Create your account
+          </a>
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">No password needed: you can sign in with a code we email you.</p>
+    </div>
   );
 }
 
 export function PortalNav({session}: {session: PortalSession | null}) {
   async function signOut() {
-    await api.post('/public/support/logout').catch(() => {});
-    window.location.href = '/support';
+    // The site's sign-out, then back to the portal's front page.
+    await siteFetch('/site-api/auth/logout', {method: 'POST'}).catch(() => null);
+    window.location.href = '/support/';
   }
   return (
     <div className="mx-auto mt-6 flex w-full max-w-2xl flex-wrap items-center gap-x-4 gap-y-2 text-sm sm:mt-10">
-      <Link to="/support" className="font-semibold text-primary hover:underline">New request</Link>
-      {session && <Link to="/support/tickets" className="font-semibold text-primary hover:underline">My requests</Link>}
+      <a href="/support/" className="font-semibold text-primary hover:underline">New request</a>
+      {session && <a href="/support/tickets/" className="font-semibold text-primary hover:underline">My requests</a>}
       {session && (
         <span className="ml-auto text-muted-foreground">
           {session.email} ·{' '}

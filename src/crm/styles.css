@@ -7,11 +7,18 @@
 @source '../layouts/CrmPublic.astro';
 @source '../pages/chat';
 @source '../pages/f';
+@source '../pages/support';
+@source '../pages/book';
+@source '../pages/csat';
+@source '../pages/unsubscribe';
+@source '../pages/report-unsubscribe';
 @import 'tw-animate-css';
 /* Self-hosted (the CSP allows fonts from this site only): no Google Fonts request. */
 @import '@fontsource-variable/plus-jakarta-sans';
 /* Toasts: sonner also tries to inject this at runtime, which the CSP blocks; the file is the same CSS. */
 @import 'sonner/dist/styles.css';
+/* The rich editor's base CSS, for the same reason (TipTap injects it otherwise). */
+@import './tiptap.css';
 
 /*
  * Design tokens: "Corporate Trust" style, Ocean palette.

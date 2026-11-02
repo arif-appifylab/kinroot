@@ -1,17 +1,18 @@
 import {Hono} from 'hono';
-import {deleteCookie, getCookie, setCookie} from 'hono/cookie';
 import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
+import {getViewer} from '../../../platform/auth';
+import {problem} from '../../../platform/guards';
 import {publicOrigin} from '../kit/config';
 import type {Db} from '../kit/db';
 import type {AppContext, AppEnv} from '../kit/guards';
 import {notFound, valid} from '../lib/http';
+import {connectionLimits, rateLimit} from '../lib/rate-limit';
 import {notify} from '../lib/notify';
 import {richBody, richHtml} from '../lib/rich-text';
 import {
   contactForEmail,
-  contactFromPortalToken,
   createTicket,
   customerReply,
   getTicketSettings,
@@ -21,9 +22,6 @@ import {
   ticketLink,
 } from '../lib/tickets';
 import {publicFileUrl} from './files';
-
-/** Cookie holding the signed portal token from the magic link (no passwords). */
-const PORTAL_COOKIE = 'portal_session';
 
 export type PortalConfig = {enabled: boolean; intro: string; categories: string[]};
 
@@ -40,11 +38,27 @@ export async function csatState(db: Db, token: string): Promise<CsatState> {
   return t ? {number: t.number, subject: t.subject, firstName: t.contact?.firstName ?? null, rating: t.csatRating, comment: t.csatComment} : null;
 }
 
+/**
+ * The customer: the site's own sign-in (an account with a 6-digit code or a password), whose
+ * CONFIRMED email is the address their requests came from. Every contact with that address is
+ * theirs (the oldest is the one new requests go to). An expired session answers 401 token_expired so
+ * the browser refreshes it once (`siteFetch`).
+ */
 async function portalSession(c: AppContext) {
-  const session = await contactFromPortalToken(getCookie(c, PORTAL_COOKIE));
-  if (!session) return null;
-  const contact = await c.var.db.contact.findUnique({where: {id: session.contactId}, select: {id: true, firstName: true, lastName: true, email: true}});
-  return contact ? {...session, contact} : null;
+  const viewer = await getViewer(c.req.raw);
+  if (viewer.state === 'returning') {
+    const res = c.json(problem('token_expired', 'Your session needs refreshing.'), 401);
+    throw new HTTPException(401, {res, message: 'Your session needs refreshing.'});
+  }
+  if (viewer.state !== 'user' || !viewer.emailVerified || !viewer.email) return null;
+  const contacts = await c.var.db.contact.findMany({
+    where: {email: {equals: viewer.email, mode: 'insensitive'}},
+    select: {id: true, firstName: true, lastName: true, email: true},
+    orderBy: {createdAt: 'asc'},
+    take: 20,
+  });
+  const contact = contacts[0];
+  return contact ? {contact, contactIds: contacts.map((x) => x.id), email: viewer.email} : {contact: null, contactIds: [] as string[], email: viewer.email};
 }
 
 async function requirePortal(c: AppContext) {
@@ -52,9 +66,9 @@ async function requirePortal(c: AppContext) {
 }
 
 /** What a customer may see of a ticket: public replies and status changes, never internal notes. */
-async function portalTicket(db: Db, origin: string, contactId: string, number: number) {
+async function portalTicket(db: Db, origin: string, contactIds: string[], number: number) {
   const ticket = await db.ticket.findUnique({where: {number}, include: {assignee: {select: {name: true}}}});
-  if (!ticket || ticket.contactId !== contactId) return null;
+  if (!ticket || !ticket.contactId || !contactIds.includes(ticket.contactId)) return null;
   const messages = await db.ticketMessage.findMany({
     where: {ticketId: ticket.id, OR: [{kind: 'reply'}, {kind: 'event', data: {path: ['type'], equals: 'status'}}]},
     include: {author: {select: {name: true}}},
@@ -87,7 +101,7 @@ async function portalTicket(db: Db, origin: string, contactId: string, number: n
 
 const spam = (hp?: string, startedAt?: number) => !!hp || (!!startedAt && Date.now() - startedAt < 1500);
 
-/** The /support portal and the CSAT page. No sign-in: every input is a signed token. */
+/** The /support portal (the site's sign-in, see portalSession) and the CSAT page (a signed token). */
 export const supportPublic = new Hono<AppEnv>()
   .get('/support/config', async (c) => c.json(await portalConfig(c.var.db)))
 
@@ -108,12 +122,15 @@ export const supportPublic = new Hono<AppEnv>()
       const db = c.var.db;
       const body = c.req.valid('json');
       if (spam(body.hp, body.startedAt)) return c.json({ok: true, signedIn: false});
+      // It sends an email to the address typed in: bounded per connection (docs/agent/security.md A06).
+      await rateLimit(db, await connectionLimits((n) => c.req.header(n), 'support:request', 5, 20), 'You have sent several requests in a short time. Please wait a while and try again.');
       const desc = richBody({html: body.descriptionHtml, text: body.description});
       if (!desc.text) throw new HTTPException(400, {message: 'Tell us what you need help with'});
       const session = await portalSession(c);
-      if (!session && !body.email) throw new HTTPException(400, {message: 'Enter your email address'});
+      const email = session?.email ?? body.email;
+      if (!email) throw new HTTPException(400, {message: 'Enter your email address'});
       const settings = await getTicketSettings(db);
-      const contact = session ? session.contact : await contactForEmail(db, body.email!, body.name);
+      const contact = session?.contact ?? (await contactForEmail(db, email, body.name));
       const ticket = await createTicket(db, {
         subject: body.subject,
         description: desc.text,
@@ -122,68 +139,42 @@ export const supportPublic = new Hono<AppEnv>()
         source: 'PORTAL',
         contactId: contact.id,
       });
-      // Signed-in customers see it right away; everyone else gets the link by email (that proves the address).
+      // Signed-in customers see it right away; everyone gets a confirmation by email.
       await sendPortalLink(db, contact.id, publicOrigin(c.req.raw), ticket);
-      return c.json({ok: true, signedIn: !!session, number: session ? ticket.number : undefined}, 201);
+      // Signed in with a confirmed address: the request is theirs to see now (its contact has that address).
+      const signedIn = !!session;
+      return c.json({ok: true, signedIn, number: signedIn ? ticket.number : undefined}, 201);
     },
   )
-
-  .post('/support/link', valid('json', z.object({email: z.email().max(200)})), async (c) => {
-    await requirePortal(c);
-    const db = c.var.db;
-    const contact = await db.contact.findFirst({where: {email: {equals: c.req.valid('json').email, mode: 'insensitive'}, tickets: {some: {}}}, select: {id: true}});
-    if (contact) await sendPortalLink(db, contact.id, publicOrigin(c.req.raw));
-    // Same answer either way, so the form can't be used to probe for customers.
-    return c.json({ok: true});
-  })
-
-  .post('/support/session', valid('json', z.object({token: z.string().max(300)})), async (c) => {
-    await requirePortal(c);
-    const session = await contactFromPortalToken(c.req.valid('json').token);
-    if (!session) return c.json({ok: false});
-    setCookie(c, PORTAL_COOKIE, c.req.valid('json').token, {
-      path: '/',
-      httpOnly: true,
-      sameSite: 'Lax',
-      secure: new URL(c.req.url).protocol === 'https:',
-      expires: new Date(session.exp * 1000),
-    });
-    return c.json({ok: true});
-  })
-
-  .post('/support/logout', (c) => {
-    deleteCookie(c, PORTAL_COOKIE, {path: '/'});
-    return c.json({ok: true});
-  })
 
   .get('/support/me', async (c) => {
     await requirePortal(c);
     const session = await portalSession(c);
     if (!session) return c.json({session: null});
     const rows = await c.var.db.ticket.findMany({
-      where: {contactId: session.contact.id},
+      where: {contactId: {in: session.contactIds}},
       select: {number: true, subject: true, status: true, createdAt: true, lastMessageAt: true},
       orderBy: {lastMessageAt: 'desc'},
       take: 100,
     });
-    return c.json({session: {firstName: session.contact.firstName, email: session.contact.email}, tickets: rows});
+    return c.json({session: {firstName: session.contact?.firstName ?? null, email: session.email}, tickets: rows});
   })
 
   .get('/support/tickets/:number', async (c) => {
     await requirePortal(c);
     const session = await portalSession(c);
     if (!session) return c.json({session: null, ticket: null});
-    const ticket = await portalTicket(c.var.db, publicOrigin(c.req.raw), session.contact.id, Number(c.req.param('number')) || 0);
-    return c.json({session: {firstName: session.contact.firstName, email: session.contact.email}, ticket});
+    const ticket = await portalTicket(c.var.db, publicOrigin(c.req.raw), session.contactIds, Number(c.req.param('number')) || 0);
+    return c.json({session: {firstName: session.contact?.firstName ?? null, email: session.email}, ticket});
   })
 
   .post('/support/tickets/:number/reply', valid('json', z.object({body: z.string().trim().max(20_000).default(''), html: richHtml})), async (c) => {
     await requirePortal(c);
     const db = c.var.db;
     const session = await portalSession(c);
-    if (!session) throw new HTTPException(403, {message: 'Your link has expired. Request a new one on the support page.'});
+    if (!session?.contact) throw new HTTPException(403, {message: 'Sign in with the email address of your request to reply.'});
     const ticket = await db.ticket.findUnique({where: {number: Number(c.req.param('number')) || 0}});
-    if (!ticket || ticket.contactId !== session.contact.id) throw notFound('Request');
+    if (!ticket || !ticket.contactId || !session.contactIds.includes(ticket.contactId)) throw notFound('Request');
     if (ticket.status === 'CLOSED') throw new HTTPException(400, {message: 'This request is closed. Please open a new one.'});
     const input = c.req.valid('json');
     const reply = richBody({html: input.html, text: input.body});
@@ -192,10 +183,10 @@ export const supportPublic = new Hono<AppEnv>()
       body: reply.text,
       html: reply.html,
       via: 'portal',
-      fromEmail: session.contact.email ?? '',
+      fromEmail: session.email,
       fromName: [session.contact.firstName, session.contact.lastName].filter(Boolean).join(' '),
     });
-    return c.json({ticket: await portalTicket(db, publicOrigin(c.req.raw), session.contact.id, ticket.number)});
+    return c.json({ticket: await portalTicket(db, publicOrigin(c.req.raw), session.contactIds, ticket.number)});
   })
 
   // ─── CSAT ───

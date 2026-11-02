@@ -1,0 +1,43 @@
+---
+/**
+ * A booking page: a member's link (/book/<handle>/<slug>) or a team's (/book/team/<slug>). The link is
+ * loaded through Kinroot's own Site API route, in-process; booking happens in the browser
+ * (src/crm/components/booking). Missing: 404; the read failed: 503.
+ */
+import BookingLinkPage from '../../../crm/public/booking';
+import type {PublicBookingLink} from '../../../crm/lib/scheduling';
+import CrmPublic from '../../../layouts/CrmPublic.astro';
+import {crmBrand, crmGet} from '../../../server/crm/page';
+
+export const prerender = false;
+
+const seg = (v: string | undefined) => (v && /^[\w-]{1,80}$/.test(v) ? v : '');
+const handle = seg(Astro.params.handle);
+const slug = seg(Astro.params.slug);
+const path = `${handle}/${slug}`;
+const [brand, res] = await Promise.all([
+  crmBrand(Astro.request),
+  handle && slug ? crmGet<{link: PublicBookingLink}>(Astro.request, `/public/booking/links/${handle}/${slug}`) : Promise.resolve({status: 404, data: null}),
+]);
+const link = res.data?.link ?? null;
+const failed = !link && res.status !== 404;
+Astro.response.status = link ? 200 : failed ? 503 : 404;
+Astro.response.headers.set('Cache-Control', 'private, max-age=60');
+const host = link?.kind === 'personal' ? link.hosts[0]?.name : undefined;
+const title = link ? `${link.name}${host ? ` with ${host}` : ''}` : failed ? 'Booking not available' : 'Book a meeting';
+---
+
+<CrmPublic brand={brand} title={title} description={link?.description?.slice(0, 160)} noindex={!link}>
+  {
+    failed ? (
+      <main class="grid min-h-dvh place-items-center p-6 text-center">
+        <div>
+          <h1 class="text-xl font-extrabold">Booking is not available right now</h1>
+          <p class="mt-2 text-sm text-muted-foreground">Please try again in a few minutes.</p>
+        </div>
+      </main>
+    ) : (
+      <BookingLinkPage client:only="react" brand={brand} path={path} link={link} />
+    )
+  }
+</CrmPublic>

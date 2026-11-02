@@ -258,18 +258,6 @@ export async function replyAccount(db: Db, me: User, settings: TicketSettings): 
   );
 }
 
-/** Contact id inside a signed portal token: `<contactId>.<expires>.<signature>`. */
-export async function portalToken(contactId: string, days = 30) {
-  const exp = Math.floor(Date.now() / 1000) + days * 86_400;
-  return `${contactId}.${exp}.${await sign(`portal:${contactId}:${exp}`)}`;
-}
-
-export async function contactFromPortalToken(token: string | null | undefined) {
-  const [contactId, exp, sig] = (token ?? '').split('.');
-  if (!contactId || !exp || !sig || Number(exp) < Date.now() / 1000) return null;
-  return (await verifySignature(`portal:${contactId}:${exp}`, sig)) ? {contactId, exp: Number(exp)} : null;
-}
-
 export const csatToken = async (ticketId: string) => `${ticketId}.${await sign(`csat:${ticketId}`)}`;
 export async function ticketFromCsatToken(token: string) {
   const [ticketId, sig] = token.split('.');
@@ -314,7 +302,8 @@ export async function agentReply(db: Db, me: User, origin: string, before: Ticke
   if (to && account) {
     const files = fileIds.length ? await db.file.findMany({where: {id: {in: fileIds}}, select: {id: true, name: true}}) : [];
     const links = await Promise.all(files.map(async (f) => `${f.name}: ${await publicFileUrl(originOf(origin), f.id, 30)}`));
-    const portal = settings.portalEnabled && full.contactId ? `${originOf(origin)}/support/tickets/${ticket.number}?t=${await portalToken(full.contactId)}` : null;
+    // The customer signs in with the address this went to (the site's sign-in) to see it online.
+    const portal = settings.portalEnabled && full.contactId ? `${originOf(origin)}/support/tickets/${ticket.number}` : null;
     const footer = [links.length ? `Attachments:\n${links.join('\n')}` : null, portal ? `View this request online: ${portal}` : null].filter(Boolean).join('\n\n');
     const footerHtml = [
       files.length ? `<p>Attachments:<br>${(await Promise.all(files.map(async (f) => `<a href="${escapeHtml(await publicFileUrl(originOf(origin), f.id, 30))}">${escapeHtml(f.name)}</a>`))).join('<br>')}</p>` : '',
@@ -436,8 +425,7 @@ export async function sendPortalLink(db: Db, contactId: string, origin: string, 
   const settings = await getTicketSettings(db);
   const brand = (await getSettings(db)).brandName;
   const base = originOf(origin);
-  const token = await portalToken(contact.id);
-  const link = created ? `${base}/support/tickets/${created.number}?t=${token}` : `${base}/support/tickets?t=${token}`;
+  const link = created ? `${base}/support/tickets/${created.number}` : `${base}/support/tickets`;
   return sendSystemEmail(db, {
     to: [contact.email],
     subject: created ? `We received your request ${subjectToken(created.number)} ${created.subject}` : `Your support requests at ${brand}`,
@@ -447,7 +435,7 @@ export async function sendPortalLink(db: Db, contactId: string, origin: string, 
         ? `Thanks for getting in touch. Your request "${created.subject}" is ${ticketRef(created.number)}. We'll reply by email; you can also follow it and reply here:`
         : `Here is your link to see your requests with ${brand} and reply to them:`,
       link,
-      'The link works for 30 days. Anyone with it can see your requests, so please keep it to yourself.',
+      `To see it, sign in (or create your account) with this email address, ${contact.email}.`,
       brand,
     ].join('\n\n'),
     replyTo: settings.supportEmail || null,

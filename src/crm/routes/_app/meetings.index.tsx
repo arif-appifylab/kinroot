@@ -298,18 +298,19 @@ function Snippet({code, label}: {code: string; label: string}) {
 }
 
 function EmbedDialog({link, onClose}: {link: BookingLinkRow; onClose: () => void}) {
-  const iframe = `<iframe src="${link.url}?embed=1" title="${link.name.replace(/"/g, '&quot;')}" style="width:100%;min-height:720px;border:0;" loading="lazy"></iframe>`;
+  // Other websites can't show this site inside their pages (X-Frame-Options: DENY): they link to it.
+  const button = `<a href="${link.url}" target="_blank" rel="noopener" style="display:inline-block;padding:12px 20px;border-radius:12px;background:#2563eb;color:#fff;font:600 15px/1.2 system-ui,sans-serif;text-decoration:none">Book a meeting</a>`;
   const widget = `import {BookingWidget} from '@/components/booking/booking-widget';\n\n<BookingWidget link="${link.path}" />`;
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent size="lg">
         <DialogHeader>
           <DialogTitle>Share “{link.name}”</DialogTitle>
-          <DialogDescription>Send the link, embed the booking page on any website, or drop it into a page of this app.</DialogDescription>
+          <DialogDescription>Send the link, add a booking button to any website, or drop it into a page of this app.</DialogDescription>
         </DialogHeader>
         <DialogBody className="gap-5">
           <Field label="Direct link"><Snippet code={link.url} label="Link" /></Field>
-          <Field label="Embed on a website" hint="Add &theme=dark to the URL for dark pages."><Snippet code={iframe} label="Embed code" /></Field>
+          <Field label="Button on a website" hint="It opens the booking page. Other websites can't show this site inside their own page."><Snippet code={button} label="Button code" /></Field>
           <Field label="In a page built in this app"><Snippet code={widget} label="Component" /></Field>
         </DialogBody>
       </DialogContent>

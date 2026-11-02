@@ -30,6 +30,18 @@ export async function rateLimit(db: Db, limits: {key: string; limit: number; win
 /** Keys never hold a raw IP address. */
 export const ipKey = async (ip: string | null) => (ip ? (await sha256Hex(`ip:${ip}`)).slice(0, 20) : 'unknown');
 
+/** The visitor's connection (Cloudflare's header). */
+export const clientIp = (h: (n: string) => string | undefined) => h('cf-connecting-ip') ?? h('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
+
+/** A public action's limits per connection: `perMinute` and `perHour` under `scope`. */
+export async function connectionLimits(h: (n: string) => string | undefined, scope: string, perMinute: number, perHour: number) {
+  const who = await ipKey(clientIp(h));
+  return [
+    {key: `${scope}:min:${who}`, limit: perMinute, windowSec: 60},
+    {key: `${scope}:hour:${who}`, limit: perHour, windowSec: 3600},
+  ];
+}
+
 export async function pruneRateHits(db: Db) {
   await db.rateHit.deleteMany({where: {at: {lt: new Date(Date.now() - 86_400_000)}}});
 }

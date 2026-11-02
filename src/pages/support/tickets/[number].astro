@@ -1,0 +1,16 @@
+---
+/** One request of the signed-in customer (src/crm/public/support-request.tsx). */
+import SupportRequestPage from '../../../crm/public/support-request';
+import CrmPublic from '../../../layouts/CrmPublic.astro';
+import {crmBrand} from '../../../server/crm/page';
+
+export const prerender = false;
+
+const number = /^\d{1,9}$/.test(Astro.params.number ?? '') ? Astro.params.number! : '0';
+const brand = await crmBrand(Astro.request);
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+---
+
+<CrmPublic brand={brand} title={`Request #${number}`} noindex>
+  <SupportRequestPage client:only="react" brand={brand} number={number} />
+</CrmPublic>

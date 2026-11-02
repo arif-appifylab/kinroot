@@ -14,8 +14,8 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | 3 | Core CRM screens: shell, setup, invite, no-access, profile, contacts, companies, deals, pipelines, notes, tasks, timeline, views, ⌘K search, custom fields, dashboard, team (all signed-in screens compile; public pages are their phases) | done |
 | 4 | Email: providers, templates + editor, tracking, inbound replies, Gmail / Outlook sync; inbox; live chat | done |
 | 5 | Forms, lists and segments, broadcasts | done |
-| 6 | Tickets + support portal, meetings + booking pages, calendar sync | next |
-| 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | |
+| 6 | Tickets + support portal, meetings + booking pages, calendar sync | done |
+| 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | next |
 | 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | |
 | 9 | Public site pages (`/`, `/contact/`, `/demo/`), SEO, tests ported to vitest, build, `review.md` | |
 
@@ -116,6 +116,25 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
   both open `/f/<slug>` in a small window with the page's UTM parameters and address.
 - Broadcast batches stop after 40 s (a job run has 60 s) and look up unsubscribes and contacts once per batch.
   With the default 10 jobs a minute, a large broadcast sends about 250 emails a minute.
+
+## Decisions (phase 6)
+
+- Support portal on the site's sign-in: no portal cookie, no `/support/link`, `/support/session`, `/support/logout`.
+  A customer is the signed-in account with a CONFIRMED email; every contact with that address is theirs
+  (`portalSession` in `routes/support-public.ts`), and a ticket answers only when its contact is one of them
+  (another customer's number: `null` / 404). Emails link to `/support/tickets/<n>` and say "sign in (or create
+  your account) with this email address". Signing out uses the site's `/site-api/auth/logout`.
+- Public pages are Astro pages with React islands (`client:only`) in `CrmPublic.astro`, wrapped by `PublicPage`
+  (`src/crm/public/public-page.tsx`: React Query, brand, layout, toasts, confirmations): `/support/`,
+  `/support/tickets/`, `/support/tickets/<n>`, `/book/<handle>/<slug>`, `/book/manage/<token>`, `/csat/<token>`,
+  `/unsubscribe/<token>`, `/report-unsubscribe/<token>`. A missing link or bad token is a 404, a failed read a 503;
+  token pages are `no-store` and send no referrer.
+- Meetings → "Embed": the iframe snippet becomes a "Book a meeting" button linking to the booking page.
+- Support requests and bookings get per-connection limits (5 a minute, 20 an hour; `connectionLimits` in
+  `lib/rate-limit.ts`): both email the address typed in (`security.md` A06). Honeypot and speed check stay.
+- TipTap's base CSS is in `src/crm/tiptap.css` with `injectCSS: false`: the CSP blocked the `<style>` it injects
+  (every editor, CRM and portal).
+- Calendar sync already used owner secrets and the outbound helper (phase 4); nothing to change.
 
 ## Open items (tracked)
 

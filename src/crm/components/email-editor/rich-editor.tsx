@@ -372,6 +372,8 @@ export default function RichEditor({value, onChange, placeholder, compact, image
   const text = variant === 'text';
   const editor = useEditor({
     immediatelyRender: false,
+    // Its base CSS is in src/crm/tiptap.css: the CSP blocks the <style> tag TipTap would inject.
+    injectCSS: false,
     extensions: [
       StarterKit.configure({heading: {levels: [1, 2, 3]}, code: false, codeBlock: false, link: {openOnClick: false, autolink: true, defaultProtocol: 'https'}}),
       TextAlign.configure({types: ['heading', 'paragraph']}),

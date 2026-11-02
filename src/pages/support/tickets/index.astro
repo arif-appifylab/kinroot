@@ -1,0 +1,15 @@
+---
+/** The signed-in customer's requests (src/crm/public/support-requests.tsx). */
+import MyRequestsPage from '../../../crm/public/support-requests';
+import CrmPublic from '../../../layouts/CrmPublic.astro';
+import {crmBrand} from '../../../server/crm/page';
+
+export const prerender = false;
+
+const brand = await crmBrand(Astro.request);
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+---
+
+<CrmPublic brand={brand} title="My requests" noindex>
+  <MyRequestsPage client:only="react" brand={brand} />
+</CrmPublic>

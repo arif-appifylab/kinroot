@@ -1,0 +1,21 @@
+---
+/** How did we do?: a link someone was emailed (src/crm/public/csat.tsx). The state is read in-process; a bad link says so. */
+import CsatPage from '../../crm/public/csat';
+import CrmPublic from '../../layouts/CrmPublic.astro';
+import {crmBrand, crmGet} from '../../server/crm/page';
+import type {CsatState} from '../../server/crm/routes/support-public';
+
+export const prerender = false;
+
+const token = Astro.params.token ?? '';
+const rating = Number(Astro.url.searchParams.get('rating'));
+const picked = Number.isInteger(rating) && rating >= 1 && rating <= 5 ? rating : undefined;
+const [brand, res] = await Promise.all([crmBrand(Astro.request), crmGet<CsatState>(Astro.request, `/public/csat/${encodeURIComponent(token)}`)]);
+if (!res.data) Astro.response.status = res.status === 404 ? 404 : 503;
+Astro.response.headers.set('Cache-Control', 'private, no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+---
+
+<CrmPublic brand={brand} title="How did we do?" noindex>
+  <CsatPage client:only="react" brand={brand} token={token} initial={res.data} picked={picked} />
+</CrmPublic>

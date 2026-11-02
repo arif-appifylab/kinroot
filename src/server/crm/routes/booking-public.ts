@@ -7,6 +7,7 @@ import {publicOrigin} from '../kit/config';
 import type {Db} from '../kit/db';
 import type {AppEnv} from '../kit/guards';
 import {notFound, valid} from '../lib/http';
+import {connectionLimits, rateLimit} from '../lib/rate-limit';
 import {bookingFromToken, cancelBooking, createBooking, manageToken, publicBooking, rescheduleBooking, type PublicBooking} from '../scheduling/bookings';
 import {linkByPath, linkSlots, toPublicLink} from '../scheduling/links';
 
@@ -81,6 +82,8 @@ export const bookingPublic = new Hono<AppEnv>()
       const body = c.req.valid('json');
       // Honeypot filled or an inhumanly fast submit.
       if (body.hp || (body.startedAt && Date.now() - body.startedAt < 1500)) throw new HTTPException(400, {message: 'Please try again.'});
+      // It sends an invitation to the address typed in: bounded per connection (docs/agent/security.md A06).
+      await rateLimit(db, await connectionLimits((n) => c.req.header(n), 'booking:book', 5, 20), 'You have booked several meetings in a short time. Please wait a while and try again.');
       const link = await db.bookingLink.findUnique({where: {id: body.linkId}});
       if (!link) throw notFound('Booking link');
       const origin = publicOrigin(c.req.raw);
