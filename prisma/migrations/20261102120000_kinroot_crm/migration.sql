@@ -697,6 +697,7 @@ CREATE TABLE "File" (
     "mimeType" TEXT NOT NULL,
     "size" INTEGER NOT NULL,
     "storageId" TEXT,
+    "ready" BOOLEAN NOT NULL DEFAULT false,
     "purpose" TEXT NOT NULL DEFAULT 'attachment',
     "uploadedById" TEXT,
     "contactId" TEXT,
@@ -1354,6 +1355,29 @@ CREATE TABLE "ReportScheduleSend" (
     CONSTRAINT "ReportScheduleSend_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "JobBacklog" (
+    "id" TEXT NOT NULL,
+    "list" TEXT NOT NULL,
+    "data" JSONB NOT NULL,
+    "runAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "key" TEXT,
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "lastError" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "JobBacklog_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ExportChunk" (
+    "exportId" TEXT NOT NULL,
+    "seq" INTEGER NOT NULL,
+    "text" TEXT NOT NULL,
+
+    CONSTRAINT "ExportChunk_pkey" PRIMARY KEY ("exportId","seq")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "Member_userId_key" ON "Member"("userId");
 
@@ -1801,6 +1825,9 @@ CREATE INDEX "ReportSchedule_ownerId_idx" ON "ReportSchedule"("ownerId");
 -- CreateIndex
 CREATE UNIQUE INDEX "ReportScheduleSend_scheduleId_slotAt_key" ON "ReportScheduleSend"("scheduleId", "slotAt");
 
+-- CreateIndex
+CREATE INDEX "JobBacklog_runAt_idx" ON "JobBacklog"("runAt");
+
 -- AddForeignKey
 ALTER TABLE "Member" ADD CONSTRAINT "Member_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
@@ -2139,6 +2166,9 @@ ALTER TABLE "ReportSchedule" ADD CONSTRAINT "ReportSchedule_ownerId_fkey" FOREIG
 
 -- AddForeignKey
 ALTER TABLE "ReportScheduleSend" ADD CONSTRAINT "ReportScheduleSend_scheduleId_fkey" FOREIGN KEY ("scheduleId") REFERENCES "ReportSchedule"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ExportChunk" ADD CONSTRAINT "ExportChunk_exportId_fkey" FOREIGN KEY ("exportId") REFERENCES "Export"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 
 COMMIT;

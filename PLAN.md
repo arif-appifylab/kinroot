@@ -10,8 +10,8 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | --- | --- | --- |
 | 0 | Template copied here, git, install | done |
 | 1 | Foundation: schema + migration, team model, Tailwind + Kinroot UI kit, `/crm` host page and router, CSP check | done |
-| 2 | Shared infrastructure: server kit (guards → template), `enqueue()` → background jobs, files → platform storage, activity / audit / notifications / recycle bin | next |
-| 3 | Core CRM: contacts, companies, deals, pipelines, notes, tasks, timeline, views, ⌘K search, custom fields, dashboard, team, profile, app shell | |
+| 2 | Server: all of Kinroot's server code moved to `src/server/crm`, compiling and mounted at `/site-api/crm`; kit on the template's auth, database, jobs and storage; team, invites, uploads, exports / imports storage; integration tests | done |
+| 3 | Core CRM screens (client): app shell, sign-in / setup / invite pages, contacts, companies, deals, pipelines, notes, tasks, timeline, views, ⌘K search, custom fields, dashboard, team, profile | next |
 | 4 | Email: providers, templates + editor, tracking, inbound replies, Gmail / Outlook sync; inbox; live chat | |
 | 5 | Forms, lists and segments, broadcasts | |
 | 6 | Tickets + support portal, meetings + booking pages, calendar sync | |
@@ -25,8 +25,10 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | --- | --- |
 | `src/routes/**` (file routes) | `src/crm/routes/**`, same file-route format; the router plugin in `astro.config.mjs` writes `src/crm/routeTree.gen.ts` (git-ignored) |
 | `src/components`, `src/lib`, `src/styles.css` | `src/crm/components`, `src/crm/lib`, `src/crm/styles.css` (`@/…` = `src/crm`) |
-| `src/server/**` | `src/server/crm/**` (phase 2), mounted in the template's Hono app |
-| `src/platform/*` (own auth, db, crypto, guards) | gone; a small adapter in `src/server/crm/kit/` maps it onto the template's `src/platform` |
+| `src/server/**` | `src/server/crm/**`, mounted at `/site-api/crm` (`crmHooks` before `csrf`, `crmApp` after; `src/server/app.ts`) |
+| `src/platform/*` (own auth, db, crypto, guards) | `src/server/crm/kit/`: the same names (`createDb`, `loadUser`, `requireRole`…) on the template's auth, database, storage |
+| `Job` table + `/jobs/run` cron | `enqueue()` sends platform jobs (`crm-<type>` lists, `background.json`, handlers in `src/server/background.ts`); schedules `crm-tick` (1 min), `crm-sync` (5 min), `crm-prune` (daily) |
+| `File.data` bytes | platform storage (`kit/storage.ts`); uploads in two calls + the browser's PUT (`lib/uploads.ts`) |
 | `__root.tsx` head (title, favicon, fonts, theme, brand colours) | `src/layouts/Crm.astro` + host page `src/pages/crm/[...path].astro` |
 
 ## Decisions (made in phase 1)
@@ -55,6 +57,35 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
   one CSP message per page load).
 - **Address:** the CRM lives at `/crm/…`. TODO phase 3: Kinroot's dashboard (`/admin`) becomes
   `/crm/` (today `src/crm/routes/index.tsx` is a temporary foundation check).
+
+## Decisions (phase 2)
+
+- Kinroot's API lives under `/site-api/crm/*` (the template already uses `/site-api/auth` and `/site-api/jobs`).
+- `c.var.user` is the `Member` row plus the viewer's OWN email. Another member's email is joined
+  (`withEmail`, `memberWithEmail`) only server side, to send them mail; lists and pickers carry
+  no emails (`userSelect`); the team list shows full addresses only to their owner and the site's
+  owner, masked to everyone else (`publicUser`), the template's own rule.
+- Audit log: actor emails stored masked, IPs as a keyed hash (the template's "no raw IPs").
+- Exports: CSV built in `ExportChunk` rows by jobs, streamed into storage as one file at the end.
+  The "Owner email" column shows the requester's own address, other owners' masked.
+- Setup: the Owner's first visit asks for the workspace name and demo data (no account form).
+  The demo teammate is a `Member` without an account (no demo password).
+- Invites: token hashed, 14 days, bound to the verified signed-in account with that email.
+- OAuth client secrets: owner secrets `GOOGLE_CLIENT_SECRET`, `MICROSOFT_CLIENT_SECRET` (IDs may be
+  saved in Settings or added as `GOOGLE_CLIENT_ID` / `MICROSOFT_CLIENT_ID`).
+- Stored secrets (mailbox / calendar tokens) and signed links use keys derived (HKDF) from the
+  owner secret `KINROOT_SECRET_KEY` when added, else `JWT_SECRET`.
+- `@hono/zod-validator` kept (it is `hono/validator` with zod schemas) and TypeScript added as a
+  dev tool (`npm run typecheck`; the template's own files have 11 errors of their own).
+
+## Open items (tracked)
+
+- `$queryRawUnsafe` in `lib/reports.ts`, `routes/reports.ts` (phase 7), `lib/automations.ts` (phase 7),
+  `routes/tags.ts` (phase 3): to tagged `Prisma.sql`.
+- `routes/incoming-webhooks.ts`, `routes/data-in.ts` store raw IPs in their request logs (phase 8).
+- SMTP code (`email/smtp.ts`, `email/socket.ts`) still present, unreachable once phase 4 removes the provider.
+- Settings → Email still has fields for OAuth client secrets and provider keys (phase 4).
+- Automation merge field `{{owner.email}}` puts the record owner's address in emails to contacts, as before.
 
 ## Visible changes the rules force (approved by the owner)
 

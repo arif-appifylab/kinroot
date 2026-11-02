@@ -1,0 +1,107 @@
+import {Hono} from 'hono';
+import {HTTPException} from 'hono/http-exception';
+import {z} from 'zod';
+
+import type {Prisma} from '../../../generated/prisma/client';
+import type {AppContext, AppEnv} from '../kit/guards';
+import {notFound, ownerScope, valid} from '../lib/http';
+import {userSelect} from '../lib/users';
+
+const GROUPS: Record<string, string[]> = {
+  notes: ['note'],
+  emails: ['email_out', 'email_in', 'email_opened', 'interaction_EMAIL', 'conversation_comment'],
+  calls: ['interaction_CALL'],
+  meetings: ['interaction_MEETING'],
+  messages: ['interaction_SMS', 'interaction_LINKEDIN', 'interaction_WHATSAPP', 'interaction_POSTAL', 'chat_conversation'],
+  tasks: ['task_created', 'task_done'],
+  forms: ['form_submitted'],
+  tickets: ['ticket_created', 'ticket_status', 'ticket_reply'],
+  changes: ['stage_changed', 'field_changed', 'deal_won', 'deal_lost', 'deal_reopened', 'deal_created', 'contact_created', 'company_created', 'merged', 'restored', 'associated', 'list_added', 'list_removed', 'score_band'],
+};
+
+const GROUP_NAMES = ['all', 'notes', 'emails', 'calls', 'meetings', 'messages', 'tasks', 'forms', 'tickets', 'changes'] as const;
+const recordQuery = z.object({contactId: z.string().optional(), companyId: z.string().optional(), dealId: z.string().optional()});
+
+/** Every activity on a record's feed. Company and deal feeds include their people's activity. */
+async function feedWhere(c: AppContext, q: z.infer<typeof recordQuery>): Promise<Prisma.ActivityWhereInput> {
+  const db = c.var.db;
+  const scope = await ownerScope(c);
+  if (q.contactId) {
+    if (!(await db.contact.findFirst({where: {id: q.contactId, ...scope}, select: {id: true}}))) throw notFound('Contact');
+    return {contactId: q.contactId};
+  }
+  if (q.companyId) {
+    if (!(await db.company.findFirst({where: {id: q.companyId, ...scope}, select: {id: true}}))) throw notFound('Company');
+    const [people, deals] = await Promise.all([
+      db.contactCompany.findMany({where: {companyId: q.companyId}, select: {contactId: true}}),
+      db.deal.findMany({where: {companies: {some: {companyId: q.companyId}}}, select: {id: true}}),
+    ]);
+    return {OR: [{companyId: q.companyId}, {contactId: {in: people.map((p) => p.contactId)}}, {dealId: {in: deals.map((d) => d.id)}}]};
+  }
+  if (q.dealId) {
+    if (!(await db.deal.findFirst({where: {id: q.dealId, ...scope}, select: {id: true}}))) throw notFound('Deal');
+    const people = await db.dealContact.findMany({where: {dealId: q.dealId}, select: {contactId: true}});
+    // A deal's feed also shows its contacts' emails and notes, the context reps actually need.
+    return {OR: [{dealId: q.dealId}, {contactId: {in: people.map((p) => p.contactId)}, type: {in: ['email_out', 'email_in', 'note', 'interaction_CALL', 'interaction_MEETING']}}]};
+  }
+  throw new HTTPException(400, {message: 'Pass contactId, companyId or dealId'});
+}
+
+export const timeline = new Hono<AppEnv>()
+  // How many entries each tab has, so the feed only shows tabs with something in them.
+  .get('/counts', valid('query', recordQuery), async (c) => {
+    const where = await feedWhere(c, c.req.valid('query'));
+    const byType = await c.var.db.activity.groupBy({by: ['type'], where, _count: {_all: true}});
+    const counts: Record<string, number> = Object.fromEntries(GROUP_NAMES.map((g) => [g, 0]));
+    for (const row of byType) {
+      counts.all! += row._count._all;
+      for (const [group, types] of Object.entries(GROUPS)) if (types.includes(row.type)) counts[group]! += row._count._all;
+    }
+    return c.json({counts});
+  })
+
+  .get(
+  '/',
+  valid('query', recordQuery.extend({
+    group: z.enum(GROUP_NAMES).default('all'),
+    q: z.string().trim().max(100).optional(),
+    before: z.string().optional(), // ISO cursor
+    take: z.coerce.number().int().min(1).max(100).default(40),
+  })),
+  async (c) => {
+    const db = c.var.db;
+    const q = c.req.valid('query');
+    let where = await feedWhere(c, q);
+    if (q.group !== 'all') where = {AND: [where, {type: {in: GROUPS[q.group]}}]};
+    if (q.before) where = {AND: [where, {createdAt: {lt: new Date(q.before)}}]};
+    if (q.q) where = {AND: [where, {OR: [{title: {contains: q.q, mode: 'insensitive'}}, {text: {contains: q.q, mode: 'insensitive'}}]}]};
+
+    const rows = await db.activity.findMany({
+      where,
+      include: {
+        actor: {select: userSelect},
+        contact: {select: {id: true, firstName: true, lastName: true}},
+        deal: {select: {id: true, title: true}},
+        _count: {select: {comments: true}},
+      },
+      orderBy: {createdAt: 'desc'},
+      take: q.take + 1,
+    });
+    const page = rows.slice(0, q.take);
+
+    // Hydrate email events with the message so the feed can render subject, snippet and opens.
+    const emailIds = page.filter((a) => a.type.startsWith('email_') && a.refId).map((a) => a.refId!);
+    const messages = emailIds.length
+      ? await db.emailMessage.findMany({
+          where: {id: {in: emailIds}},
+          select: {id: true, threadId: true, subject: true, text: true, fromEmail: true, fromName: true, to: true, status: true, error: true, openCount: true, clickCount: true, firstOpenedAt: true, sentAt: true, direction: true},
+        })
+      : [];
+    const byId = new Map(messages.map((m) => [m.id, {...m, text: m.text?.slice(0, 600) ?? null}]));
+
+    return c.json({
+      rows: page.map((a) => ({...a, email: a.refId ? byId.get(a.refId) ?? null : null})),
+      nextCursor: rows.length > q.take ? page[page.length - 1]!.createdAt.toISOString() : null,
+    });
+  },
+);

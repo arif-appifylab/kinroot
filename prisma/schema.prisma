@@ -1377,6 +1377,8 @@ model File {
   mimeType     String
   size         Int
   storageId    String?  @unique // platform file id (`file_…`); bytes live in platform storage
+  /// False between the upload URL and the browser's confirmed PUT (src/server/crm/kit/storage.ts).
+  ready        Boolean  @default(false)
   purpose      String   @default("attachment") // attachment | form | ticket | public | import | import_errors | export
   uploadedById String?
   uploadedBy   Member?  @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
@@ -2142,27 +2144,28 @@ model ImportIssue {
 // A CSV export from a list page (src/server/lib/exports.ts). Small ones are written during the request, big
 // ones by background jobs, into platform storage; the file is deleted after 7 days.
 model Export {
-  id         String    @id @default(cuid())
-  entity     String // contact | company | deal
-  status     String    @default("queued") // queued | running | done | failed
-  userId     String?
-  user       Member?   @relation(fields: [userId], references: [id], onDelete: SetNull)
-  filters    Json      @default("{}")
-  columns    String[]  @default([])
-  listId     String?
-  fileName   String
-  fileId     String?
-  file       File?     @relation(fields: [fileId], references: [id], onDelete: SetNull)
-  total      Int       @default(0)
-  processed  Int       @default(0)
-  cursor     String? // last exported id
-  chunks     Int       @default(0)
-  emailMe    Boolean   @default(false)
-  emailed    Boolean   @default(false)
-  origin     String? // site origin for the emailed link
-  error      String?
-  finishedAt DateTime?
-  createdAt  DateTime  @default(now())
+  id           String        @id @default(cuid())
+  entity       String // contact | company | deal
+  status       String        @default("queued") // queued | running | done | failed
+  userId       String?
+  user         Member?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  filters      Json          @default("{}")
+  columns      String[]      @default([])
+  listId       String?
+  fileName     String
+  fileId       String?
+  file         File?         @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  total        Int           @default(0)
+  processed    Int           @default(0)
+  cursor       String? // last exported id
+  chunks       Int           @default(0)
+  emailMe      Boolean       @default(false)
+  emailed      Boolean       @default(false)
+  origin       String? // site origin for the emailed link
+  error        String?
+  finishedAt   DateTime?
+  createdAt    DateTime      @default(now())
+  exportChunks ExportChunk[]
 
   @@index([userId, createdAt])
   @@index([status, createdAt])
@@ -2224,4 +2227,35 @@ model ReportScheduleSend {
   createdAt  DateTime       @default(now())
 
   @@unique([scheduleId, slotAt])
+}
+
+/// Background jobs the platform did not take yet (src/server/crm/lib/jobs.ts). Kinroot's jobs run on
+/// the platform's background jobs; a send it refuses (over the per-minute limit, unreachable) lands
+/// here and the `crm-tick` schedule sends it again, so no work is lost. On your machine, where jobs
+/// run as they are sent, jobs planned for later wait here too until they are due.
+model JobBacklog {
+  id        String   @id @default(cuid())
+  /// The platform list (`crm-webhook-deliver`, …).
+  list      String
+  data      Json
+  runAt     DateTime @default(now())
+  /// Dedupe key, passed on to the platform.
+  key       String?
+  attempts  Int      @default(0)
+  lastError String?
+  createdAt DateTime @default(now())
+
+  @@index([runAt])
+}
+
+/// An export's CSV while background jobs write it (src/server/crm/lib/export-chunks.ts): text in
+/// order of `seq`, streamed into platform storage as one file when the export finishes, then
+/// deleted. Never a stored file: the finished export lives in storage (`Export.fileId`).
+model ExportChunk {
+  exportId String
+  export   Export @relation(fields: [exportId], references: [id], onDelete: Cascade)
+  seq      Int
+  text     String
+
+  @@id([exportId, seq])
 }

@@ -1,4 +1,89 @@
 {
-  "lists": {},
-  "schedules": {}
+  "lists": {
+    "crm-webhook-deliver": {
+      "retries": 5
+    },
+    "crm-form-after-submit": {
+      "retries": 5
+    },
+    "crm-ticket-sla-check": {
+      "retries": 5
+    },
+    "crm-ticket-csat": {
+      "retries": 5
+    },
+    "crm-email-forward-reply": {
+      "retries": 2
+    },
+    "crm-booking-email": {
+      "retries": 5
+    },
+    "crm-booking-reminder": {
+      "retries": 2
+    },
+    "crm-broadcast-start": {
+      "retries": 5
+    },
+    "crm-broadcast-batch": {
+      "retries": 5
+    },
+    "crm-scoring-events": {
+      "retries": 5
+    },
+    "crm-scoring-rescore": {
+      "retries": 5
+    },
+    "crm-scoring-recalc": {
+      "retries": 5
+    },
+    "crm-duplicates-scan": {
+      "retries": 5
+    },
+    "crm-automation-events": {
+      "retries": 5
+    },
+    "crm-automation-run": {
+      "retries": 5
+    },
+    "crm-automation-batch": {
+      "retries": 5
+    },
+    "crm-import-validate": {
+      "retries": 5
+    },
+    "crm-import-run": {
+      "retries": 5
+    },
+    "crm-export-run": {
+      "retries": 5
+    },
+    "crm-report-send": {
+      "retries": 3
+    },
+    "crm-inbox-wake": {
+      "retries": 5
+    },
+    "crm-chat-email-visitor": {
+      "retries": 5
+    },
+    "crm-incoming-webhook-process": {
+      "retries": 5
+    }
+  },
+  "schedules": {
+    "crm-tick": {
+      "every": "minute",
+      "label": "Kinroot: automations, lead scoring, report emails, inbox"
+    },
+    "crm-sync": {
+      "cron": "*/5 * * * *",
+      "label": "Kinroot: mailbox and calendar sync"
+    },
+    "crm-prune": {
+      "every": "day",
+      "at": "04:00",
+      "tz": "UTC",
+      "label": "Kinroot: clean-ups and duplicate scan"
+    }
+  }
 }

@@ -45,7 +45,7 @@ function FoundationCheck() {
               <CardDescription>Variants from the Kinroot kit.</CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" onClick={() => toast.success('Saved')}>
+              <Button variant="secondary" onClick={() => toast.success('Saved')}>
                 Toast
               </Button>
               <Button variant="destructive" onClick={async () => (await confirm({title: 'Delete this?', destructive: true})) && toast('Deleted')}>
@@ -58,7 +58,7 @@ function FoundationCheck() {
               </Tooltip>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="outline">Menu</Button>
+                  <Button variant="secondary">Menu</Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent>
                   <DropdownMenuItem>Edit</DropdownMenuItem>
@@ -111,7 +111,7 @@ function FoundationCheck() {
             </Field>
           </DialogBody>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
+            <Button variant="secondary" onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <Button onClick={() => setOpen(false)}>Save</Button>

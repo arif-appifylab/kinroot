@@ -1,10 +1,13 @@
-// Browser-side client for the Hono API at /site-api/*.
+// Browser-side client for Kinroot's Hono API at /site-api/crm/*.
 //
 // Every call goes through the template's `siteFetch` (src/platform/browser.ts): it adds the CSRF
 // header on writes, refreshes an expired session once, and carries the session in the editor
 // Preview, where a plain fetch would arrive signed out (docs/agent/publishing.md).
 
 import {siteFetch} from '../../platform/browser';
+
+/** Kinroot's Site API, mounted at /site-api/crm (src/server/app.ts). */
+export const CRM_API = '/site-api/crm';
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) {
@@ -29,7 +32,7 @@ export function signInPath() {
 }
 
 async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
-  const res = await siteFetch(`/site-api${path}${qs(query)}`, {
+  const res = await siteFetch(`${CRM_API}${path}${qs(query)}`, {
     method,
     headers: body !== undefined ? {'content-type': 'application/json'} : undefined,
     body: body === undefined ? undefined : JSON.stringify(body),
