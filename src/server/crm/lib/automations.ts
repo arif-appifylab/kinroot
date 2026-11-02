@@ -24,7 +24,7 @@
  * automation never re-triggers itself directly, and each automation runs at
  * most RUNS_PER_RECORD_PER_HOUR times per record per hour.
  */
-import type {Automation, AutomationRun, Event, Prisma} from '../../../generated/prisma/client';
+import {Prisma, type Automation, type AutomationRun, type Event} from '../../../generated/prisma/client';
 import type {JobRun} from '../kit/job-run';
 import {
   branchStart,
@@ -345,24 +345,23 @@ async function dateCandidates(db: Db, a: Automation, t: Extract<Trigger, {kind: 
   const field = (await fieldsFor(db, object)).find((f) => f.key === t.field && f.kind === 'date');
   if (!field) return [];
   dateOnly = !!field.dateOnly;
-  const table = TABLES[object];
-  const owner = OWNER_COLUMN[object];
+  // Table and owner column from fixed maps; values bound as parameters.
+  const table = Prisma.raw(TABLES[object]);
+  const owner = Prisma.raw(OWNER_COLUMN[object]);
   if (field.key.startsWith('custom.')) {
     const key = field.key.slice(7);
     // Custom dates are stored as "YYYY-MM-DD" strings, which compare in order.
-    const found = await db.$queryRawUnsafe<{id: string; value: string; ownerId: string | null}[]>(
-      `SELECT id, custom->>$1 AS value, ${owner} AS "ownerId" FROM ${table} WHERE custom->>$1 >= $2 AND custom->>$1 <= $3 ORDER BY custom->>$1 LIMIT ${LIMIT}`,
-      key,
-      lo.toISOString().slice(0, 10),
-      hi.toISOString().slice(0, 10),
+    const value = Prisma.sql`custom->>${key}::text`;
+    const found = await db.$queryRaw<{id: string; value: string; ownerId: string | null}[]>(
+      Prisma.sql`SELECT id, ${value} AS value, ${owner} AS "ownerId" FROM ${table} WHERE ${value} >= ${lo.toISOString().slice(0, 10)} AND ${value} <= ${hi.toISOString().slice(0, 10)} ORDER BY ${value} LIMIT ${LIMIT}`,
     );
     rows = found.filter((r) => /^\d{4}-\d{2}-\d{2}/.test(r.value));
   } else {
-    const column = `"${field.key.replace(/[^a-zA-Z]/g, '')}"`;
-    rows = await db.$queryRawUnsafe<{id: string; value: Date; ownerId: string | null}[]>(
-      `SELECT id, ${column} AS value, ${owner} AS "ownerId" FROM ${table} WHERE ${column} >= $1 AND ${column} <= $2 ORDER BY ${column} LIMIT ${LIMIT}`,
-      lo,
-      hi,
+    // A built-in date field: its key is the column's name (the field list is written in code).
+    if (!/^[a-zA-Z]+$/.test(field.key)) return [];
+    const column = Prisma.raw(`"${field.key}"`);
+    rows = await db.$queryRaw<{id: string; value: Date; ownerId: string | null}[]>(
+      Prisma.sql`SELECT id, ${column} AS value, ${owner} AS "ownerId" FROM ${table} WHERE ${column} >= ${lo} AND ${column} <= ${hi} ORDER BY ${column} LIMIT ${LIMIT}`,
     );
   }
   const zones = t.zone === 'owner' ? await ownerZones(db, rows.map((r) => r.ownerId)) : new Map<string, string>();
@@ -383,7 +382,9 @@ async function inactivityCandidates(db: Db, a: Automation, t: Extract<Trigger, {
   const hi = new Date(to.getTime() - span);
   const at = (since: Date) => since.getTime() + span;
   if (t.rule === 'no_activity' && (object === 'contact' || object === 'company' || object === 'deal')) {
-    const rows = await db.$queryRawUnsafe<{id: string; since: Date}[]>(`SELECT id, "lastActivityAt" AS since FROM ${TABLES[object]} WHERE "lastActivityAt" > $1 AND "lastActivityAt" <= $2 ORDER BY "lastActivityAt" LIMIT ${LIMIT}`, lo, hi);
+    const rows = await db.$queryRaw<{id: string; since: Date}[]>(
+      Prisma.sql`SELECT id, "lastActivityAt" AS since FROM ${Prisma.raw(TABLES[object])} WHERE "lastActivityAt" > ${lo} AND "lastActivityAt" <= ${hi} ORDER BY "lastActivityAt" LIMIT ${LIMIT}`,
+    );
     return rows.map((r) => ({recordId: r.id, value: r.since.toISOString(), moment: at(r.since), context: {lastActivityAt: r.since.toISOString()}}));
   }
   if (t.rule === 'ticket_waiting' && object === 'ticket') {

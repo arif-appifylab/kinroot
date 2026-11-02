@@ -1,6 +1,6 @@
 import {HTTPException} from 'hono/http-exception';
 
-import type {EntityType} from '../../../generated/prisma/client';
+import {Prisma, type EntityType} from '../../../generated/prisma/client';
 import type {Db} from '../kit/db';
 import {
   MEASURE_OPS,
@@ -31,8 +31,8 @@ export type ReportFieldDef = {
   key: string;
   label: string;
   kind: FieldKind;
-  /** SQL expression over the object's row alias `t`. Never built from input. */
-  sql: string;
+  /** SQL expression over the object's row alias `t`: a constant written in code, or `Prisma.sql` when it carries a value. Never built from input. */
+  sql: string | Prisma.Sql;
   options?: {value: string; label: string}[];
   /** ref fields: key in REFS used to turn ids into labels */
   ref?: string;
@@ -55,8 +55,8 @@ export type ReportObjectDef = {
   /** expression giving the owning user's id; members with owner-only visibility see their rows only */
   ownerSql?: string;
   ownerLabel?: string;
-  /** owner-only visibility when it is wider than `ownerSql = me` (e.g. tickets: mine or unassigned); gets the user id placeholder */
-  scopeSql?: (userParam: string) => string;
+  /** owner-only visibility when it is wider than `ownerSql = me` (e.g. tickets: mine or unassigned); `me` is bound as a parameter */
+  scopeSql?: (me: string) => Prisma.Sql;
   /** expression giving the pipeline id, enables the pipeline filter */
   pipelineSql?: string;
   /** field key used by the date-range filter by default */
@@ -66,29 +66,29 @@ export type ReportObjectDef = {
   fields: ReportFieldDef[];
 };
 
-/** id → label lookups for ref fields. `sql` gets the ids as $1 (text[]); `list` feeds filter pickers. */
-export type RefDef = {sql: string; list?: string};
+/** id → label lookups for ref fields. `sql` gets the ids (bound as text[]); `list` feeds filter pickers. */
+export type RefDef = {sql: (ids: string[]) => Prisma.Sql; list?: Prisma.Sql};
 
 const REFS: Record<string, RefDef> = {
   user: {
-    sql: 'SELECT id, name AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Member" WHERE id = ANY($1::text[])',
-    list: 'SELECT id, name AS label FROM "Member" WHERE active ORDER BY name LIMIT 500',
+    sql: (ids) => Prisma.sql`SELECT id, name AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Member" WHERE id = ANY(${ids}::text[])`,
+    list: Prisma.sql`SELECT id, name AS label FROM "Member" WHERE active ORDER BY name LIMIT 500`,
   },
   pipeline: {
-    sql: 'SELECT id, name AS label, position::float8 AS ord, NULL::text AS ctx FROM "Pipeline" WHERE id = ANY($1::text[])',
-    list: 'SELECT id, name AS label FROM "Pipeline" ORDER BY position LIMIT 500',
+    sql: (ids) => Prisma.sql`SELECT id, name AS label, position::float8 AS ord, NULL::text AS ctx FROM "Pipeline" WHERE id = ANY(${ids}::text[])`,
+    list: Prisma.sql`SELECT id, name AS label FROM "Pipeline" ORDER BY position LIMIT 500`,
   },
   stage: {
-    sql: 'SELECT s.id, s.name AS label, (p.position * 1000 + s.position)::float8 AS ord, p.name AS ctx FROM "Stage" s JOIN "Pipeline" p ON p.id = s."pipelineId" WHERE s.id = ANY($1::text[])',
-    list: 'SELECT s.id, p.name || \' · \' || s.name AS label FROM "Stage" s JOIN "Pipeline" p ON p.id = s."pipelineId" ORDER BY p.position, s.position LIMIT 500',
+    sql: (ids) => Prisma.sql`SELECT s.id, s.name AS label, (p.position * 1000 + s.position)::float8 AS ord, p.name AS ctx FROM "Stage" s JOIN "Pipeline" p ON p.id = s."pipelineId" WHERE s.id = ANY(${ids}::text[])`,
+    list: Prisma.sql`SELECT s.id, p.name || ' · ' || s.name AS label FROM "Stage" s JOIN "Pipeline" p ON p.id = s."pipelineId" ORDER BY p.position, s.position LIMIT 500`,
   },
   company: {
-    sql: 'SELECT id, name AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Company" WHERE id = ANY($1::text[])',
-    list: 'SELECT id, name AS label FROM "Company" ORDER BY name LIMIT 500',
+    sql: (ids) => Prisma.sql`SELECT id, name AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Company" WHERE id = ANY(${ids}::text[])`,
+    list: Prisma.sql`SELECT id, name AS label FROM "Company" ORDER BY name LIMIT 500`,
   },
   form: {
-    sql: 'SELECT id, name AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Form" WHERE id = ANY($1::text[])',
-    list: 'SELECT id, name AS label FROM "Form" ORDER BY name LIMIT 500',
+    sql: (ids) => Prisma.sql`SELECT id, name AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Form" WHERE id = ANY(${ids}::text[])`,
+    list: Prisma.sql`SELECT id, name AS label FROM "Form" ORDER BY name LIMIT 500`,
   },
 };
 
@@ -295,28 +295,27 @@ registerReportObject({
 
 // ─── Catalogue ───
 
-const json = (key: string) => `t."custom"->'${key}'`;
-
-/** Custom field definitions become report fields `custom.<key>`. Keys are [a-z0-9_] (see routes/fields.ts). */
+/** Custom field definitions become report fields `custom.<key>`; the key is bound as a parameter. */
 async function customFields(db: Db, entity: EntityType): Promise<ReportFieldDef[]> {
   const defs = await db.customFieldDef.findMany({where: {entity}, orderBy: {position: 'asc'}});
   return defs
     .filter((d) => /^[a-z0-9_]+$/.test(d.key))
     .flatMap((d): ReportFieldDef[] => {
       const key = `custom.${d.key}`;
-      const raw = `NULLIF(t."custom"->>'${d.key}', '')`;
+      const json = Prisma.sql`t."custom"->${d.key}::text`;
+      const raw = Prisma.sql`NULLIF(t."custom"->>${d.key}::text, '')`;
       switch (d.type) {
         case 'NUMBER':
         case 'CURRENCY':
-          return [{key, label: d.label, kind: d.type === 'NUMBER' ? 'number' : 'currency', sql: `CASE WHEN jsonb_typeof(${json(d.key)}) = 'number' THEN (${json(d.key)})::text::float8 END`}];
+          return [{key, label: d.label, kind: d.type === 'NUMBER' ? 'number' : 'currency', sql: Prisma.sql`CASE WHEN jsonb_typeof(${json}) = 'number' THEN (${json})::text::float8 END`}];
         case 'DATE':
-          return [{key, label: d.label, kind: 'date', dateOnly: true, sql: `CASE WHEN ${raw} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN substring(${raw} from 1 for 10)::timestamp END`}];
+          return [{key, label: d.label, kind: 'date', dateOnly: true, sql: Prisma.sql`CASE WHEN ${raw} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN substring(${raw} from 1 for 10)::timestamp END`}];
         case 'SELECT':
           return [{key, label: d.label, kind: 'enum', sql: raw, options: d.options.map((o) => ({value: o, label: o}))}];
         case 'MULTISELECT':
-          return [{key, label: d.label, kind: 'tags', options: d.options.map((o) => ({value: o, label: o})), sql: `ARRAY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(${json(d.key)}) = 'array' THEN ${json(d.key)} ELSE '[]'::jsonb END))`}];
+          return [{key, label: d.label, kind: 'tags', options: d.options.map((o) => ({value: o, label: o})), sql: Prisma.sql`ARRAY(SELECT jsonb_array_elements_text(CASE WHEN jsonb_typeof(${json}) = 'array' THEN ${json} ELSE '[]'::jsonb END))`}];
         case 'CHECKBOX':
-          return [{key, label: d.label, kind: 'boolean', sql: `CASE WHEN jsonb_typeof(${json(d.key)}) = 'boolean' THEN (${json(d.key)})::text::boolean END`}];
+          return [{key, label: d.label, kind: 'boolean', sql: Prisma.sql`CASE WHEN jsonb_typeof(${json}) = 'boolean' THEN (${json})::text::boolean END`}];
         case 'TEXT':
           return [{key, label: d.label, kind: 'string', sql: raw}];
         default:
@@ -360,20 +359,15 @@ export async function catalogue(db: Db): Promise<CatalogueObject[]> {
 }
 
 // ─── Query building ───
+//
+// Every query is ONE `Prisma.sql` run with the tagged `$queryRaw`: values (ids, dates, the zone,
+// filter values) are bound parameters. The only text pasted in is the constant SQL written in this
+// file and the modules that register objects (`code()`), never anything from a request.
 
-/** Collects bind parameters; `p(v)` returns its placeholder. Postgres rejects unused ones, so the zone is bound on first use. */
-class Params {
-  values: unknown[] = [];
-  private zone: string | null = null;
-  constructor(private tzName: string) {}
-  p(v: unknown, cast = '') {
-    this.values.push(v);
-    return `$${this.values.length}${cast}`;
-  }
-  tz() {
-    return (this.zone ??= this.p(this.tzName, '::text'));
-  }
-}
+/** A constant SQL fragment from a definition in code. */
+const code = (fragment: string) => Prisma.raw(fragment);
+/** A field's expression, constant or carrying its own parameters (custom fields). */
+const expr = (f: ReportFieldDef) => (typeof f.sql === 'string' ? code(f.sql) : f.sql);
 
 export type RunContext = {
   tz: string;
@@ -396,104 +390,109 @@ function field(o: ResolvedObject, key: string | undefined, what: string) {
 }
 
 /** A timestamp column as wall-clock time in the viewer's zone. */
-function wall(f: ReportFieldDef, ps: Params) {
-  return f.dateOnly ? `(${f.sql})` : `((${f.sql}) AT TIME ZONE 'UTC') AT TIME ZONE ${ps.tz()}`;
+function wall(f: ReportFieldDef, tz: string) {
+  return f.dateOnly ? Prisma.sql`(${expr(f)})` : Prisma.sql`((${expr(f)}) AT TIME ZONE 'UTC') AT TIME ZONE ${tz}::text`;
 }
 
-/** An instant parameter in the column's terms (UTC timestamp, or wall time for date-only fields). */
-function instant(f: ReportFieldDef, placeholder: string, ps: Params) {
-  return f.dateOnly ? `(${placeholder}::timestamptz AT TIME ZONE ${ps.tz()})` : `(${placeholder}::timestamptz AT TIME ZONE 'UTC')`;
+/** An instant in the column's terms (UTC timestamp, or wall time for date-only fields). */
+function instant(f: ReportFieldDef, at: Date, tz: string) {
+  const iso = at.toISOString();
+  return f.dateOnly ? Prisma.sql`(${iso}::timestamptz AT TIME ZONE ${tz}::text)` : Prisma.sql`(${iso}::timestamptz AT TIME ZONE 'UTC')`;
 }
 
-function condition(f: ReportFieldDef, c: ReportCondition, ps: Params): string {
-  const e = `(${f.sql})`;
+function condition(f: ReportFieldDef, c: ReportCondition, tz: string): Prisma.Sql {
+  const e = Prisma.sql`(${expr(f)})`;
   // A typed list arrives as one comma-separated string.
   const list = () => (Array.isArray(c.value) ? c.value.map(String) : String(c.value ?? '').split(',')).map((v) => v.trim()).filter(Boolean);
   const num = () => {
     const n = Number(c.value);
     if (!Number.isFinite(n)) throw new HTTPException(400, {message: `${f.label}: enter a number`});
-    return ps.p(n, '::float8');
+    return Prisma.sql`${n}::float8`;
   };
-  const empty = f.kind === 'tags' ? `cardinality(${e}) = 0` : `${e} IS NULL`;
+  const empty = f.kind === 'tags' ? Prisma.sql`cardinality(${e}) = 0` : Prisma.sql`${e} IS NULL`;
   switch (c.op) {
     case 'empty':
       return empty;
     case 'not_empty':
-      return `NOT (${empty})`;
+      return Prisma.sql`NOT (${empty})`;
     case 'is_true':
-      return `${e} IS TRUE`;
+      return Prisma.sql`${e} IS TRUE`;
     case 'is_false':
-      return `${e} IS NOT TRUE`;
+      return Prisma.sql`${e} IS NOT TRUE`;
     case 'is':
     case 'is_not': {
-      if (isNumeric(f.kind)) return c.op === 'is' ? `${e} = ${num()}` : `${e} IS DISTINCT FROM ${num()}`;
+      if (isNumeric(f.kind)) return c.op === 'is' ? Prisma.sql`${e} = ${num()}` : Prisma.sql`${e} IS DISTINCT FROM ${num()}`;
       const values = list();
-      if (!values.length) return 'TRUE';
-      const arr = ps.p(values, '::text[]');
-      if (f.kind === 'tags') return c.op === 'is' ? `${e} && ${arr}` : `NOT (${e} && ${arr})`;
-      return c.op === 'is' ? `${e}::text = ANY(${arr})` : `(${e} IS NULL OR NOT (${e}::text = ANY(${arr})))`;
+      if (!values.length) return Prisma.sql`TRUE`;
+      const arr = Prisma.sql`${values}::text[]`;
+      if (f.kind === 'tags') return c.op === 'is' ? Prisma.sql`${e} && ${arr}` : Prisma.sql`NOT (${e} && ${arr})`;
+      return c.op === 'is' ? Prisma.sql`${e}::text = ANY(${arr})` : Prisma.sql`(${e} IS NULL OR NOT (${e}::text = ANY(${arr})))`;
     }
     case 'contains': {
       const s = String(c.value ?? '').replace(/[\\%_]/g, (m) => `\\${m}`);
-      return s ? `${e}::text ILIKE ${ps.p(`%${s}%`)}` : 'TRUE';
+      return s ? Prisma.sql`${e}::text ILIKE ${`%${s}%`}` : Prisma.sql`TRUE`;
     }
     case 'gt':
-      return `${e} > ${num()}`;
+      return Prisma.sql`${e} > ${num()}`;
     case 'gte':
-      return `${e} >= ${num()}`;
+      return Prisma.sql`${e} >= ${num()}`;
     case 'lt':
-      return `${e} < ${num()}`;
+      return Prisma.sql`${e} < ${num()}`;
     case 'lte':
-      return `${e} <= ${num()}`;
+      return Prisma.sql`${e} <= ${num()}`;
     case 'before':
     case 'after': {
       const s = String(c.value ?? '');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new HTTPException(400, {message: `${f.label}: pick a date`});
-      const at = ps.p(s, '::date');
+      const at = Prisma.sql`${s}::date`;
       // Calendar date in the viewer's zone, compared on wall time.
-      return c.op === 'before' ? `${wall(f, ps)} < ${at}` : `${wall(f, ps)} >= (${at} + 1)`;
+      return c.op === 'before' ? Prisma.sql`${wall(f, tz)} < ${at}` : Prisma.sql`${wall(f, tz)} >= (${at} + 1)`;
     }
   }
 }
 
-type GroupSql = {select: string; join: string};
+type GroupSql = {select: Prisma.Sql; join: Prisma.Sql};
 
-function groupSql(f: ReportFieldDef, bucket: Bucket | undefined, alias: string, ps: Params): GroupSql {
+function groupSql(f: ReportFieldDef, bucket: Bucket | undefined, alias: 'g1' | 'g2', tz: string): GroupSql {
   if (f.kind === 'date') {
     const b = bucket ?? 'month';
-    // `b` is from the zod enum; date_trunc takes it as a literal.
-    return {select: `to_char(date_trunc('${b}', ${wall(f, ps)}), 'YYYY-MM-DD')`, join: ''};
+    return {select: Prisma.sql`to_char(date_trunc(${b}::text, ${wall(f, tz)}), 'YYYY-MM-DD')`, join: Prisma.empty};
   }
   if (f.kind === 'tags') {
-    // One row per tag (records without tags land in the empty group).
-    return {select: `${alias}.k`, join: `LEFT JOIN LATERAL unnest(CASE WHEN cardinality(${f.sql}) > 0 THEN ${f.sql} ELSE ARRAY[NULL]::text[] END) AS ${alias}(k) ON TRUE`};
+    // One row per tag (records without tags land in the empty group). `alias` is one of two constants.
+    const a = code(alias);
+    return {select: Prisma.sql`${a}.k`, join: Prisma.sql`LEFT JOIN LATERAL unnest(CASE WHEN cardinality(${expr(f)}) > 0 THEN ${expr(f)} ELSE ARRAY[NULL]::text[] END) AS ${a}(k) ON TRUE`};
   }
-  if (f.kind === 'boolean') return {select: `CASE WHEN (${f.sql}) THEN 'true' ELSE 'false' END`, join: ''};
-  return {select: `(${f.sql})::text`, join: ''};
+  if (f.kind === 'boolean') return {select: Prisma.sql`CASE WHEN (${expr(f)}) THEN 'true' ELSE 'false' END`, join: Prisma.empty};
+  return {select: Prisma.sql`(${expr(f)})::text`, join: Prisma.empty};
 }
 
+const AGGREGATES = {sum: 'SUM', avg: 'AVG', min: 'MIN', max: 'MAX'} as const;
+
 function measureSql(o: ResolvedObject, m: ReportConfig['measure']) {
-  if (m.op === 'count') return {sql: 'COUNT(DISTINCT t.id)::float8', label: `Number of ${o.noun[1]}`, format: 'number' as const};
+  if (m.op === 'count') return {sql: Prisma.sql`COUNT(DISTINCT t.id)::float8`, label: `Number of ${o.noun[1]}`, format: 'number' as const};
   const f = field(o, m.field, 'Measure');
   if (!isNumeric(f.kind)) throw new HTTPException(400, {message: `${f.label} is not a number field`});
-  const fn = {sum: 'SUM', avg: 'AVG', min: 'MIN', max: 'MAX'}[m.op];
-  return {sql: `${fn}((${f.sql})::float8)::float8`, label: `${MEASURE_OPS[m.op]} of ${f.label.toLowerCase()}`, format: f.kind === 'currency' ? ('currency' as const) : ('number' as const)};
+  const fn = code(AGGREGATES[m.op]);
+  return {sql: Prisma.sql`${fn}((${expr(f)})::float8)::float8`, label: `${MEASURE_OPS[m.op]} of ${f.label.toLowerCase()}`, format: f.kind === 'currency' ? ('currency' as const) : ('number' as const)};
 }
 
 /** WHERE clause for the report's filters within one date span. */
-function whereSql(o: ResolvedObject, config: ReportConfig, ctx: RunContext, ps: Params, span: Span) {
-  const parts: string[] = [];
-  if (o.where) parts.push(`(${o.where})`);
-  if (ctx.scopeOwnerId && o.ownerSql) parts.push(o.scopeSql ? `(${o.scopeSql(ps.p(ctx.scopeOwnerId))})` : `(${o.ownerSql}) = ${ps.p(ctx.scopeOwnerId)}`);
+function whereSql(o: ResolvedObject, config: ReportConfig, ctx: RunContext, span: Span) {
+  const tz = ctx.tz;
+  const parts: Prisma.Sql[] = [];
+  if (o.where) parts.push(Prisma.sql`(${code(o.where)})`);
+  const owner = o.ownerSql ? code(o.ownerSql) : null;
+  if (ctx.scopeOwnerId && owner) parts.push(o.scopeSql ? Prisma.sql`(${o.scopeSql(ctx.scopeOwnerId)})` : Prisma.sql`(${owner}) = ${ctx.scopeOwnerId}`);
   const ownerId = ctx.overrides?.ownerId || config.filters.ownerId;
-  if (ownerId && o.ownerSql) parts.push(ownerId === 'none' ? `(${o.ownerSql}) IS NULL` : `(${o.ownerSql}) = ${ps.p(ownerId)}`);
-  if (config.filters.pipelineId && o.pipelineSql) parts.push(`(${o.pipelineSql}) = ${ps.p(config.filters.pipelineId)}`);
+  if (ownerId && owner) parts.push(ownerId === 'none' ? Prisma.sql`(${owner}) IS NULL` : Prisma.sql`(${owner}) = ${ownerId}`);
+  if (config.filters.pipelineId && o.pipelineSql) parts.push(Prisma.sql`(${code(o.pipelineSql)}) = ${config.filters.pipelineId}`);
   const df = field(o, config.filters.dateField ?? o.defaultDate, 'Date range');
   if (df.kind !== 'date') throw new HTTPException(400, {message: `${df.label} is not a date field`});
-  if (span.from) parts.push(`(${df.sql}) >= ${instant(df, ps.p(span.from.toISOString()), ps)}`);
-  if (span.to) parts.push(`(${df.sql}) < ${instant(df, ps.p(span.to.toISOString()), ps)}`);
-  for (const c of config.filters.conditions) parts.push(condition(field(o, c.field, 'Filter'), c, ps));
-  return parts.length ? parts.join(' AND ') : 'TRUE';
+  if (span.from) parts.push(Prisma.sql`(${expr(df)}) >= ${instant(df, span.from, tz)}`);
+  if (span.to) parts.push(Prisma.sql`(${expr(df)}) < ${instant(df, span.to, tz)}`);
+  for (const c of config.filters.conditions) parts.push(condition(field(o, c.field, 'Filter'), c, tz));
+  return parts.length ? Prisma.join(parts, ' AND ') : Prisma.sql`TRUE`;
 }
 
 type Labeller = (key: string | null) => {label: string; ord: number | null};
@@ -513,7 +512,7 @@ async function labeller(db: Db, f: ReportFieldDef, keys: (string | null)[], buck
   }
   if (f.kind === 'ref' && f.ref && REFS[f.ref]) {
     const ids = keys.filter((k): k is string => !!k);
-    const rows = ids.length ? await db.$queryRawUnsafe<{id: string; label: string; ord: number | null; ctx: string | null}[]>(REFS[f.ref]!.sql, ids) : [];
+    const rows = ids.length ? await db.$queryRaw<{id: string; label: string; ord: number | null; ctx: string | null}[]>(REFS[f.ref]!.sql(ids)) : [];
     const multi = new Set(rows.map((r) => r.ctx)).size > 1;
     const map = new Map(rows.map((r) => [r.id, {label: multi && r.ctx ? `${r.ctx} · ${r.label}` : r.label, ord: r.ord}]));
     return (k) => (k === null ? {label: none, ord: Number.MAX_SAFE_INTEGER} : map.get(k) ?? {label: 'Deleted', ord: null});
@@ -555,9 +554,8 @@ export async function runReport(db: Db, config: ReportConfig, ctx: RunContext): 
   if (b1 && range.from && range.to) bucketKeys(wallKey(wallOf(tz, range.from)), wallKey(wallOf(tz, range.to.getTime() - 1)), b1);
 
   const totalOf = async (span: Span) => {
-    const ps = new Params(tz);
-    const where = whereSql(o, config, ctx, ps, span);
-    const [row] = await db.$queryRawUnsafe<{v: number | null; n: number}[]>(`SELECT ${measure.sql} AS v, COUNT(DISTINCT t.id)::float8 AS n FROM ${o.table} t WHERE ${where}`, ...ps.values);
+    const where = whereSql(o, config, ctx, span);
+    const [row] = await db.$queryRaw<{v: number | null; n: number}[]>(Prisma.sql`SELECT ${measure.sql} AS v, COUNT(DISTINCT t.id)::float8 AS n FROM ${code(o.table)} t WHERE ${where}`);
     return {value: Number(row?.v ?? 0), count: Number(row?.n ?? 0)};
   };
 
@@ -578,17 +576,16 @@ export async function runReport(db: Db, config: ReportConfig, ctx: RunContext): 
     return {...base, series: [{key: 'value', label: measure.label}], rows: [{key: 'total', label: 'Total', values: {value: total.value}, total: total.value, count: total.count}], truncated: false};
   }
 
-  const ps = new Params(tz);
-  const s1 = groupSql(g1f, b1, 'g1', ps);
-  const s2 = g2f ? groupSql(g2f, b2, 'g2', ps) : null;
-  const where = whereSql(o, config, ctx, ps, range);
-  const sql = `SELECT ${s1.select} AS k1, ${s2 ? s2.select : 'NULL::text'} AS k2, ${measure.sql} AS v, COUNT(DISTINCT t.id)::float8 AS n
-    FROM ${o.table} t ${s1.join} ${s2?.join ?? ''}
+  const s1 = groupSql(g1f, b1, 'g1', tz);
+  const s2 = g2f ? groupSql(g2f, b2, 'g2', tz) : null;
+  const where = whereSql(o, config, ctx, range);
+  const sql = Prisma.sql`SELECT ${s1.select} AS k1, ${s2 ? s2.select : Prisma.sql`NULL::text`} AS k2, ${measure.sql} AS v, COUNT(DISTINCT t.id)::float8 AS n
+    FROM ${code(o.table)} t ${s1.join} ${s2?.join ?? Prisma.empty}
     WHERE ${where}
     GROUP BY 1, 2
     ORDER BY 3 DESC NULLS LAST
     LIMIT ${MAX_CELLS + 1}`;
-  let cells = (await db.$queryRawUnsafe<Cell[]>(sql, ...ps.values)).map((c) => ({...c, v: Number(c.v ?? 0), n: Number(c.n)}));
+  let cells = (await db.$queryRaw<Cell[]>(sql)).map((c) => ({...c, v: Number(c.v ?? 0), n: Number(c.n)}));
   let truncated = cells.length > MAX_CELLS;
   cells = cells.slice(0, MAX_CELLS);
 
@@ -632,12 +629,10 @@ export async function runReport(db: Db, config: ReportConfig, ctx: RunContext): 
   }
   // A row's total is the measure over the whole group: summed for count/sum, otherwise taken from a breakdown-free query.
   if (!additive && g2f) {
-    const p2 = new Params(tz);
-    const r = groupSql(g1f, b1, 'g1', p2);
-    const w2 = whereSql(o, config, ctx, p2, range);
-    const totals = await db.$queryRawUnsafe<{k1: string | null; v: number | null; n: number}[]>(
-      `SELECT ${r.select} AS k1, ${measure.sql} AS v, COUNT(DISTINCT t.id)::float8 AS n FROM ${o.table} t ${r.join} WHERE ${w2} GROUP BY 1 LIMIT ${MAX_CELLS}`,
-      ...p2.values,
+    const r = groupSql(g1f, b1, 'g1', tz);
+    const w2 = whereSql(o, config, ctx, range);
+    const totals = await db.$queryRaw<{k1: string | null; v: number | null; n: number}[]>(
+      Prisma.sql`SELECT ${r.select} AS k1, ${measure.sql} AS v, COUNT(DISTINCT t.id)::float8 AS n FROM ${code(o.table)} t ${r.join} WHERE ${w2} GROUP BY 1 LIMIT ${MAX_CELLS}`,
     );
     for (const t of totals) {
       const row = rowMap.get(t.k1);

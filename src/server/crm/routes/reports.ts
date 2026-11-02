@@ -201,7 +201,7 @@ export const reports = new Hono<AppEnv>()
   .get('/refs/:ref', async (c) => {
     const sql = refList(c.req.param('ref'));
     if (!sql) throw notFound('List');
-    return c.json({rows: await c.var.db.$queryRawUnsafe<{id: string; label: string}[]>(sql)});
+    return c.json({rows: await c.var.db.$queryRaw<{id: string; label: string}[]>(sql)});
   })
 
   // GET so viewers can run reports too; the definition travels as JSON in `config`.

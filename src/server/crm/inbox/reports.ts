@@ -1,3 +1,4 @@
+import {Prisma} from '../../../generated/prisma/client';
 import {INBOX_CHANNELS} from '@/lib/inbox';
 import {registerReportObject} from '../lib/reports';
 
@@ -20,7 +21,7 @@ registerReportObject({
     OR (t."channel" = 'email' AND (t."accountId" IS NULL OR EXISTS (SELECT 1 FROM "EmailAccount" a WHERE a.id = t."accountId" AND a."userId" IS NULL))))`,
   ownerSql: 't."assigneeId"',
   ownerLabel: 'Assignee',
-  scopeSql: (me) => `t."assigneeId" = ${me} OR t."assigneeId" IS NULL`,
+  scopeSql: (me) => Prisma.sql`t."assigneeId" = ${me} OR t."assigneeId" IS NULL`,
   defaultDate: 'createdAt',
   fields: [
     {key: 'firstResponseHours', label: 'First response time (hours)', kind: 'number', sql: hoursBetween('firstInboundAt', 'firstResponseAt')},

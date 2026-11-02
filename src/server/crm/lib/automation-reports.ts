@@ -1,3 +1,4 @@
+import {Prisma} from '../../../generated/prisma/client';
 import {OBJECTS, RUN_SOURCES, RUN_STATUS} from '@/lib/automations';
 import {registerReportObject, registerReportRef} from './reports';
 
@@ -8,8 +9,8 @@ import {registerReportObject, registerReportRef} from './reports';
  */
 
 registerReportRef('automation', {
-  sql: `SELECT id, name AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Automation" WHERE id = ANY($1::text[])`,
-  list: `SELECT id, name AS label FROM "Automation" ORDER BY name LIMIT 500`,
+  sql: (ids) => Prisma.sql`SELECT id, name AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Automation" WHERE id = ANY(${ids}::text[])`,
+  list: Prisma.sql`SELECT id, name AS label FROM "Automation" ORDER BY name LIMIT 500`,
 });
 
 registerReportObject({

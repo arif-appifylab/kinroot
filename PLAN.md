@@ -15,8 +15,8 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | 4 | Email: providers, templates + editor, tracking, inbound replies, Gmail / Outlook sync; inbox; live chat | done |
 | 5 | Forms, lists and segments, broadcasts | done |
 | 6 | Tickets + support portal, meetings + booking pages, calendar sync | done |
-| 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | next |
-| 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | |
+| 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | done |
+| 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | next |
 | 9 | Public site pages (`/`, `/contact/`, `/demo/`), SEO, tests ported to vitest, build, `review.md` | |
 
 ## Where things live
@@ -136,14 +136,34 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
   (every editor, CRM and portal).
 - Calendar sync already used owner secrets and the outbound helper (phase 4); nothing to change.
 
+## Decisions (phase 7)
+
+- Report builder SQL: every query is ONE `Prisma.sql` run with the tagged `$queryRaw`. Values (ids, dates, the
+  zone, filter values, the date bucket, custom-field keys) are bound parameters; the only text pasted in is the
+  constant SQL of the object and field definitions in code (`code()` in `lib/reports.ts`). `RefDef.sql` is
+  `(ids) => Prisma.sql`, `list` a `Prisma.sql`, `scopeSql` `(me) => Prisma.sql`. Same for the automation date and
+  inactivity triggers (`lib/automations.ts`): table and owner column from fixed maps, values bound.
+  No `$queryRawUnsafe` is left in Kinroot's code.
+- Automation "Send a webhook" step: only to the webhook services in `src/crm/lib/webhook-targets.ts` (Zapier,
+  Make, n8n Cloud, Pipedream, Slack, Microsoft Teams, Google Chat, Discord, IFTTT), https only, no credentials or
+  port. Checked in the editor, when switching on (`automationProblems`) and again before each send (visible
+  change 3). Phase 8's Settings → Webhooks reuses the same list.
+- `/site-api/crm/auth/state` answers `401 token_expired` for an expired session, so `siteFetch` refreshes it:
+  before, the CRM bounced through the sign-in page every 10 minutes.
+- Report builder dropdowns ("Group by", "Break down by", measure field, "Date range on") listed only "None": the
+  field options came from a component `NativeSelect` can't read. Same bug in the original; fixed
+  (`fieldOptions()` in `components/reports/builder.tsx`).
+- Tests: `crm-reports` (buckets, tags, custom fields, every filter, breakdown, refs, member scope),
+  `crm-automation-triggers` (date, custom date, inactivity fire once), `crm-webhook-targets`, expired session.
+
 ## Open items (tracked)
 
-- `$queryRawUnsafe` in `lib/reports.ts`, `routes/reports.ts`, `lib/automations.ts` (phase 7): to tagged `Prisma.sql`.
 - Plain `<a href>` links to `/site-api/crm/...` downloads (exports, files) carry the session by cookie: fine live, signed out in the editor Preview.
 - Email preview frame (`components/inbox/parts.tsx`) inherits the page CSP: check its styles in phase 4.
 - `routes/incoming-webhooks.ts`, `routes/data-in.ts` store raw IPs in their request logs (phase 8).
 - Brand logo is still a data URL in the settings row (file bytes in the database): move to a public storage file.
 - The sonner toast library logs one CSP message per page load (its CSS loads from our stylesheet; harmless).
+- Report filter picker lists every company name to members limited to their own records (as before; contacts are not listed).
 - Automation merge field `{{owner.email}}` puts the record owner's address in emails to contacts, as before.
 
 ## Visible changes the rules force (approved by the owner)

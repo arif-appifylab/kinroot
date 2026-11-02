@@ -19,6 +19,7 @@ import {ConditionsEditor} from './conditions-editor';
 import {useRecordFields, useRecordOptions} from './hooks';
 import {MergeMenu, STEP_ICONS, UserChips} from './meta';
 import {useDateFields} from './trigger-panel';
+import {WEBHOOK_SERVICE_NAMES} from '@/lib/webhook-targets';
 
 type Props = {step: Step; object: AutoObject; onChange: (s: Step) => void};
 
@@ -448,8 +449,8 @@ function WebhookStep({step, onChange, automationId, isAdmin}: Props & {automatio
   };
   return (
     <>
-      <Field label="URL" hint="We POST JSON with the automation, the run, the record, its related records and the trigger data.">
-        <Input value={step.url ?? ''} onChange={(e) => onChange({...step, url: e.target.value})} placeholder="https://example.com/hooks/crm" />
+      <Field label="URL" hint={`We POST JSON with the automation, the run, the record, its related records and the trigger data. Webhooks go to ${WEBHOOK_SERVICE_NAMES}.`}>
+        <Input value={step.url ?? ''} onChange={(e) => onChange({...step, url: e.target.value})} placeholder="https://hooks.zapier.com/hooks/catch/…" />
       </Field>
       <div className="grid gap-2 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
         <p>

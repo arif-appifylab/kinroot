@@ -108,7 +108,7 @@ function GroupPicker({object, value, onChange, label, exclude, allowNone = true}
       <Field label={label}>
         <NativeSelect value={value?.field ?? ''} onChange={(e) => onChange(e.target.value ? {field: e.target.value, bucket: fields.find((f) => f.key === e.target.value)?.kind === 'date' ? 'month' : undefined} : null)}>
           {allowNone && <option value="">None</option>}
-          <FieldOptions fields={fields} />
+          {fieldOptions(fields)}
         </NativeSelect>
       </Field>
       {current?.kind === 'date' && (
@@ -123,7 +123,8 @@ function GroupPicker({object, value, onChange, label, exclude, allowNone = true}
 }
 
 /** Built-in fields first, custom fields in their own group. */
-function FieldOptions({fields}: {fields: CatalogueField[]}) {
+/** The options of a field picker, as elements: NativeSelect reads its `<option>` children, not a component's output. */
+function fieldOptions(fields: CatalogueField[]) {
   const own = fields.filter((f) => !f.custom);
   const custom = fields.filter((f) => f.custom);
   return (
@@ -156,7 +157,7 @@ function ConditionRow({object, cond, onChange, onRemove}: {object: CatalogueObje
             onChange({field: e.target.value, op: f ? OPS[f.kind][0]!.op : 'is', value: undefined});
           }}
         >
-          <FieldOptions fields={object.fields} />
+          {fieldOptions(object.fields)}
         </NativeSelect>
         <Button variant="ghost" size="icon-sm" onClick={onRemove} aria-label="Remove filter"><X /></Button>
       </div>
@@ -250,7 +251,7 @@ export function BuilderPanel({objects, config, onChange}: {objects: CatalogueObj
           ) : (
             <Field label="Of">
               <NativeSelect value={config.measure.field ?? ''} onChange={(e) => set({measure: {...config.measure, field: e.target.value}})}>
-                <FieldOptions fields={numeric} />
+                {fieldOptions(numeric)}
               </NativeSelect>
             </Field>
           )}
@@ -273,7 +274,7 @@ export function BuilderPanel({objects, config, onChange}: {objects: CatalogueObj
       <Section title="Filters">
         <Field label="Date range on">
           <NativeSelect value={filters.dateField ?? object.defaultDate} onChange={(e) => setFilters({dateField: e.target.value})}>
-            <FieldOptions fields={dates} />
+            {fieldOptions(dates)}
           </NativeSelect>
         </Field>
         <RangeFields range={filters.range} onChange={(range) => setFilters({range})} />

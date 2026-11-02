@@ -11,6 +11,7 @@
  */
 import {EVENT_GROUPS} from '@/lib/events';
 import type {SegmentRules} from '@/lib/segments';
+import {WEBHOOK_SERVICE_NAMES, webhookTarget} from './webhook-targets';
 
 export type AutoObject = 'contact' | 'company' | 'deal' | 'ticket' | 'none';
 export type Target = 'contact' | 'company' | 'deal' | 'ticket';
@@ -580,7 +581,6 @@ export const AUTOMATION_MERGE_FIELDS: {key: string; label: string; objects?: Aut
 export type Problem = {stepId: string | null; message: string};
 
 const hasRules = (c: Conditions | undefined) => !!c?.blocks.some((b) => b.rules.groups.some((g) => g.rules.length));
-const isHttpUrl = (u: string | undefined) => !!u && /^https?:\/\/[^\s/]+\.[^\s]+/i.test(u.trim());
 const isTime = (t: string | null | undefined) => !t || /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
 
 export type AutomationDraft = {name: string; object: AutoObject; trigger: Trigger; steps: Step[]};
@@ -670,7 +670,7 @@ export function automationProblems(a: AutomationDraft): Problem[] {
         need(s.assignee !== 'user' || s.userIds?.length, 'Pick who to notify');
         break;
       case 'webhook':
-        need(isHttpUrl(s.url), 'Fill in an http(s) URL');
+        need(webhookTarget(s.url), `Use a webhook URL from ${WEBHOOK_SERVICE_NAMES}`);
         break;
       case 'wait':
         if (s.waitMode === 'until_date') {

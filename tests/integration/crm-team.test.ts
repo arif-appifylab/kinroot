@@ -1,7 +1,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../src/server/app';
-import {resetCrm} from './support/crm';
+import {owner, resetCrm, setRoles, teammate} from './support/crm';
 import {Browser, configureEnv, DATABASE_URL, db, signedIn, userId} from './support/harness';
 
 /**
@@ -9,32 +9,6 @@ import {Browser, configureEnv, DATABASE_URL, db, signedIn, userId} from './suppo
  * CRM, the Owner's first visit, invites bound to the signed-in account, and the email rule
  * (an address is seen only by its own person and the site's owner).
  */
-
-/** Exactly these site roles (sign-up may have made the first account owner). */
-async function setRoles(email: string, ...slugs: string[]) {
-  const id = await userId(email);
-  const roles = await db.role.findMany({where: {slug: {in: slugs}}, select: {id: true}});
-  await db.userRole.deleteMany({where: {userId: id}});
-  await db.userRole.createMany({data: roles.map(role => ({userId: id, roleId: role.id}))});
-}
-
-async function owner() {
-  const browser = await signedIn(app, 'owner@example.com');
-  await setRoles('owner@example.com', 'owner');
-  return browser;
-}
-
-/** Signs up `email`, then joins the team through an invite the owner makes. */
-async function teammate(ownerBrowser: Browser, email: string, role: 'ADMIN' | 'MEMBER' | 'VIEWER' = 'MEMBER') {
-  const invite = await ownerBrowser.post('/site-api/crm/team/invite', {name: email.split('@')[0], email, role});
-  expect(invite.status).toBe(200);
-  const token = String(invite.json.inviteUrl).split('/invite/')[1]!;
-  const browser = await signedIn(app, email);
-  await setRoles(email, 'member');
-  const joined = await browser.post(`/site-api/crm/auth/invite/${token}`);
-  expect(joined.status).toBe(200);
-  return {browser, token};
-}
 
 describe.skipIf(!DATABASE_URL)('Kinroot team (integration, real Postgres)', () => {
   beforeAll(configureEnv);
@@ -55,6 +29,17 @@ describe.skipIf(!DATABASE_URL)('Kinroot team (integration, real Postgres)', () =
     expect(res.json.error).toBe('not_a_member');
     // Signing up is open: an account alone never becomes a team member.
     expect(await db.member.count({where: {userId: await userId('stranger@example.com')}})).toBe(0);
+  });
+
+  it('asks the browser to refresh an expired session instead of answering signed out', async () => {
+    const browser = await owner();
+    // The 10-minute access cookie is gone, the refresh cookie is still there: a "returning" visitor.
+    browser.jar.delete('__Host-site_at');
+    const state = await browser.get('/site-api/crm/auth/state');
+    expect(state.status).toBe(401);
+    expect(state.json.error).toBe('token_expired');
+    expect((await browser.post('/site-api/auth/refresh')).status).toBe(200);
+    expect((await browser.get('/site-api/crm/auth/state')).json.signedIn).toBe(true);
   });
 
   it("makes the site's owner the CRM Owner on the first visit, asks for setup once", async () => {

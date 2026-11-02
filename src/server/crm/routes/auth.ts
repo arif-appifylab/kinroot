@@ -2,6 +2,7 @@ import {Hono} from 'hono';
 import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
+import {problem} from '../../../platform/guards';
 import {maskEmail} from '../../../platform/auth/admin';
 import {publicFileUrl as platformPublicPath} from '../../../platform/files';
 import {sha256Hex} from '../kit/crypto';
@@ -45,6 +46,8 @@ async function inviteByToken(c: AppContext, token: string) {
 
 export const auth = new Hono<AppEnv>()
   .get('/state', async (c) => {
+    // An expired session is refreshed by the browser (`siteFetch` on 401 token_expired), not sent to sign in.
+    if (c.var.viewer.state === 'returning') return c.json(problem('token_expired', 'Your session needs refreshing.'), 401);
     const db = c.var.db;
     const me = c.var.user;
     const [settings, setupDone] = await Promise.all([getSettings(db), db.setting.findUnique({where: {key: SETUP_KEY}, select: {key: true}})]);

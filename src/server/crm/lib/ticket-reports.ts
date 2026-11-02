@@ -1,3 +1,4 @@
+import {Prisma} from '../../../generated/prisma/client';
 import {SOURCE_LABELS, TICKET_PRIORITIES, TICKET_STATUSES} from '@/lib/tickets';
 import {registerReportObject, registerReportRef} from './reports';
 
@@ -9,7 +10,7 @@ import {registerReportObject, registerReportRef} from './reports';
  */
 
 registerReportRef('contact', {
-  sql: `SELECT id, trim(concat_ws(' ', "firstName", "lastName")) AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Contact" WHERE id = ANY($1::text[])`,
+  sql: (ids) => Prisma.sql`SELECT id, trim(concat_ws(' ', "firstName", "lastName")) AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Contact" WHERE id = ANY(${ids}::text[])`,
   // No picker list: it would show every contact's name to members limited to their own records.
 });
 
@@ -24,7 +25,7 @@ registerReportObject({
   table: '"Ticket"',
   ownerSql: 't."assigneeId"',
   ownerLabel: 'Assignee',
-  scopeSql: (me) => `t."assigneeId" = ${me} OR t."assigneeId" IS NULL`,
+  scopeSql: (me) => Prisma.sql`t."assigneeId" = ${me} OR t."assigneeId" IS NULL`,
   defaultDate: 'createdAt',
   fields: [
     {key: 'firstResponseHours', label: 'First response time (hours)', kind: 'number', sql: hoursBetween('createdAt', 'firstResponseAt')},

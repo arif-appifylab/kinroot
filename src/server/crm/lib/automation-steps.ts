@@ -34,6 +34,7 @@ import {addToList, isContactInList, removeFromList} from './segments';
 import {assignTicket, changePriority, changeStatus, createTicket} from './tickets';
 import {signPayload} from './webhooks';
 import {memberWithEmail} from './users';
+import {WEBHOOK_SERVICE_NAMES, webhookTarget} from '@/lib/webhook-targets';
 
 const DAY = 86_400_000;
 
@@ -533,8 +534,10 @@ const EXECUTORS: Record<Step['type'], Executor> = {
   },
 
   async webhook(ctx, step) {
-    const url = (step.url ?? '').trim();
-    if (!/^https?:\/\//i.test(url)) throw new StepError('The webhook URL must start with http:// or https://');
+    // Only to the webhook services written in code (src/crm/lib/webhook-targets.ts), checked again at send time.
+    const target = webhookTarget(step.url);
+    if (!target) throw new StepError(`This webhook URL is not one Kinroot can send to. Use a URL from ${WEBHOOK_SERVICE_NAMES}.`);
+    const url = target.url.href;
     if (ctx.dry) return done(`Would POST the record to ${url} (signed)`);
     const object = ctx.run.object;
     const deliveryId = `${ctx.run.id}:${step.id}`;
