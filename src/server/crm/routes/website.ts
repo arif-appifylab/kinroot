@@ -1,4 +1,6 @@
 import {Hono} from 'hono';
+
+import {loadBrand} from '../lib/brand';
 import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
@@ -10,7 +12,23 @@ import {valid} from '../lib/http';
 import {ensureWebsiteDefaults, getWebsiteSettings, publicWebsite, saveWebsiteSettings, websiteChoices} from '../lib/website';
 
 /** GET /site-api/crm/public/website: what the landing pages show (no sign-in). */
-export const websitePublic = new Hono<AppEnv>().get('/website', async (c) => c.json(await publicWebsite(c.var.db)));
+export const websitePublic = new Hono<AppEnv>()
+  .get('/website', async (c) => c.json(await publicWebsite(c.var.db)))
+  /** GET /site-api/crm/public/brand: the company's name, logo and colours (titles, favicon, public pages). */
+  .get('/brand', async (c) => c.json(await loadBrand(c.var.db)))
+  /**
+   * GET /site-api/crm/public/brand.css: the company's colours over the default palette, in both
+   * themes (the CSP allows no inline style, so it is a stylesheet from this site). Only `#rgb` /
+   * `#rrggbb` values ever reach the CSS.
+   */
+  .get('/brand.css', async (c) => {
+    const b = await loadBrand(c.var.db);
+    const hex = (v: string) => (/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v) ? v : '');
+    const primary = hex(b.primary);
+    const secondary = hex(b.secondary);
+    const vars = [primary && `--primary:${primary};--ring:${primary};`, secondary && `--secondary:${secondary};`].filter(Boolean).join('');
+    return c.body(vars ? `:root,:root.dark{${vars}}` : '', 200, {'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=300'});
+  });
 
 const settingsSchema = z.object({
   enabled: z.boolean(),

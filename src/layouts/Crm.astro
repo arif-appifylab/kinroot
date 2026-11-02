@@ -40,7 +40,7 @@ const name = brand.name || BRAND.name;
     <meta name="robots" content="noindex" />
     <link rel="icon" href={brand.logo || '/kinroot-mark.svg'} />
     <!-- The company's own colours (Settings → Branding), as a stylesheet from this site: the CSP allows no inline style. -->
-    {(brand.primary || brand.secondary) && <link rel="stylesheet" href="/site-api/public/brand.css" />}
+    {(brand.primary || brand.secondary) && <link rel="stylesheet" href="/site-api/crm/public/brand.css" />}
     <!-- Before the first paint, so the page never flashes the wrong theme (src/crm/lib/theme.ts).
          Inline on purpose; its hash is added to this page's CSP above, so nothing else inline runs. -->
     <script is:inline set:html={THEME_BOOT} />

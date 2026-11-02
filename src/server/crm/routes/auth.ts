@@ -69,7 +69,7 @@ export const auth = new Hono<AppEnv>()
       const claimed = await db.setting.createMany({data: [{key: SETUP_KEY, value: new Date().toISOString()}], skipDuplicates: true});
       if (!claimed.count) throw new HTTPException(409, {message: 'This app is already set up'});
       await saveSettings(db, {brandName: body.brandName});
-      clearBrandCache();
+      await clearBrandCache();
       await seedApp(db, me.id, body.demoData);
       await audit(db, c, {action: 'auth.setup', entity: 'user', recordId: me.id, label: me.name, meta: {demoData: body.demoData}});
       return c.json({user: publicUser(me, await view(c))});

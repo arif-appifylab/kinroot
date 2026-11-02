@@ -65,7 +65,7 @@ export const settings = new Hono<AppEnv>()
       if (changes.length) await audit(db, c, {action: 'settings.updated', meta: {changes}});
       if (googleClientSecret !== undefined) await audit(db, c, {action: 'settings.oauth_secret', label: 'Google', meta: {cleared: !googleClientSecret}});
       if (microsoftClientSecret !== undefined) await audit(db, c, {action: 'settings.oauth_secret', label: 'Microsoft', meta: {cleared: !microsoftClientSecret}});
-      clearBrandCache();
+      await clearBrandCache();
       if (googleClientSecret !== undefined || microsoftClientSecret !== undefined) {
         const row = await db.setting.findUnique({where: {key: SECRETS_KEY}});
         const current = row ? await decryptJson<OAuthSecrets>(row.value as string).catch(() => ({}) as OAuthSecrets) : {};

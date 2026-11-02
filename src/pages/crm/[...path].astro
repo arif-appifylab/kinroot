@@ -8,15 +8,14 @@
  * The ONLY `.astro` file of the CRM: never add one per screen.
  */
 import CrmApp from '../../crm/CrmApp';
-import {DEFAULT_BRAND} from '../../crm/lib/brand';
 import Crm from '../../layouts/Crm.astro';
 import {config} from '../../platform/config';
+import {crmBrand} from '../../server/crm/page';
 import {pageContext} from '../../server/page';
 
 export const prerender = false;
 
-const {viewer} = await pageContext(Astro.request, Astro.response);
-const brand = DEFAULT_BRAND;
+const [{viewer}, brand] = await Promise.all([pageContext(Astro.request, Astro.response), crmBrand(Astro.request)]);
 const back = encodeURIComponent(`${Astro.url.pathname}${Astro.url.search}`);
 // The editor Preview's gateway drops cookies, so this page never sees the session there: the
 // app starts anyway and asks the Site API itself (it sends a signed-out visitor to sign in).

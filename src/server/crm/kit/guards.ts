@@ -40,11 +40,19 @@ export type AppContext = Context<AppEnv>;
 const ROLE_RANK = {VIEWER: 0, MEMBER: 1, ADMIN: 2, OWNER: 3} as const;
 export type RoleName = keyof typeof ROLE_RANK;
 
-/** `name` is a display copy of `users.name`; it follows the account, at most once per request. */
-async function syncName(db: Db, member: Member, viewer: Viewer): Promise<Member> {
+/** How stale "last seen" may get before a request refreshes it (one small write, not one per request). */
+const SEEN_EVERY_MS = 10 * 60_000;
+
+/**
+ * Keeps the team row in step with the account, at most one write per request: `name` is a display
+ * copy of `users.name`; `lastSeenAt` ("last seen 5 min ago" in Settings → Team) moves every 10 minutes.
+ */
+async function touch(db: Db, member: Member, viewer: Viewer): Promise<Member> {
   const name = viewer.name?.trim();
-  if (!name || name === member.name) return member;
-  return db.member.update({where: {id: member.id}, data: {name}});
+  const rename = !!name && name !== member.name;
+  const seen = !member.lastSeenAt || Date.now() - member.lastSeenAt.getTime() > SEEN_EVERY_MS;
+  if (!rename && !seen) return member;
+  return db.member.update({where: {id: member.id}, data: {...(rename ? {name} : {}), ...(seen ? {lastSeenAt: new Date()} : {})}});
 }
 
 /**
@@ -69,7 +77,7 @@ export const loadUser: MiddlewareHandler<AppEnv> = async (c, next) => {
         });
       }
     }
-    if (member?.active) user = {...(await syncName(db, member, viewer)), email: viewer.email ?? ''};
+    if (member?.active) user = {...(await touch(db, member, viewer)), email: viewer.email ?? ''};
   }
   c.set('user', user);
   await next();

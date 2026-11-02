@@ -46,7 +46,11 @@ export const keys = {
   inbox: ['inbox'] as const,
 };
 
-export type AuthState = {needsSetup: boolean; user: Me | null; brandName: string; demo: {email: string; password: string} | null};
+/**
+ * Who is here (GET /auth/state). Signing in is the site's (`/account/login/`); `user` is the team
+ * member, null for a signed-in account that is not on the team yet (it needs an invite).
+ */
+export type AuthState = {needsSetup: boolean; signedIn: boolean; user: Me | null; brandName: string};
 
 export const authQuery = {queryKey: keys.auth, queryFn: () => api.get<AuthState>('/auth/state'), staleTime: 60_000};
 

@@ -68,7 +68,7 @@ export const imports = new Hono<AppEnv>()
   })
 
   /** Upload step 3 with the entity, optional delimiter and listId: reads the stored CSV and guesses the mapping. */
-  .post('/upload/:fileId/complete', valid('json', z.object({entity, delimiter: z.string().max(2).nullish(), listId: z.string().max(40).nullish()})), async (c) => {
+  .post('/:fileId/complete', valid('json', z.object({entity, delimiter: z.string().max(2).nullish(), listId: z.string().max(40).nullish()})), async (c) => {
     const me = currentUser(c);
     const db = c.var.db;
     const form = c.req.valid('json');

@@ -11,8 +11,8 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | 0 | Template copied here, git, install | done |
 | 1 | Foundation: schema + migration, team model, Tailwind + Kinroot UI kit, `/crm` host page and router, CSP check | done |
 | 2 | Server: all of Kinroot's server code moved to `src/server/crm`, compiling and mounted at `/site-api/crm`; kit on the template's auth, database, jobs and storage; team, invites, uploads, exports / imports storage; integration tests | done |
-| 3 | Core CRM screens (client): app shell, sign-in / setup / invite pages, contacts, companies, deals, pipelines, notes, tasks, timeline, views, ⌘K search, custom fields, dashboard, team, profile | next |
-| 4 | Email: providers, templates + editor, tracking, inbound replies, Gmail / Outlook sync; inbox; live chat | |
+| 3 | Core CRM screens: shell, setup, invite, no-access, profile, contacts, companies, deals, pipelines, notes, tasks, timeline, views, ⌘K search, custom fields, dashboard, team (all signed-in screens compile; public pages are their phases) | done |
+| 4 | Email: providers, templates + editor, tracking, inbound replies, Gmail / Outlook sync; inbox; live chat | next |
 | 5 | Forms, lists and segments, broadcasts | |
 | 6 | Tickets + support portal, meetings + booking pages, calendar sync | |
 | 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | |
@@ -78,10 +78,22 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 - `@hono/zod-validator` kept (it is `hono/validator` with zod schemas) and TypeScript added as a
   dev tool (`npm run typecheck`; the template's own files have 11 errors of their own).
 
+## Decisions (phase 3)
+
+- The CRM's home (Kinroot's `/admin` dashboard) is `/crm/`; every other screen keeps its path under `/crm`.
+- Signed-in screens: Kinroot's `_app` file routes as they were; `_app.tsx` sends signed-out visitors to the
+  site's `/account/login/` and signed-in non-members to `/crm/no-access`; the Owner's first visit to `/crm/setup`.
+- Profile: the name is the account's (`PATCH /site-api/auth/me`, then Kinroot's copy); password, two-step
+  sign-in and devices link to the site's `/dashboard/account`.
+- Brand: `GET /site-api/crm/public/brand` (Site Cache, 1 day, cleared on save) and `/public/brand.css`
+  (validated `#hex` colours only); the root route loads it for `useBrand()`, the host page for the head.
+- "Last seen" in Settings → Team is refreshed on requests, at most every 10 minutes.
+
 ## Open items (tracked)
 
-- `$queryRawUnsafe` in `lib/reports.ts`, `routes/reports.ts` (phase 7), `lib/automations.ts` (phase 7),
-  `routes/tags.ts` (phase 3): to tagged `Prisma.sql`.
+- `$queryRawUnsafe` in `lib/reports.ts`, `routes/reports.ts`, `lib/automations.ts` (phase 7): to tagged `Prisma.sql`.
+- Plain `<a href>` links to `/site-api/crm/...` downloads (exports, files) carry the session by cookie: fine live, signed out in the editor Preview.
+- Email preview frame (`components/inbox/parts.tsx`) inherits the page CSP: check its styles in phase 4.
 - `routes/incoming-webhooks.ts`, `routes/data-in.ts` store raw IPs in their request logs (phase 8).
 - SMTP code (`email/smtp.ts`, `email/socket.ts`) still present, unreachable once phase 4 removes the provider.
 - Settings → Email still has fields for OAuth client secrets and provider keys (phase 4).
@@ -103,6 +115,10 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 9. Owner turns on Storage (a pack) for uploads; jobs default to 10 new a minute (batched to fit).
 
 ## Working locally
+
+Dev server: `npm run dev` (port 4321) with `.env` (local Postgres, `SITE_PREVIEW=1`). Locally no email is sent, so the
+test owner account was confirmed in the local database; its address and password are in `.env` (`DEV_OWNER_*`).
+
 
 ```bash
 # throwaway Postgres (phase-1 setup; any Postgres works)
