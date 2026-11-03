@@ -1,35 +1,69 @@
 ---
 /**
- * The <head> and body for Kinroot's PUBLIC pages (chat, later booking, support, forms): Kinroot's
- * styles and brand, light by default (they sit on a company's website), no site header or footer.
- * Pages that are links someone was sent (a chat, a booking to manage) pass `noindex`.
+ * The <head> and body for Kinroot's PUBLIC pages (the company website, chat, booking, support, forms):
+ * Kinroot's styles and brand, light by default (they sit on a company's website), no site header or
+ * footer. Pages that are links someone was sent (a chat, a booking to manage) pass `noindex`.
+ *
+ * `indexable` pages (the website: /, /contact/, /demo/) also get what search engines and social apps
+ * read, as the template's Base layout writes it (docs/agent/seo.md): canonical URL, Open Graph and
+ * Twitter tags, and on the home page the site's JSON-LD.
  */
 import '../crm/styles.css';
 
 import {BRAND, type Brand} from '../crm/lib/brand';
+import {SITE} from '../content/site';
+import {absoluteUrl, jsonLdText, siteJsonLd, type JsonLd} from '../lib/seo';
 
 interface Props {
   brand: Brand;
-  title: string;
+  /** Omitted on the home page: the tab shows the company's name alone. */
+  title?: string;
   description?: string;
   noindex?: boolean;
+  indexable?: boolean;
+  jsonLd?: JsonLd;
 }
 
-const {brand, title, description, noindex = false} = Astro.props;
+const {brand, title, description, noindex = false, indexable = false, jsonLd} = Astro.props;
 const name = brand.name || BRAND.name;
+const fullTitle = title ? `${title} · ${name}` : name;
+const path = Astro.url.pathname;
+const withSlash = (p: string) => (p.endsWith('/') ? p : `${p}/`);
+const seo = indexable && !noindex;
+// One URL per page: the path without its query.
+const canonical = seo ? absoluteUrl(withSlash(path)) : null;
+const logo = brand.logo && !brand.logo.startsWith('data:') ? absoluteUrl(brand.logo) : null;
+const structured = seo ? [...(path === '/' ? [siteJsonLd({name, logo}, description ?? '', SITE.lang)] : []), ...(jsonLd ? [jsonLd] : [])] : [];
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang={SITE.lang}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{`${title} · ${name}`}</title>
+    <title>{fullTitle}</title>
     {description && <meta name="description" content={description} />}
     {noindex && <meta name="robots" content="noindex" />}
+    {canonical && <link rel="canonical" href={canonical} />}
+    {
+      seo && (
+        <>
+          <meta property="og:site_name" content={name} />
+          <meta property="og:type" content="website" />
+          <meta property="og:title" content={title ?? name} />
+          {description && <meta property="og:description" content={description} />}
+          {canonical && <meta property="og:url" content={canonical} />}
+          <meta name="twitter:card" content="summary" />
+          <meta name="twitter:title" content={title ?? name} />
+          {description && <meta name="twitter:description" content={description} />}
+          <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+        </>
+      )
+    }
     <meta name="theme-color" content={brand.primary || BRAND.primary} />
     <link rel="icon" href={brand.logo || '/kinroot-mark.svg'} />
     {(brand.primary || brand.secondary) && <link rel="stylesheet" href="/site-api/crm/public/brand.css" />}
+    {structured.map((data) => <script type="application/ld+json" set:html={jsonLdText(data)} />)}
   </head>
   <body class="bg-background text-foreground">
     <slot />

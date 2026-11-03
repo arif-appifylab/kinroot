@@ -1,11 +1,11 @@
-import {Link} from '@tanstack/react-router';
+import {useQuery} from '@tanstack/react-query';
 import {Menu} from 'lucide-react';
 import type {ReactNode} from 'react';
 
-import {useAuth} from '@/lib/queries';
 import type {PublicWebsite} from '@/lib/website';
 import {useBrand} from '@/lib/use-brand';
 import {cn} from '@/lib/utils';
+import {siteFetch} from '../../../platform/browser';
 
 import {ChatWidget} from '../chat/chat-widget';
 import {Logo} from '../logo';
@@ -20,9 +20,9 @@ type NavItem = {key: SitePage | 'support'; label: string; to: string};
 function navItems(site: PublicWebsite): NavItem[] {
   return [
     {key: 'home' as const, label: 'Home', to: '/'},
-    site.demo && {key: 'demo' as const, label: 'Book a demo', to: '/demo'},
-    site.contact && {key: 'contact' as const, label: 'Contact us', to: '/contact'},
-    site.support && {key: 'support' as const, label: 'Support', to: '/support'},
+    site.demo && {key: 'demo' as const, label: 'Book a demo', to: '/demo/'},
+    site.contact && {key: 'contact' as const, label: 'Contact us', to: '/contact/'},
+    site.support && {key: 'support' as const, label: 'Support', to: '/support/'},
   ].filter((x): x is NavItem => !!x);
 }
 
@@ -33,20 +33,29 @@ function navItems(site: PublicWebsite): NavItem[] {
  */
 export function SiteLayout({site, page, children}: {site: PublicWebsite; page: SitePage; children: ReactNode}) {
   const brand = useBrand();
-  // Checked in the browser: the pages are server-rendered without the session.
-  const signedIn = !!useAuth().data?.user;
-  const account = signedIn ? {label: 'Open app', to: '/admin'} : {label: 'Sign in', to: '/login'};
+  // Checked in the browser: the pages are server-rendered without the session. Never sends anyone to
+  // sign in (the CRM's `api` does on a 401): a visitor whose session ended just sees "Sign in".
+  const signedIn = !!useQuery({
+    queryKey: ['site', 'signed-in'],
+    queryFn: async () => {
+      const res = await siteFetch('/site-api/crm/auth/state');
+      return res.ok ? !!((await res.json()) as {user?: unknown}).user : false;
+    },
+    retry: false,
+    staleTime: 60_000,
+  }).data;
+  const account = signedIn ? {label: 'Open app', to: '/crm/'} : {label: 'Sign in', to: '/account/login/?next=%2Fcrm%2F'};
   const items = navItems(site);
-  const cta = site.demo ? {label: 'Book a demo', to: '/demo'} : site.contact ? {label: 'Contact us', to: '/contact'} : null;
+  const cta = site.demo ? {label: 'Book a demo', to: '/demo/'} : site.contact ? {label: 'Contact us', to: '/contact/'} : null;
   return (
     <div className="relative flex min-h-dvh flex-col overflow-hidden bg-background">
       <div className="blob -top-48 -left-40 size-[520px] bg-primary/15" />
       <div className="blob top-[420px] -right-48 size-[520px] bg-secondary/15" />
 
       <header className="relative z-10 mx-auto flex w-full max-w-6xl items-center gap-4 px-4 py-5 sm:px-6">
-        <Link to="/" aria-label={`${brand.name} home`} className="min-w-0 shrink-0">
+        <a href="/" aria-label={`${brand.name} home`} className="min-w-0 shrink-0">
           <Logo />
-        </Link>
+        </a>
         <nav aria-label="Main" className="ml-6 hidden items-center gap-1 lg:flex">
           {items.map((n) => (
             <a

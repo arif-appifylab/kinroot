@@ -205,9 +205,11 @@ async function ensureJob(db: Db, run: {id: string; status: string}) {
  * this is always safe; the key keeps it to one rescue per run every ten minutes.
  */
 async function rescueRuns(db: Db) {
+  // The cut-off is bound from here: the columns hold UTC wall times, and now() would follow the database's zone.
+  const before = new Date(Date.now() - 2 * 60_000);
   const stuck = await db.$queryRaw<{id: string}[]>`
     SELECT r.id FROM "AutomationRun" r
-    WHERE (r.status = 'running' AND r."startedAt" < now() - interval '2 minutes') OR (r.status = 'waiting' AND r."waitUntil" < now() - interval '2 minutes')
+    WHERE (r.status = 'running' AND r."startedAt" < ${before}) OR (r.status = 'waiting' AND r."waitUntil" < ${before})
     LIMIT 50`;
   const slot = Math.floor(Date.now() / 600_000);
   for (const r of stuck) await enqueue(db, 'automation.run', {runId: r.id}, {key: `rescue-${r.id}-${slot}`});

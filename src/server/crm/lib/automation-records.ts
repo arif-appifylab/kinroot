@@ -7,6 +7,7 @@ import type {Company, Contact, Deal, Stage, Ticket} from '../../../generated/pri
 import {RECORD_FIELDS, customRecordFields, ENTITY_OF, type AutoObject, type ConditionBlock, type Conditions, type RecordField, type Target} from '@/lib/automations';
 import {ruleComplete, type SegmentRule} from '@/lib/segments';
 import {PRIORITY, STATUS} from '@/lib/tickets';
+import {CRM_APP} from '../kit/config';
 import type {Db} from '../kit/db';
 import {mergeFields, type MergeContext} from '../email/render';
 import {segmentWhere} from './segments';
@@ -129,7 +130,7 @@ function extraValues(m: MergeInput): Record<string, string | null | undefined> {
     'owner.first_name': m.owner?.name.split(' ')[0],
     'owner.email': m.owner?.email,
     'record.name': m.object === 'none' ? null : labelOf(m.object, primary),
-    'record.url': path && m.automation.origin ? `${m.automation.origin}${path}` : path,
+    'record.url': path ? `${m.automation.origin || ''}${CRM_APP}${path}` : path,
     'automation.name': m.automation.name,
   };
 }

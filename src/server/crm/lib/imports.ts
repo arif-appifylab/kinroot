@@ -31,7 +31,7 @@ import {
   type ImportTarget,
   type IoEntity,
 } from '@/lib/import-export';
-import {config} from '../kit/config';
+import {config, CRM_APP} from '../kit/config';
 import {randomToken, sha256Hex} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {companyBody, normalizeDomain} from '../routes/companies';
@@ -1055,7 +1055,7 @@ async function finishRun(db: Db, imp: Import, status: 'done' | 'failed' | 'cance
       summary,
       ...(errorFileId ? ['', `Rows with errors (link valid for 7 days): ${await signedFileUrl(origin, errorFileId)}`] : []),
       '',
-      `Open: ${origin}${link}`,
+      `Open: ${origin}${CRM_APP}${link}`,
     ];
     await sendSystemEmail(db, {to: [user.email], subject: status === 'done' ? `Import finished: ${imp.fileName}` : `Import failed: ${imp.fileName}`, text: lines.join('\n')}).catch((e) => console.error('[import] email', String((e as Error)?.message ?? e).slice(0, 200)));
   }

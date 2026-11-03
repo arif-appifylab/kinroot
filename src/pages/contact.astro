@@ -1,0 +1,32 @@
+---
+/**
+ * The company website's Contact us page (Kinroot's Settings → Website), rendered on the server and hydrated
+ * (src/crm/public/site-page.tsx). Not set up: a 404 that says so; the read failed: 503.
+ */
+import SitePage from '../crm/public/site-page';
+import CrmPublic from '../layouts/CrmPublic.astro';
+import {websitePage, WEBSITE_CACHE} from '../server/crm/site-page';
+
+export const prerender = false;
+
+const {site, brand} = await websitePage(Astro.request);
+const ready = !!site && site.enabled && !!site.contact;
+Astro.response.status = !site ? 503 : ready ? 200 : 404;
+if (ready) Astro.response.headers.set('Cache-Control', WEBSITE_CACHE);
+const name = brand.name || 'us';
+---
+
+<CrmPublic brand={brand} title="Contact us" description={`Send ${name} a message: a real person reads every one and replies by email.`} indexable={ready} noindex={!ready}>
+  {
+    site ? (
+      <SitePage client:load site={site} brand={brand} page="contact" />
+    ) : (
+      <main class="grid min-h-screen place-items-center p-6 text-center">
+        <div>
+          <h1 class="text-xl font-bold">This page is not available right now</h1>
+          <p class="mt-2 text-sm text-muted-foreground">Please try again in a few minutes.</p>
+        </div>
+      </main>
+    )
+  }
+</CrmPublic>

@@ -366,7 +366,8 @@ export async function moveToBin(db: Db, entity: BinEntity, ids: string[], actor:
 
 // ─── Restore ───
 
-const TARGET_MODEL: Record<Target, string> = {user: 'user', contact: 'contact', company: 'company', deal: 'deal', stage: 'stage', activity: 'activity', ticket: 'ticket', form: 'form', contactList: 'contactList', scoreRule: 'scoreRule', emailAccount: 'emailAccount', emailThread: 'emailThread', emailMessage: 'emailMessage', channelIdentity: 'channelIdentity'};
+// `user` targets are team members (ownerId, actorId, …): the `Member` table here, not the site's `users`.
+const TARGET_MODEL: Record<Target, string> = {user: 'member', contact: 'contact', company: 'company', deal: 'deal', stage: 'stage', activity: 'activity', ticket: 'ticket', form: 'form', contactList: 'contactList', scoreRule: 'scoreRule', emailAccount: 'emailAccount', emailThread: 'emailThread', emailMessage: 'emailMessage', channelIdentity: 'channelIdentity'};
 const TABLE_TARGET: Partial<Record<Table, Target>> = {contact: 'contact', company: 'company', deal: 'deal', ticket: 'ticket', form: 'form', contactList: 'contactList', activity: 'activity', emailThread: 'emailThread', emailMessage: 'emailMessage'};
 
 /** Keeps known columns only (a column dropped since the delete would fail the insert). */

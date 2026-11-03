@@ -1,7 +1,7 @@
 import type {Booking, BookingLink, Prisma} from '../../../generated/prisma/client';
 import type {User} from '../kit/guards';
 import {durationLabel, whenIn} from '@/lib/scheduling';
-import {config} from '../kit/config';
+import {config, CRM_APP} from '../kit/config';
 import type {Db} from '../kit/db';
 import {sendSystemEmail} from '../email/service';
 import {getSettings} from '../lib/settings';
@@ -79,7 +79,7 @@ export async function bookingEmail(db: Db, p: {bookingId: string; change: 'booke
   );
 
   if (b.host?.email) {
-    const contactUrl = b.contactId ? `${origin}/contacts/${b.contactId}` : `${origin}/meetings`;
+    const contactUrl = b.contactId ? `${origin}${CRM_APP}/contacts/${b.contactId}` : `${origin}${CRM_APP}/meetings`;
     const hostLines = [
       p.change === 'canceled'
         ? `${b.name} canceled ${title}.${b.cancelReason ? `\nReason: ${b.cancelReason}` : ''}`

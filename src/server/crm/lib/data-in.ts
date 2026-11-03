@@ -37,6 +37,7 @@ import {
   type DataInRecord,
 } from '@/lib/data-in';
 import {decryptJson, encryptJson, randomToken, sha256Hex} from '../kit/crypto';
+import {CRM_APP} from '../kit/config';
 import type {Db} from '../kit/db';
 import {normalizeDomain} from '../routes/companies';
 import {contactName} from '../routes/contacts';
@@ -230,7 +231,8 @@ type Handled = {status: 200 | 201; result: Record<string, unknown>};
 const touch = (ctx: Ctx, entity: DataInRecord['entity'], id: string, label: string) => {
   if (ctx.records.length < 25 && !ctx.records.some((r) => r.entity === entity && r.id === id)) ctx.records.push({entity, id, label: label.slice(0, 120)});
 };
-const recordUrl = (ctx: Ctx, path: string) => `${ctx.origin}${path}`;
+/** The record's screen in the CRM (under /crm). */
+const recordUrl = (ctx: Ctx, path: string) => `${ctx.origin}${CRM_APP}${path}`;
 const defined = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
 const lower = (s: string) => s.trim().toLowerCase();
 const apiSource = (ctx: Ctx) => `API: ${ctx.key.name}`.slice(0, 100);

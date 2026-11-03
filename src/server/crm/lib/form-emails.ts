@@ -1,6 +1,6 @@
 import type {Prisma} from '../../../generated/prisma/client';
 import {answerText, type StoredAnswer} from '@/lib/forms';
-import {config} from '../kit/config';
+import {config, CRM_APP} from '../kit/config';
 import type {Db} from '../kit/db';
 import {sendEmail, sendSystemEmail} from '../email/service';
 import {getSettings} from './settings';
@@ -25,7 +25,7 @@ export async function formAfterSubmit(db: Db, submissionId: string) {
     const brand = (await getSettings(db)).brandName;
     const who = sub.contact ? [sub.contact.firstName, sub.contact.lastName].filter(Boolean).join(' ') : sub.email ?? 'Someone';
     const lines = answers.map((a) => `${a.label}\n${answerText(a.type, a.value)}`).join('\n\n');
-    const link = sub.contact ? `${origin}/contacts/${sub.contact.id}` : `${origin}/forms/${sub.formId}?tab=results`;
+    const link = sub.contact ? `${origin}${CRM_APP}/contacts/${sub.contact.id}` : `${origin}${CRM_APP}/forms/${sub.formId}?tab=results`;
     const sent = await sendSystemEmail(db, {
       to: settings.notifyEmails,
       subject: `New ${sub.form.name} response from ${who}`,

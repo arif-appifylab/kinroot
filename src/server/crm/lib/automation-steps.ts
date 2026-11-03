@@ -19,7 +19,7 @@ import type {EventType} from '@/lib/events';
 import {ENTITY_OF, UNIT_MS, WEEKDAY_SHORT, type AssigneeMode, type AutoObject, type Step, type Target} from '@/lib/automations';
 import {addDays, isTimeZone, localDate, weekdayOf, whenIn, zonedTime} from '@/lib/scheduling';
 import {PRIORITY, STATUS, TICKET_PRIORITIES, TICKET_STATUSES} from '@/lib/tickets';
-import {config} from '../kit/config';
+import {config, CRM_APP} from '../kit/config';
 import {encryptJson, decryptJson, randomToken} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {sendEmail, sendSystemEmail} from '../email/service';
@@ -527,7 +527,7 @@ const EXECUTORS: Record<Step['type'], Executor> = {
     const emailed = await ctx.memo('notified', async () => {
       await notify(ctx.db, users.map((u) => u.id), {type: 'automation', title, body, link: path ?? '/automations'});
       if (!step.email) return false;
-      const url = path ? `${originOf(ctx.automation)}${path}` : '';
+      const url = path ? `${originOf(ctx.automation)}${CRM_APP}${path}` : '';
       return sendSystemEmail(ctx.db, {to: users.map((u) => u.email).filter(Boolean), subject: title, text: [body, url].filter(Boolean).join('\n\n') || title}).catch(() => false);
     });
     return done(`Notified ${names}: "${title}"${step.email ? (emailed ? ' (and by email)' : ' (no mailbox for the email copy)') : ''}`, {userIds: users.map((u) => u.id), emailed});

@@ -3,6 +3,8 @@ import type {APIRoute} from 'astro';
 import {postHref, publishedPosts} from '../lib/posts';
 import {absoluteUrl, xmlEscape as escape} from '../lib/seo';
 import {backend, read} from '../server/backend';
+import {crmRead} from '../server/crm/page';
+import type {PublicWebsite} from '../crm/lib/website';
 
 /**
  * `/sitemap.xml`, rendered ON REQUEST (it lists the open jobs from the Site
@@ -16,7 +18,8 @@ import {backend, read} from '../server/backend';
  */
 export const prerender = false;
 
-const EXCLUDE = new Set(['/404/', '/500/', '/checkout/', '/thanks/']);
+// Kinroot: the chat popup and a customer's own requests are noindex pages.
+const EXCLUDE = new Set(['/404/', '/500/', '/checkout/', '/thanks/', '/chat/', '/support/tickets/']);
 const PRIVATE = /^\/(account|portal|site-api)(\/|$)/;
 
 /** `./about.astro` → `/about/`, `./blog/index.astro` → `/blog/` (every page URL ends with `/`, like the canonical). */
@@ -27,12 +30,19 @@ const pagePaths = Object.keys(import.meta.glob('./**/*.astro'))
   .sort();
 
 export const GET: APIRoute = async ({request}) => {
-  const [posts, jobs] = await Promise.all([
+  const [posts, jobs, website] = await Promise.all([
     publishedPosts(),
     read<{jobs: {slug: string; updatedAt: string}[]}>(backend(request).jobs.sitemap.$get()),
+    crmRead<PublicWebsite>(request, '/public/website'),
+  ]);
+  // Kinroot's website pages only when they show something (off: `/` opens the CRM, the others are 404s).
+  const hidden = new Set([
+    ...(website && !website.enabled ? ['/', '/contact/', '/demo/'] : []),
+    ...(website && !website.contact ? ['/contact/'] : []),
+    ...(website && !website.demo ? ['/demo/'] : []),
   ]);
   const entries: {path: string; lastmod?: string}[] = [
-    ...pagePaths.map(path => ({path})),
+    ...pagePaths.filter(path => !hidden.has(path)).map(path => ({path})),
     ...posts.map(post => ({path: postHref(post), lastmod: (post.data.updatedAt ?? post.data.publishedAt).toISOString()})),
     ...(jobs?.jobs ?? []).map(job => ({path: `/jobs/${encodeURIComponent(job.slug)}/`, lastmod: job.updatedAt})),
   ];

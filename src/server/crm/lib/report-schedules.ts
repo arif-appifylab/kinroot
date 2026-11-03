@@ -7,7 +7,7 @@ import {PAUSE_AFTER_FAILURES, describeSchedule} from '@/lib/report-schedules';
 import {reportConfigSchema, type DateRange, type ReportOverrides} from '@/lib/reports';
 import {addDays, isTimeZone, localDate, weekdayOf, zonedTime} from '@/lib/scheduling';
 import type {DashboardFilters} from '@/lib/types';
-import {config} from '../kit/config';
+import {config, CRM_APP} from '../kit/config';
 import {fromB64, sign, toB64Url, verifySignature} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {emailBrand, getEmailDesign} from '../email/design';
@@ -156,7 +156,7 @@ const visibleTo = (owner: Pick<Member, 'id'>, x: {shared: boolean; ownerId: stri
 export const targetName = (s: Pick<ScheduleWithTarget, 'report' | 'dashboard'>) => s.report?.name ?? s.dashboard?.name ?? 'Deleted report';
 export const origin = (s: Pick<ReportSchedule, 'origin'>) => config.siteUrl() || s.origin;
 export const deepLink = (s: Pick<ReportSchedule, 'origin' | 'reportId' | 'dashboardId'>) =>
-  `${origin(s)}${s.reportId ? `/reports/${s.reportId}` : `/reports/dashboards/${s.dashboardId}`}`;
+  `${origin(s)}${CRM_APP}${s.reportId ? `/reports/${s.reportId}` : `/reports/dashboards/${s.dashboardId}`}`;
 
 const fileSlug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'report';
 

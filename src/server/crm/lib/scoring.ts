@@ -276,7 +276,7 @@ export async function rescoreContacts(db: Db, contactIds: string[], opts: Rescor
   const changed = before.filter((c) => (totals.get(c.id) ?? 0) !== c.score).map((c) => ({...c, next: totals.get(c.id) ?? 0}));
   if (changed.length) {
     await db.$executeRaw`
-      UPDATE "Contact" AS c SET score = v.score, "scoreUpdatedAt" = now()
+      UPDATE "Contact" AS c SET score = v.score, "scoreUpdatedAt" = ${new Date()}
       FROM (VALUES ${Prisma.join(changed.map((c) => Prisma.sql`(${c.id}, ${c.next}::int)`))}) AS v(id, score)
       WHERE c.id = v.id`;
   }

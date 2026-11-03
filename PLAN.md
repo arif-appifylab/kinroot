@@ -17,7 +17,7 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | 6 | Tickets + support portal, meetings + booking pages, calendar sync | done |
 | 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | done |
 | 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | done |
-| 9 | Public site pages (`/`, `/contact/`, `/demo/`), SEO, tests ported to vitest, build, `review.md` | next |
+| 9 | Public site pages (`/`, `/contact/`, `/demo/`), SEO, tests ported to vitest, build, `review.md` | done |
 
 ## Where things live
 
@@ -173,6 +173,28 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
   while a page rendered in-process ran with no handler and were dropped (and their backlog rows deleted).
 - Import lookups are bounded (`LOOKUP_LIMIT`); log lines carry the error message only, never the error object.
 - Tests: `crm-webhooks`, `crm-import-export` (a fake platform file API in `tests/integration/support/crm.ts`).
+
+## Decisions (phase 9)
+
+- The company website (Settings → Website) is the site's home: `src/pages/index.astro`, `contact.astro`, `demo.astro`,
+  rendered on the server (real HTML, one `<h1>`, own title and description) and hydrated as one island
+  (`src/crm/public/site-page.tsx`: menu, chat bubble, form, booking). Website off: `/` opens `/crm/` (as before);
+  `/contact/` and `/demo/` show "unavailable" with a 404. A failed read is a 503. `Cache-Control: public, max-age=60`
+  (nothing in them reads the visitor). The template's marketing home is replaced; its blog, jobs and about stay.
+- `CrmPublic.astro` writes the SEO head for `indexable` pages (canonical, Open Graph, Twitter, the home page's
+  JSON-LD through `jsonLdText`), as `Base.astro` does. The sitemap lists the website pages only when they show
+  something, and leaves out `/chat/` and `/support/tickets/` (noindex).
+- The site header's "Sign in / Open app" asks with `siteFetch`, never through the CRM's `api` (which sends a 401
+  to sign-in): a visitor with an ended session just sees "Sign in". Links: `/crm/`, `/account/login/?next=%2Fcrm%2F`.
+- The original test scripts (17 scripts in scripts/*.mjs, against a running server) are ported to vitest
+  integration tests in `tests/integration/ported/` (216 tests): SMTP sinks became captured Resend sends, `/jobs/run`
+  direct tick calls, real waits moved timestamps. Checks of removed features (SMTP, Kinroot's own sign-in log,
+  iframe embeds) are dropped; the reports list each one.
+- The ports found real bugs, fixed: recycle-bin restores always failed (`TARGET_MODEL.user` looked in the site's
+  `users`, not `Member`); links in emails and API answers missed `/crm` (scheduled reports, Data in, form, booking,
+  reply and import emails, automation `record.url`, the OAuth callback redirects); two raw queries compared with
+  the database's `now()` (stuck-run rescue, `scoreUpdatedAt`): wrong on a database not in UTC, now bound from code.
+- `/site-api/crm/public/website` is in the Site Cache (5 minutes, cleared when Settings → Website saves).
 
 ## Open items (tracked)
 

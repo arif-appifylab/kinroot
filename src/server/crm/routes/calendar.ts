@@ -3,7 +3,7 @@ import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
 import type {CalendarConnection} from '../../../generated/prisma/client';
-import {publicOrigin} from '../kit/config';
+import {CRM_APP, publicOrigin} from '../kit/config';
 import {encryptJson, sign, verifySignature} from '../kit/crypto';
 import {currentUser, type AppContext, type AppEnv} from '../kit/guards';
 import {calendarAuthorizeUrl, calendarClient, exchangeCalendarCode, type CalendarProvider} from '../calendar/oauth';
@@ -42,9 +42,9 @@ export const calendar = new Hono<AppEnv>()
     const me = currentUser(c);
     const kind = c.req.param('kind') as CalendarProvider;
     if (!PROVIDERS.includes(kind)) throw notFound('Provider');
-    if (me.role === 'VIEWER') return c.redirect('/settings/calendar?error=' + encodeURIComponent('Read-only accounts cannot connect a calendar'));
+    if (me.role === 'VIEWER') return c.redirect(`${CRM_APP}/settings/calendar?error=` + encodeURIComponent('Read-only accounts cannot connect a calendar'));
     const client = await calendarClient(c.var.db, kind);
-    if (!client) return c.redirect('/settings/calendar?error=' + encodeURIComponent(`An admin needs to add the ${kind === 'google' ? 'Google' : 'Microsoft'} OAuth app in Settings → Email first`));
+    if (!client) return c.redirect(`${CRM_APP}/settings/calendar?error=` + encodeURIComponent(`An admin needs to add the ${kind === 'google' ? 'Google' : 'Microsoft'} OAuth app in Settings → Email first`));
     // Own prefix, so a mailbox OAuth state can't be replayed here (and vice versa).
     const payload = `calendar.${kind}.${me.id}.${Date.now() + 10 * 60_000}`;
     return c.redirect(calendarAuthorizeUrl(kind, client, redirectUri(c, kind), `${payload}.${await sign(payload)}`));
@@ -54,7 +54,7 @@ export const calendar = new Hono<AppEnv>()
     const me = currentUser(c);
     const db = c.var.db;
     const kind = c.req.param('kind') as CalendarProvider;
-    const back = (msg: string, ok = false) => c.redirect(`/settings/calendar?${ok ? 'connected' : 'error'}=${encodeURIComponent(msg)}`);
+    const back = (msg: string, ok = false) => c.redirect(`${CRM_APP}/settings/calendar?${ok ? 'connected' : 'error'}=${encodeURIComponent(msg)}`);
     if (c.req.query('error')) return back(c.req.query('error_description') ?? c.req.query('error')!);
 
     const [prefix, k, userId, exp, sig] = (c.req.query('state') ?? '').split('.');

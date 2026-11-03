@@ -30,10 +30,10 @@ function Way({href, onClick, icon, tone, title, text}: {href?: string; onClick?:
 export function SiteHome({site}: {site: PublicWebsite}) {
   const brand = useBrand();
   const ways = [
-    site.demo && <Way key="demo" href="/demo" icon={<CalendarDays />} tone="blue" title="Book a demo" text={`${site.demo.name} · ${site.demo.minutes} min`} />,
+    site.demo && <Way key="demo" href="/demo/" icon={<CalendarDays />} tone="blue" title="Book a demo" text={`${site.demo.name} · ${site.demo.minutes} min`} />,
     site.chat && <Way key="chat" onClick={openChat} icon={<MessageCircle />} tone="violet" title="Chat with us" text="Talk to the team right now" />,
-    site.contact && <Way key="contact" href="/contact" icon={<Mail />} tone="teal" title="Contact us" text="Send a message, we reply by email" />,
-    site.support && <Way key="support" href="/support" icon={<LifeBuoy />} tone="amber" title="Get support" text="Already a customer? Open a request" />,
+    site.contact && <Way key="contact" href="/contact/" icon={<Mail />} tone="teal" title="Contact us" text="Send a message, we reply by email" />,
+    site.support && <Way key="support" href="/support/" icon={<LifeBuoy />} tone="amber" title="Get support" text="Already a customer? Open a request" />,
   ].filter(Boolean);
 
   return (
@@ -48,12 +48,12 @@ export function SiteHome({site}: {site: PublicWebsite}) {
           <div className="mt-8 flex flex-wrap gap-3">
             {site.demo && (
               <Button size="lg" asChild>
-                <a href="/demo"><CalendarDays /> Book a demo</a>
+                <a href="/demo/"><CalendarDays /> Book a demo</a>
               </Button>
             )}
             {site.contact && (
               <Button size="lg" variant="secondary" asChild>
-                <a href="/contact"><Mail /> Contact us</a>
+                <a href="/contact/"><Mail /> Contact us</a>
               </Button>
             )}
           </div>
@@ -97,12 +97,12 @@ export function SiteHome({site}: {site: PublicWebsite}) {
             <div className="flex flex-wrap gap-3">
               {site.demo && (
                 <Button size="lg" variant="secondary" asChild className="border-transparent text-slate-900">
-                  <a href="/demo">Book a demo</a>
+                  <a href="/demo/">Book a demo</a>
                 </Button>
               )}
               {site.contact && (
                 <Button size="lg" variant="ghost" asChild className="text-white hover:bg-white/15 hover:text-white">
-                  <a href="/contact">Contact us</a>
+                  <a href="/contact/">Contact us</a>
                 </Button>
               )}
             </div>

@@ -1,5 +1,5 @@
 import type {EmailAccount} from '../../../generated/prisma/client';
-import {config} from '../kit/config';
+import {config, CRM_APP} from '../kit/config';
 import type {Db} from '../kit/db';
 import {escapeHtml} from '@/lib/email-html';
 import {parseAddressList, stripAngle, type Address} from './mime';
@@ -73,7 +73,7 @@ export async function forwardReply(db: Db, messageId: string, origin = '') {
   if (!to || to.toLowerCase() === m.account.replyTo?.toLowerCase()) return;
 
   const from = m.fromName ? `${m.fromName} <${m.fromEmail}>` : m.fromEmail;
-  const link = `${config.siteUrl() || origin}/inbox?thread=${m.threadId}`;
+  const link = `${config.siteUrl() || origin}${CRM_APP}/inbox?thread=${m.threadId}`;
   const note = `Reply from ${from}, logged in the CRM: ${link}`;
   await sendSystemEmail(db, {
     to: [to],

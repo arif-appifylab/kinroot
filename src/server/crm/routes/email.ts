@@ -5,7 +5,7 @@ import {z} from 'zod';
 import type {EmailAccount} from '../../../generated/prisma/client';
 import {GALLERY} from '@/lib/email-gallery';
 import {toEmailHtml} from '@/lib/email-html';
-import {publicOrigin} from '../kit/config';
+import {CRM_APP, publicOrigin} from '../kit/config';
 import {decryptJson, encryptJson, sign, verifySignature} from '../kit/crypto';
 import {currentUser, isAdmin, requireRole, type AppContext, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
@@ -239,7 +239,7 @@ export const emailRoutes = new Hono<AppEnv>()
     const kind = c.req.param('kind') as OAuthKind;
     if (kind !== 'google' && kind !== 'microsoft') throw notFound('Provider');
     const client = await oauthClient(c.var.db, kind);
-    if (!client) return c.redirect('/settings/email?error=' + encodeURIComponent(`Add your ${kind === 'google' ? 'Google' : 'Microsoft'} OAuth client ID and secret first`));
+    if (!client) return c.redirect(`${CRM_APP}/settings/email?error=` + encodeURIComponent(`Add your ${kind === 'google' ? 'Google' : 'Microsoft'} OAuth client ID and secret first`));
     const shared = c.req.valid('query').shared === '1' && isAdmin(me);
     const payload = `${kind}.${me.id}.${shared ? 1 : 0}.${Date.now() + 10 * 60_000}`;
     const state = `${payload}.${await sign(payload)}`;
@@ -250,7 +250,7 @@ export const emailRoutes = new Hono<AppEnv>()
   .get('/oauth/:kind/callback', async (c) => {
     const me = currentUser(c);
     const kind = c.req.param('kind') as OAuthKind;
-    const back = (msg: string, ok = false) => c.redirect(`/settings/email?${ok ? 'connected' : 'error'}=${encodeURIComponent(msg)}`);
+    const back = (msg: string, ok = false) => c.redirect(`${CRM_APP}/settings/email?${ok ? 'connected' : 'error'}=${encodeURIComponent(msg)}`);
     if (c.req.query('error')) return back(c.req.query('error_description') ?? c.req.query('error')!);
 
     const [k, userId, shared, exp, sig] = (c.req.query('state') ?? '').split('.');

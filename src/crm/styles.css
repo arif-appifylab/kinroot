@@ -12,6 +12,9 @@
 @source '../pages/csat';
 @source '../pages/unsubscribe';
 @source '../pages/report-unsubscribe';
+@source '../pages/index.astro';
+@source '../pages/contact.astro';
+@source '../pages/demo.astro';
 @import 'tw-animate-css';
 /* Self-hosted (the CSP allows fonts from this site only): no Google Fonts request. */
 @import '@fontsource-variable/plus-jakarta-sans';
