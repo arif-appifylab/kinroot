@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/react-query';
 import {createFileRoute} from '@tanstack/react-router';
 import {ArrowDownToLine, ArrowUpFromLine, CheckCircle2, ChevronDown, ChevronRight, Clock, Copy, Eye, FlaskConical, Info, KeyRound, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Send, ShieldCheck, Trash2, TriangleAlert, Webhook as WebhookIcon} from 'lucide-react';
-import {useId, useMemo, useState} from 'react';
+import {useId, useMemo, useRef, useState} from 'react';
 import {toast} from 'sonner';
 import {z} from 'zod';
 
@@ -24,6 +24,7 @@ import {ago, dateTime} from '@/lib/format';
 import {keys, useApiMutation, useMe} from '@/lib/queries';
 import type {JobsStatus, Webhook, WebhookDelivery} from '@/lib/types';
 import {cn} from '@/lib/utils';
+import {WEBHOOK_SERVICE_NAMES, webhookTarget} from '@/lib/webhook-targets';
 
 export const Route = createFileRoute('/_app/settings/webhooks')({
   head: () => ({meta: [{title: pageTitle('Webhooks')}]}),
@@ -90,7 +91,7 @@ function OutgoingWebhooks() {
     <>
       <SettingsSection
         title="Outgoing webhooks"
-        description="Send events to other tools (Zapier, Make, n8n, your own server) as they happen. Every request is signed so the receiver can trust it."
+        description="Send events to other tools (Zapier, Make, n8n, Slack and more) as they happen. Every request is signed so the receiver can trust it."
         actions={<Button size="sm" onClick={() => setEditing('new')}><Plus /> Add webhook</Button>}
       >
         {list.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -193,6 +194,9 @@ function WebhookRow({hook: w, onEdit, onDeliveries, onSecret}: {hook: Webhook; o
 function WebhookDialog({hook, onClose, onCreated, onDeliveries}: {hook: Webhook | null; onClose: () => void; onCreated: (secret: string) => void; onDeliveries: (w: Webhook) => void}) {
   const ids = useId();
   const [url, setUrl] = useState(hook?.url ?? '');
+  const [urlTouched, setUrlTouched] = useState(false);
+  const urlError = !url.trim() ? 'Enter the webhook URL' : webhookTarget(url) ? null : `Use a webhook URL from ${WEBHOOK_SERVICE_NAMES}`;
+  const urlRef = useRef<HTMLInputElement>(null);
   const [description, setDescription] = useState(hook?.description ?? '');
   const [all, setAll] = useState(hook ? hook.events.includes('*') : false);
   const [events, setEvents] = useState<string[]>(hook && !hook.events.includes('*') ? hook.events : []);
@@ -216,7 +220,15 @@ function WebhookDialog({hook, onClose, onCreated, onDeliveries}: {hook: Webhook 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent size="xl">
-        <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault();
+            setUrlTouched(true);
+            if (urlError) return urlRef.current?.focus();
+            save.mutate(undefined);
+          }}
+          className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>{hook ? 'Edit webhook' : 'Add webhook'}</DialogTitle>
             <DialogDescription>We POST a signed JSON payload to this URL whenever one of the chosen events happens.</DialogDescription>
@@ -224,8 +236,18 @@ function WebhookDialog({hook, onClose, onCreated, onDeliveries}: {hook: Webhook 
           <DialogBody>
             <div className="grid grid-cols-1 gap-6 @4xl:grid-cols-[minmax(0,1fr)_400px]">
               <div className="grid min-w-0 content-start gap-5">
-                <Field label="Endpoint URL" htmlFor={`${ids}-url`}>
-                  <Input id={`${ids}-url`} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://hooks.example.com/crm" type="url" required autoFocus />
+                <Field label="Endpoint URL" htmlFor={`${ids}-url`} error={urlTouched ? urlError : null} hint={`Webhooks go to ${WEBHOOK_SERVICE_NAMES}.`}>
+                  <Input
+                    ref={urlRef}
+                    id={`${ids}-url`}
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    onBlur={() => setUrlTouched(true)}
+                    placeholder="https://hooks.zapier.com/hooks/catch/…"
+                    type="url"
+                    aria-invalid={urlTouched && !!urlError}
+                    autoFocus
+                  />
                 </Field>
                 <Field label="Description" htmlFor={`${ids}-desc`} hint="Optional, e.g. “Zapier: post won deals to Slack”">
                   <Input id={`${ids}-desc`} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={200} />
@@ -256,7 +278,7 @@ function WebhookDialog({hook, onClose, onCreated, onDeliveries}: {hook: Webhook 
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending || !url.trim() || (!all && !events.length)}>
+            <Button type="submit" disabled={save.isPending || (!all && !events.length)}>
               {save.isPending && <Loader2 className="animate-spin" />} {hook ? 'Save' : 'Add webhook'}
             </Button>
           </DialogFooter>
@@ -523,8 +545,7 @@ function VerifyDisclosure() {
 }
 
 function JobsCard({jobs}: {jobs: JobsStatus}) {
-  const origin = typeof window === 'undefined' ? '' : window.location.origin;
-  const cmd = `curl -X POST ${origin}/site-api/jobs/run -H "x-cron-secret: $CRON_SECRET"`;
+  const count = (n: number) => (n >= jobs.capped ? `${jobs.capped - 1}+` : String(n));
   const stale = !jobs.lastRunAt || Date.now() - new Date(jobs.lastRunAt).getTime() > 15 * 60_000;
   const running = jobs.cronConfigured && !stale;
   const scheduler = running
@@ -537,25 +558,20 @@ function JobsCard({jobs}: {jobs: JobsStatus}) {
     <SettingsSection title="Background jobs" description="Webhook deliveries run right after each change. A scheduled call to the job runner retries failures and syncs mailboxes.">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Stat label="Scheduler" value={scheduler.value} tone={scheduler.tone} hint={scheduler.hint} />
-        <Stat label="Waiting" value={String(jobs.pending)} hint="Queued or retrying" />
-        <Stat label="Failed (7 days)" value={String(jobs.failed)} tone={jobs.failed ? 'rose' : undefined} hint="Gave up after all retries" />
+        <Stat label="Waiting" value={count(jobs.pending)} hint="Queued or retrying" />
+        <Stat label="Failed (7 days)" value={count(jobs.failed)} tone={jobs.failed ? 'rose' : undefined} hint="Deliveries that gave up after all retries" />
       </div>
       {!running && (
         <p className={cn('mt-4 flex items-start gap-2 text-xs', jobs.devTicker ? 'text-muted-foreground' : 'text-amber-700')}>
           {jobs.devTicker ? <Info className="mt-px size-3.5 shrink-0" /> : <TriangleAlert className="mt-px size-3.5 shrink-0" />}
           {jobs.devTicker
-            ? 'Running locally: jobs run automatically. A live site needs the scheduler below.'
-            : jobs.cronConfigured
-              ? 'No scheduled run in the last 15 minutes, so failed deliveries are not being retried.'
-              : 'Not set up yet: failed deliveries are not retried and mailboxes are not synced until a scheduler calls the job runner.'}
+            ? 'Running locally: jobs run right away here; the schedule (retries, mailbox syncs) runs on the live site.'
+            : 'No scheduled run in the last 15 minutes, so failed deliveries are not being retried. Check the Jobs tab of this app in your dashboard.'}
         </p>
       )}
-      <Disclosure summary="How to set this up" icon={<Clock />} className="mt-3">
-        <p>
-          The scheduler retries failed webhook deliveries, sends scheduled and waiting work (broadcasts, report emails, reminders) and syncs connected mailboxes. Set the <code className="text-slate-700">CRON_SECRET</code> environment variable, then have the platform's cron or any scheduler call this every 1–5 minutes with that secret in the <code className="text-slate-700">x-cron-secret</code> header:
-        </p>
-        <CodeBlock code={cmd} label="command" className="whitespace-pre-wrap break-all" />
-      </Disclosure>
+      <p className="mt-3 text-xs text-muted-foreground">
+        The site's background jobs retry failed webhook deliveries, send scheduled and waiting work (broadcasts, report emails, reminders) and sync connected mailboxes, every minute. Nothing to set up; their history is in the Jobs tab of this app in your dashboard.
+      </p>
     </SettingsSection>
   );
 }

@@ -1261,7 +1261,8 @@ model IncomingWebhook {
   verify         String    @default("none") // none | header | hmac
   verifyHeader   String? // header carrying the shared secret or the signature
   verifyEncoding String? // hmac: hex | base64
-  secret         String? // AES-GCM encrypted shared secret / HMAC key
+  secret         String? // unused since phase 8 (the key is an owner secret, see secretName); dropped in a later contract step
+  secretName     String?   @db.VarChar(64) // name of the owner-added site secret holding the shared secret / HMAC key (INCOMING_…)
   listenUntil    DateTime? // "Listen for a test request": the next request becomes the sample
   sample         Json? // {payload, contentType, headers, at}
   sampleAt       DateTime?

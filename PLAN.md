@@ -16,8 +16,8 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | 5 | Forms, lists and segments, broadcasts | done |
 | 6 | Tickets + support portal, meetings + booking pages, calendar sync | done |
 | 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | done |
-| 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | next |
-| 9 | Public site pages (`/`, `/contact/`, `/demo/`), SEO, tests ported to vitest, build, `review.md` | |
+| 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | done |
+| 9 | Public site pages (`/`, `/contact/`, `/demo/`), SEO, tests ported to vitest, build, `review.md` | next |
 
 ## Where things live
 
@@ -156,11 +156,30 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 - Tests: `crm-reports` (buckets, tags, custom fields, every filter, breakdown, refs, member scope),
   `crm-automation-triggers` (date, custom date, inactivity fire once), `crm-webhook-targets`, expired session.
 
+## Decisions (phase 8)
+
+- Outgoing webhooks (Settings → Webhooks): only to the services in `src/crm/lib/webhook-targets.ts`, checked
+  when saved (error under the field) and again before each delivery (a URL edited in later fails, never fetched).
+  Writes built field by field; the audit log names the service and host (`webhookLabel`), never the hook path.
+- Incoming webhooks: every request proves the sender (secret header or HMAC-SHA256 of the raw body). The key is
+  an owner-added site secret named `INCOMING_…` (`config.ownerSecret`), never stored in Kinroot; the hook keeps
+  only its name (`IncomingWebhook.secretName`, migration `20261102130000`; the old encrypted `secret` column is
+  unused, dropped in a later contract step). New hooks start with a check and a suggested name; requests are
+  refused until the owner adds it. "URL only" is gone. The request log keeps no address headers.
+- Data in API unchanged: its keys are Kinroot's own (hashed, rate limited per hashed address, optional signature).
+- Background jobs card: no `CRON_SECRET` / `/jobs/run` instructions (the platform schedules `crm-tick`); "Failed
+  (7 days)" counts failed deliveries again; both numbers capped at 100 ("99+").
+- Job handlers load with Kinroot's app (`import '../background'` in `crm/app.ts`): locally and in the Preview, jobs sent
+  while a page rendered in-process ran with no handler and were dropped (and their backlog rows deleted).
+- Import lookups are bounded (`LOOKUP_LIMIT`); log lines carry the error message only, never the error object.
+- Tests: `crm-webhooks`, `crm-import-export` (a fake platform file API in `tests/integration/support/crm.ts`).
+
 ## Open items (tracked)
 
 - Plain `<a href>` links to `/site-api/crm/...` downloads (exports, files) carry the session by cookie: fine live, signed out in the editor Preview.
 - Email preview frame (`components/inbox/parts.tsx`) inherits the page CSP: check its styles in phase 4.
-- `routes/incoming-webhooks.ts`, `routes/data-in.ts` store raw IPs in their request logs (phase 8).
+- Lists page with OFFSET and show totals from `count(*)` (contacts, companies, duplicates, audit, forms, automation
+  runs), as the original did; the rules want keyset paging and "25+". Owner to decide (visible change).
 - Brand logo is still a data URL in the settings row (file bytes in the database): move to a public storage file.
 - The sonner toast library logs one CSP message per page load (its CSS loads from our stylesheet; harmless).
 - Report filter picker lists every company name to members limited to their own records (as before; contacts are not listed).

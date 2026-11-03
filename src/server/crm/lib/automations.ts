@@ -435,7 +435,7 @@ export async function automationTick(db: Db, {budgetMs = 8_000} = {}) {
       if (t.kind === 'date') found = await dateCandidates(db, a, t, from, now);
       else if (t.kind === 'inactivity' && INACTIVITY_RULES[t.rule]) found = await inactivityCandidates(db, a, t, from, now);
     } catch (e) {
-      console.error('[automations] tick', a.id, e);
+      console.error('[automations] tick', a.id, String((e as Error)?.message ?? e).slice(0, 200));
       continue;
     }
     found.sort((x, y) => x.moment - y.moment);

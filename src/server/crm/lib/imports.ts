@@ -54,6 +54,8 @@ import {readBytes, storeBytes} from '../kit/storage';
 import {memberWithEmail} from './users';
 
 const BATCH = 200;
+/** Every raw lookup is bounded: a batch's keys can match at most this many rows (ten per key). */
+const LOOKUP_LIMIT = BATCH * 10;
 const BUDGET_MS = 8_000;
 /** Issues kept per phase; counts stay exact beyond this. */
 const MAX_ISSUES = 50_000;
@@ -289,7 +291,7 @@ async function resolveCompanies(ctx: Ctx, rows: Prepared[]) {
   const names = refs.flatMap((r) => (r.name ? [lower(r.name)] : []));
   const [byDomain, byName] = await Promise.all([
     domains.length ? ctx.db.company.findMany({where: {domain: {in: domains}}, select: {id: true, domain: true}, orderBy: {createdAt: 'asc'}}) : [],
-    names.length ? ctx.db.$queryRaw<{id: string; n: string}[]>`SELECT id, lower(name) AS n FROM "Company" WHERE lower(name) = ANY(${names}::text[]) ORDER BY "createdAt"` : [],
+    names.length ? ctx.db.$queryRaw<{id: string; n: string}[]>`SELECT id, lower(name) AS n FROM "Company" WHERE lower(name) = ANY(${names}::text[]) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [],
   ]);
   const domainHit = new Map<string, string>();
   for (const c of byDomain) if (c.domain && !domainHit.has(c.domain)) domainHit.set(c.domain, c.id);
@@ -377,7 +379,8 @@ async function adoptByDomains(ctx: Ctx, companies: {id: string; domain: string |
   const orphans = await ctx.db.$queryRaw<{id: string; d: string}[]>`
     SELECT c.id, lower(split_part(c.email, '@', 2)) AS d FROM "Contact" c
     WHERE c.email IS NOT NULL AND lower(split_part(c.email, '@', 2)) = ANY(${[...domains.keys()]}::text[])
-      AND NOT EXISTS (SELECT 1 FROM "ContactCompany" cc WHERE cc."contactId" = c.id)`;
+      AND NOT EXISTS (SELECT 1 FROM "ContactCompany" cc WHERE cc."contactId" = c.id)
+    LIMIT ${LOOKUP_LIMIT}`;
   if (!orphans.length) return;
   await ctx.db.contactCompany.createMany({data: orphans.map((o) => ({contactId: o.id, companyId: domains.get(o.d)!, isPrimary: true})), skipDuplicates: true});
   const per = new Map<string, number>();
@@ -398,7 +401,7 @@ async function findExisting(ctx: Ctx, rows: Prepared[]): Promise<Map<number, Exi
   const ids = rows.flatMap((p) => (p.id ? [p.id] : []));
   if (ctx.entity === 'contact') {
     const emails = [...new Set(rows.flatMap((p) => (typeof p.fields.email === 'string' && p.fields.email ? [p.fields.email] : [])))];
-    const byEmail = emails.length ? await db.$queryRaw<{id: string; e: string}[]>`SELECT id, lower(email) AS e FROM "Contact" WHERE lower(email) = ANY(${emails}::text[]) ORDER BY "createdAt"` : [];
+    const byEmail = emails.length ? await db.$queryRaw<{id: string; e: string}[]>`SELECT id, lower(email) AS e FROM "Contact" WHERE lower(email) = ANY(${emails}::text[]) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [];
     const records = await db.contact.findMany({where: {id: {in: [...ids, ...byEmail.map((r) => r.id)]}}, include: {companies: {select: {companyId: true}}}});
     const byId = new Map(records.map((r) => [r.id, r]));
     const emailHit = new Map<string, string>();
@@ -423,7 +426,7 @@ async function findExisting(ctx: Ctx, rows: Prepared[]): Promise<Map<number, Exi
     const names = [...new Set(rows.flatMap((p) => (typeof p.fields.name === 'string' && p.fields.name ? [lower(p.fields.name)] : [])))];
     const [byDomain, byName] = await Promise.all([
       domains.length ? db.company.findMany({where: {domain: {in: domains}}, select: {id: true, domain: true}, orderBy: {createdAt: 'asc'}}) : [],
-      names.length ? db.$queryRaw<{id: string; n: string}[]>`SELECT id, lower(name) AS n FROM "Company" WHERE lower(name) = ANY(${names}::text[]) ORDER BY "createdAt"` : [],
+      names.length ? db.$queryRaw<{id: string; n: string}[]>`SELECT id, lower(name) AS n FROM "Company" WHERE lower(name) = ANY(${names}::text[]) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [],
     ]);
     const records = await db.company.findMany({where: {id: {in: [...ids, ...byDomain.map((r) => r.id), ...byName.map((r) => r.id)]}}});
     const byId = new Map(records.map((r) => [r.id, r]));
@@ -441,7 +444,7 @@ async function findExisting(ctx: Ctx, rows: Prepared[]): Promise<Map<number, Exi
     }
   } else {
     const titles = [...new Set(rows.flatMap((p) => (typeof p.fields.title === 'string' && p.fields.title ? [lower(p.fields.title)] : [])))];
-    const byTitle = titles.length ? await db.$queryRaw<{id: string}[]>`SELECT id FROM "Deal" WHERE lower(title) = ANY(${titles}::text[]) ORDER BY "createdAt"` : [];
+    const byTitle = titles.length ? await db.$queryRaw<{id: string}[]>`SELECT id FROM "Deal" WHERE lower(title) = ANY(${titles}::text[]) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [];
     const records = await db.deal.findMany({where: {id: {in: [...ids, ...byTitle.map((r) => r.id)]}}, include: {contacts: {select: {contactId: true}}, stage: true}, orderBy: {createdAt: 'asc'}});
     const byId = new Map(records.map((r) => [r.id, r]));
     for (const p of rows) {
@@ -728,7 +731,7 @@ async function applyCreates(ctx: Ctx, plans: Plan[]) {
 async function linkDealContacts(ctx: Ctx, rows: {p: Prepared; dealId: string}[]) {
   const emails = [...new Set(rows.flatMap((r) => r.p.contactEmails))];
   if (!emails.length) return;
-  const found = await ctx.db.$queryRaw<{id: string; e: string}[]>`SELECT id, lower(email) AS e FROM "Contact" WHERE lower(email) = ANY(${emails}::text[]) ORDER BY "createdAt"`;
+  const found = await ctx.db.$queryRaw<{id: string; e: string}[]>`SELECT id, lower(email) AS e FROM "Contact" WHERE lower(email) = ANY(${emails}::text[]) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}`;
   const byEmail = new Map<string, string>();
   for (const f of found) if (!byEmail.has(f.e)) byEmail.set(f.e, f.id);
   const links = rows.flatMap((r) => r.p.contactEmails.flatMap((e) => (byEmail.has(e) ? [{dealId: r.dealId, contactId: byEmail.get(e)!}] : [])));
@@ -1054,7 +1057,7 @@ async function finishRun(db: Db, imp: Import, status: 'done' | 'failed' | 'cance
       '',
       `Open: ${origin}${link}`,
     ];
-    await sendSystemEmail(db, {to: [user.email], subject: status === 'done' ? `Import finished: ${imp.fileName}` : `Import failed: ${imp.fileName}`, text: lines.join('\n')}).catch((e) => console.error('[import] email', e));
+    await sendSystemEmail(db, {to: [user.email], subject: status === 'done' ? `Import finished: ${imp.fileName}` : `Import failed: ${imp.fileName}`, text: lines.join('\n')}).catch((e) => console.error('[import] email', String((e as Error)?.message ?? e).slice(0, 200)));
   }
 }
 

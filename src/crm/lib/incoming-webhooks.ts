@@ -83,12 +83,25 @@ export const inConfig = (raw: unknown): InConfig => {
   return {...d, ...c, deal: {...d.deal, ...c.deal}, ticket: {...d.ticket, ...c.ticket}, owner: {...d.owner, ...c.owner}};
 };
 
+/** 'none' only on webhooks saved before the sender check was required: they refuse every request until one is set. */
 export type InVerify = 'none' | 'header' | 'hmac';
-export const IN_VERIFY: Record<InVerify, {label: string; hint: string}> = {
-  none: {label: 'URL only', hint: 'The secret URL is the only key. Fine for most tools.'},
-  header: {label: 'Shared secret header', hint: 'The sender also puts a secret in a header you name.'},
+export const IN_VERIFY: Record<Exclude<InVerify, 'none'>, {label: string; hint: string}> = {
+  header: {label: 'Shared secret header', hint: 'The sender puts a secret in a header you name.'},
   hmac: {label: 'HMAC-SHA256 signature', hint: 'The sender signs the raw body with a shared key (Stripe-style tools, your own app).'},
 };
+
+/**
+ * The secret (or signing key) every request must prove lives in a site secret the owner adds in the
+ * dashboard, never in Kinroot (the site's rule for webhooks into the site). Its name starts with
+ * INCOMING_ so it can never be another service's key.
+ */
+export const INCOMING_SECRET_NAME = /^INCOMING_[A-Z0-9_]{1,55}$/;
+
+/** A suggested site secret name for a webhook called `name`. */
+export function suggestSecretName(name: string) {
+  const core = name.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  return `INCOMING_${core || 'WEBHOOK'}_SECRET`;
+}
 
 // ─── Field catalogue ────────────────────────────────────────────────────────
 
@@ -295,7 +308,9 @@ export type IncomingWebhookRow = {
   verify: InVerify;
   verifyHeader: string | null;
   verifyEncoding: 'hex' | 'base64' | null;
-  hasSecret: boolean;
+  /** The site secret holding the key, and whether the owner has added it. */
+  secretName: string | null;
+  secretAdded: boolean;
   url: string;
   listening: boolean;
   listenUntil: string | null;

@@ -4,6 +4,8 @@ import {z} from 'zod';
 
 import type {IncomingWebhook, Prisma} from '../../../generated/prisma/client';
 import {
+  INCOMING_SECRET_NAME,
+  suggestSecretName,
   IN_ACTION_KEYS,
   inConfig,
   LISTEN_MINUTES,
@@ -13,6 +15,7 @@ import {
   type InRequestStatus,
   type InResult,
 } from '@/lib/incoming-webhooks';
+import {config as site} from '../../../platform/config';
 import {publicOrigin} from '../kit/config';
 import {decryptJson, encryptJson, randomToken} from '../kit/crypto';
 import {requireRole, type AppEnv} from '../kit/guards';
@@ -41,11 +44,11 @@ const hookBody = z.object({
   action: z.enum(IN_ACTION_KEYS as [string, ...string[]]),
   active: z.boolean().optional(),
   config: configSchema.partial().optional(),
-  verify: z.enum(['none', 'header', 'hmac']).optional(),
+  verify: z.enum(['header', 'hmac']).optional(),
   verifyHeader: z.string().trim().max(100).regex(/^[A-Za-z0-9-]*$/, 'letters, digits and dashes only').nullish(),
   verifyEncoding: z.enum(['hex', 'base64']).nullish(),
-  /** Write-only: a new shared secret / HMAC key, or null to remove it. Never returned. */
-  secret: z.string().min(8, 'use at least 8 characters').max(500).nullish(),
+  /** The site secret holding the shared secret / HMAC key (the owner adds its value in the dashboard). */
+  secretName: z.string().trim().regex(INCOMING_SECRET_NAME, 'use capital letters, digits and _ after INCOMING_').nullish(),
 });
 
 const newToken = () => randomToken(32);
@@ -63,7 +66,8 @@ async function toRow(origin: string, h: IncomingWebhook, stats: {day: number; fa
     verify: (h.verify as IncomingWebhookRow['verify']) ?? 'none',
     verifyHeader: h.verifyHeader,
     verifyEncoding: (h.verifyEncoding as IncomingWebhookRow['verifyEncoding']) ?? null,
-    hasSecret: !!h.secret,
+    secretName: h.secretName,
+    secretAdded: !!h.secretName && INCOMING_SECRET_NAME.test(h.secretName) && !!site.ownerSecret(h.secretName),
     url: token ? hookUrl(origin, token) : '',
     listening,
     listenUntil: listening ? h.listenUntil!.toISOString() : null,
@@ -133,10 +137,11 @@ export const incomingWebhooks = new Hono<AppEnv>()
         config: config as Prisma.InputJsonValue,
         token: await encryptJson(token),
         tokenHash: await tokenHash(token),
-        verify: body.verify ?? 'none',
-        verifyHeader: body.verifyHeader || null,
+        // A sender check from the start: requests are refused until the owner adds the named site secret.
+        verify: body.verify ?? 'header',
+        verifyHeader: body.verifyHeader || 'X-Webhook-Secret',
         verifyEncoding: body.verifyEncoding || null,
-        secret: body.secret ? await encryptJson(body.secret) : null,
+        secretName: body.secretName || suggestSecretName(body.name),
         createdById: c.var.user?.id ?? null,
       },
     });
@@ -159,8 +164,9 @@ export const incomingWebhooks = new Hono<AppEnv>()
     const config = body.config ? ({...oldConfig, ...body.config, owner: {...body.config.owner, next: body.config.owner?.next ?? oldConfig.owner.next}} as InConfig) : undefined;
     const verify = body.verify ?? before.verify;
     const header = body.verifyHeader === undefined ? before.verifyHeader : body.verifyHeader || null;
-    const hasSecret = body.secret === undefined ? !!before.secret : !!body.secret;
-    if (verify !== 'none' && (!header || !hasSecret)) throw new HTTPException(400, {message: verify === 'hmac' ? 'Name the signature header and set the signing key' : 'Name the header and set the secret'});
+    const secretName = body.secretName === undefined ? before.secretName : body.secretName || null;
+    if (verify !== 'header' && verify !== 'hmac') throw new HTTPException(400, {message: 'Pick how the sender proves itself: a secret header or an HMAC signature'});
+    if (!header || !secretName) throw new HTTPException(400, {message: verify === 'hmac' ? 'Name the signature header and the site secret with the signing key' : 'Name the header and the site secret with its value'});
     const hook = await db.incomingWebhook.update({
       where: {id: before.id},
       data: {
@@ -171,19 +177,16 @@ export const incomingWebhooks = new Hono<AppEnv>()
         verify: body.verify,
         verifyHeader: body.verifyHeader === undefined ? undefined : body.verifyHeader || null,
         verifyEncoding: body.verifyEncoding === undefined ? undefined : body.verifyEncoding || null,
-        secret: body.secret === undefined ? undefined : body.secret ? await encryptJson(body.secret) : null,
+        secretName: body.secretName === undefined ? undefined : body.secretName || null,
       },
     });
     const changed = [
-      ...(['name', 'action', 'active', 'verify', 'verifyHeader', 'verifyEncoding'] as const).filter((k) => body[k] !== undefined && (body[k] ?? null) !== (before[k] ?? null)),
+      ...(['name', 'action', 'active', 'verify', 'verifyHeader', 'verifyEncoding', 'secretName'] as const).filter((k) => body[k] !== undefined && (body[k] ?? null) !== (before[k] ?? null)),
       ...(config ? configChanges(oldConfig, config).map((k) => `config.${k}`) : []),
     ];
     if (changed.length) {
-      const basic = Object.fromEntries((['name', 'action', 'active', 'verify', 'verifyHeader', 'verifyEncoding'] as const).filter((k) => changed.includes(k)).map((k) => [k, {from: before[k], to: hook[k]}]));
+      const basic = Object.fromEntries((['name', 'action', 'active', 'verify', 'verifyHeader', 'verifyEncoding', 'secretName'] as const).filter((k) => changed.includes(k)).map((k) => [k, {from: before[k], to: hook[k]}]));
       await audit(db, c, {action: 'incoming_webhook.updated', category: 'settings', entity: 'incoming_webhook', recordId: hook.id, label: hook.name, meta: {changed, ...basic}});
-    }
-    if (body.secret !== undefined) {
-      await audit(db, c, {action: 'incoming_webhook.secret_changed', category: 'security', entity: 'incoming_webhook', recordId: hook.id, label: hook.name, meta: {verify: hook.verify, signingKey: body.secret ? await fingerprint(body.secret) : null, removed: !body.secret}});
     }
     return c.json({webhook: await toRow(publicOrigin(c.req.raw), hook)});
   })

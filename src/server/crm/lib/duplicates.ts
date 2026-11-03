@@ -329,7 +329,7 @@ export async function checkDuplicates(db: Db, entity: DupEntity, id: string) {
     const found: Found = new Map(matches.map((m) => [pairKey(id, m.id), {score: m.score, reasons: m.reasons, aId: id < m.id ? id : m.id, bId: id < m.id ? m.id : id}]));
     await syncPairs(db, entity, found, {ids: [id]});
   } catch (e) {
-    console.error('[duplicates]', entity, id, e);
+    console.error('[duplicates]', entity, id, String((e as Error)?.message ?? e).slice(0, 200));
   }
 }
 

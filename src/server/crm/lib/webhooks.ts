@@ -1,3 +1,4 @@
+import {WEBHOOK_SERVICE_NAMES, webhookTarget} from '@/lib/webhook-targets';
 import {decryptJson} from '../kit/crypto';
 import type {Db} from '../kit/db';
 
@@ -38,6 +39,13 @@ export async function deliverWebhook(db: Db, deliveryId: string, final: boolean)
     return;
   }
 
+  // Saved before the service list, or edited in the database: refused for good, never retried.
+  const target = webhookTarget(webhook.url);
+  if (!target) {
+    await db.webhookDelivery.update({where: {id: delivery.id}, data: {status: 'FAILED', attempts: {increment: 1}, error: `Not a webhook service Kinroot sends to (${WEBHOOK_SERVICE_NAMES})`}});
+    return;
+  }
+
   const body = webhookBody(event);
   const secret = await decryptJson<string>(webhook.secret);
   const started = Date.now();
@@ -45,7 +53,7 @@ export async function deliverWebhook(db: Db, deliveryId: string, final: boolean)
   let responseBody: string | null = null;
   let error: string | null = null;
   try {
-    const res = await fetch(webhook.url, {
+    const res = await fetch(target.url.href, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',

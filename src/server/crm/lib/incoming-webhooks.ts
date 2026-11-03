@@ -19,6 +19,7 @@ import type {ZodType} from 'zod';
 import {Prisma, type Company, type Contact, type IncomingWebhook, type IncomingWebhookRequest} from '../../../generated/prisma/client';
 import {emailOf, parseCell} from '@/lib/import-export';
 import {
+  INCOMING_SECRET_NAME,
   cellOf,
   getPath,
   inConfig,
@@ -32,7 +33,8 @@ import {
   type InResult,
   type InTarget,
 } from '@/lib/incoming-webhooks';
-import {decryptJson, fromB64, sha256Hex} from '../kit/crypto';
+import {config as site} from '../../../platform/config';
+import {fromB64, sha256Hex} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {mergeFields} from '../email/render';
 import {companyBody, normalizeDomain} from '../routes/companies';
@@ -72,13 +74,15 @@ export const tokenHash = (token: string) => sha256Hex(`inhook:${token}`);
 const BAD_TOKEN_LIMIT = 30;
 
 const SECRET_HEADER = /auth|secret|token|signature|key|cookie|password|session/i;
+/** The sender's address: never stored (the site's rule: no raw IPs). */
+const ADDRESS_HEADER = /^(cf-connecting-ip(v6)?|cf-pseudo-ipv4|x-forwarded-for|x-real-ip|true-client-ip|x-client-ip|x-cluster-client-ip|forwarded)$/i;
 
-/** Header values that look secret (and the verification header) never reach the log. */
+/** Header values that look secret (and the verification header) never reach the log; address headers are left out. */
 export function redactHeaders(headers: Headers, extra?: string | null): Record<string, string> {
   const out: Record<string, string> = {};
   const skip = extra?.toLowerCase();
   headers.forEach((value, name) => {
-    if (Object.keys(out).length >= 40) return;
+    if (Object.keys(out).length >= 40 || ADDRESS_HEADER.test(name)) return;
     out[name] = name === skip || SECRET_HEADER.test(name) ? '[redacted]' : value.slice(0, 300);
   });
   return out;
@@ -166,11 +170,13 @@ function decodeSignature(value: string, encoding: 'hex' | 'base64'): Uint8Array<
 }
 
 /** Null when the request passes the webhook's verification, else why not (shown to the sender and in the log). */
-export async function verifyRequest(hook: Pick<IncomingWebhook, 'verify' | 'verifyHeader' | 'verifyEncoding' | 'secret'>, headers: Headers, raw: Uint8Array<ArrayBuffer>): Promise<string | null> {
-  if (hook.verify !== 'header' && hook.verify !== 'hmac') return null;
+export async function verifyRequest(hook: Pick<IncomingWebhook, 'verify' | 'verifyHeader' | 'verifyEncoding' | 'secretName'>, headers: Headers, raw: Uint8Array<ArrayBuffer>): Promise<string | null> {
+  // Every request proves the sender (the site's rule for webhooks into the site): no check set up, nothing accepted.
+  if (hook.verify !== 'header' && hook.verify !== 'hmac') return 'This webhook has no sender check yet. Set one up in Settings → Webhooks → Incoming.';
   const name = hook.verifyHeader?.trim();
-  const secret = hook.secret ? await decryptJson<string>(hook.secret).catch(() => null) : null;
-  if (!name || !secret) return 'Verification is not set up for this webhook';
+  if (!name || !hook.secretName || !INCOMING_SECRET_NAME.test(hook.secretName)) return 'Verification is not set up for this webhook';
+  const secret = site.ownerSecret(hook.secretName);
+  if (!secret) return `The site secret ${hook.secretName} is not added yet`;
   const value = headers.get(name);
   if (!value) return `Missing the ${name} header`;
   if (hook.verify === 'header') return (await safeEqual(value.trim(), secret)) ? null : `The ${name} header does not match the secret`;

@@ -40,7 +40,7 @@ export async function emit(db: Db, type: EventType, input: EmitInput) {
     if (hooks.length || scored || automated) kickJobs();
     return event;
   } catch (e) {
-    console.error('[events]', type, e);
+    console.error('[events]', type, String((e as Error)?.message ?? e).slice(0, 200));
     return null;
   }
 }
@@ -72,6 +72,6 @@ export async function emitMany(db: Db, type: EventType, inputs: EmitInput[]) {
     });
     for (const d of deliveries) await enqueue(db, 'webhook.deliver', {deliveryId: d.id});
   } catch (e) {
-    console.error('[events]', type, e);
+    console.error('[events]', type, String((e as Error)?.message ?? e).slice(0, 200));
   }
 }

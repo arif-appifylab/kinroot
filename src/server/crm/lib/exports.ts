@@ -209,7 +209,7 @@ async function finishExport(db: Db, c: AppContext | null, exp: Export, user: Use
       to: [user.email],
       subject: `Your export is ready: ${exp.fileName}`,
       text: [`Your export of ${exp.processed.toLocaleString('en-US')} ${noun.many} is ready.`, '', `Download (the link works for ${IO_FILE_DAYS} days, no sign-in needed):`, url].join('\n'),
-    }).catch((e) => (console.error('[export] email', e), false));
+    }).catch((e) => (console.error('[export] email', String((e as Error)?.message ?? e).slice(0, 200)), false));
   }
   const done = await db.export.update({where: {id: exp.id}, data: {status: 'done', emailed, finishedAt: new Date()}});
   // Small exports download right away in the browser; only background ones need a nudge.

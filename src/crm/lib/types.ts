@@ -182,6 +182,8 @@ export type JobsStatus = {
   lastRunAt: string | null;
   pending: number;
   failed: number;
+  /** The numbers stop at this many. */
+  capped: number;
   /** Local dev server: a ticker runs due jobs every 30 s, no scheduler needed. */
   devTicker: boolean;
 };

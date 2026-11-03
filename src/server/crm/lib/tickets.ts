@@ -439,5 +439,5 @@ export async function sendPortalLink(db: Db, contactId: string, origin: string, 
       brand,
     ].join('\n\n'),
     replyTo: settings.supportEmail || null,
-  }).catch((e) => (console.error('[tickets] portal link', e), false));
+  }).catch((e) => (console.error('[tickets] portal link', String((e as Error)?.message ?? e).slice(0, 200)), false));
 }

@@ -42,7 +42,7 @@ export async function queueAutomations(db: Db, events: {id: string; type: string
     for (let k = 0; k < ids.length; k += 50) await enqueue(db, 'automation.events', {eventIds: ids.slice(k, k + 50), origin});
     return true;
   } catch (e) {
-    console.error('[automations]', e);
+    console.error('[automations]', String((e as Error)?.message ?? e).slice(0, 200));
     return false;
   }
 }

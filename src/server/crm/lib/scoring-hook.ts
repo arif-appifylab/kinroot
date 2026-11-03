@@ -76,6 +76,6 @@ export async function queueRescore(db: Db, contactIds: string[]) {
     for (let k = 0; k < ids.length; k += 200) await enqueue(db, 'scoring.rescore', {contactIds: ids.slice(k, k + 200)});
     kickJobs();
   } catch (e) {
-    console.error('[scoring]', e);
+    console.error('[scoring]', String((e as Error)?.message ?? e).slice(0, 200));
   }
 }

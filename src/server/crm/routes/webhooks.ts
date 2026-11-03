@@ -4,6 +4,8 @@ import {z} from 'zod';
 
 import type {Prisma} from '../../../generated/prisma/client';
 import {EVENT_TYPES, eventExample} from '@/lib/events';
+import {WEBHOOK_SERVICE_NAMES, webhookLabel, webhookTarget} from '@/lib/webhook-targets';
+import {runsJobsLocally} from '../../../platform/background';
 import {config} from '../kit/config';
 import {decryptJson, encryptJson, randomToken} from '../kit/crypto';
 import {requireRole, type AppEnv} from '../kit/guards';
@@ -15,11 +17,15 @@ import {JOBS_LAST_RUN_KEY} from '../lib/ticks';
 
 const eventList = z.array(z.union([z.literal('*'), z.enum(EVENT_TYPES as [string, ...string[]])])).min(1, 'pick at least one event');
 const hookBody = z.object({
-  url: z.url({protocol: /^https?$/, message: 'must be an http(s) URL'}).max(2000),
+  // Only the webhook services written in code (src/crm/lib/webhook-targets.ts): never any URL typed in.
+  url: z.string().trim().max(2000).refine((u) => !!webhookTarget(u), `use a webhook URL from ${WEBHOOK_SERVICE_NAMES}`),
   description: z.string().trim().max(200).nullish(),
   events: eventList,
   active: z.boolean().optional(),
 });
+
+/** Status numbers stop at this many (shown as "99+"). */
+const CAP = 100;
 
 const newSecret = () => `whsec_${randomToken(24)}`;
 
@@ -41,23 +47,30 @@ export const webhooks = new Hono<AppEnv>()
 
   .get('/', async (c) => {
     const db = c.var.db;
-    const [rows, lastRun, pending, failed] = await Promise.all([
-      db.webhook.findMany({orderBy: {createdAt: 'asc'}, select: hookSelect}),
+    const since = new Date(Date.now() - 7 * 86_400_000);
+    const [rows, lastRun, waiting] = await Promise.all([
+      db.webhook.findMany({orderBy: {createdAt: 'asc'}, select: hookSelect, take: 100}),
       db.setting.findUnique({where: {key: JOBS_LAST_RUN_KEY}}),
-      // Jobs run on the platform (its Jobs tab has the history); here: what waits to be sent again.
-      db.jobBacklog.count(),
-      Promise.resolve(null),
+      // Jobs run on the platform (its Jobs tab has the history); here: what waits to be sent again. Capped, never count().
+      db.jobBacklog.findMany({select: {id: true}, take: CAP}),
     ]);
+    const failed = rows.length
+      ? await db.webhookDelivery.findMany({where: {webhookId: {in: rows.map((r) => r.id)}, createdAt: {gte: since}, status: 'FAILED'}, select: {id: true}, take: CAP})
+      : [];
     return c.json({
       rows,
-      jobs: {cronConfigured: true, lastRunAt: (lastRun?.value as string | undefined) ?? null, pending, failed, devTicker: false},
+      jobs: {cronConfigured: true, lastRunAt: (lastRun?.value as string | undefined) ?? null, pending: waiting.length, failed: failed.length, capped: CAP, devTicker: runsJobsLocally()},
     });
   })
 
   .post('/', valid('json', hookBody), async (c) => {
+    const body = c.req.valid('json');
     const secret = newSecret();
-    const hook = await c.var.db.webhook.create({data: {...c.req.valid('json'), secret: await encryptJson(secret)}, select: hookSelect});
-    await audit(c.var.db, c, {action: 'webhook.created', entity: 'webhook', recordId: hook.id, label: hook.url, meta: {events: hook.events, signingKey: await fingerprint(secret)}});
+    const hook = await c.var.db.webhook.create({
+      data: {url: body.url, description: body.description ?? null, events: body.events, active: body.active ?? true, secret: await encryptJson(secret)},
+      select: hookSelect,
+    });
+    await audit(c.var.db, c, {action: 'webhook.created', entity: 'webhook', recordId: hook.id, label: webhookLabel(hook.url), meta: {events: hook.events, signingKey: await fingerprint(secret)}});
     return c.json({webhook: hook, secret}, 201);
   })
 
@@ -66,15 +79,20 @@ export const webhooks = new Hono<AppEnv>()
     const found = await c.var.db.webhook.findUnique({where: {id: c.req.param('id')}, select: {id: true}});
     if (!found) throw notFound('Webhook');
     // Turning a webhook back on gives it a clean slate.
-    const hook = await c.var.db.webhook.update({where: {id: found.id}, data: {...body, ...(body.active ? {failures: 0} : {})}, select: hookSelect});
-    await audit(c.var.db, c, {action: 'webhook.updated', entity: 'webhook', recordId: hook.id, label: hook.url, meta: body});
+    const data: Prisma.WebhookUpdateInput = {};
+    if (body.url !== undefined) data.url = body.url;
+    if (body.description !== undefined) data.description = body.description ?? null;
+    if (body.events !== undefined) data.events = body.events;
+    if (body.active !== undefined) data.active = body.active;
+    const hook = await c.var.db.webhook.update({where: {id: found.id}, data: {...data, ...(body.active ? {failures: 0} : {})}, select: hookSelect});
+    await audit(c.var.db, c, {action: 'webhook.updated', entity: 'webhook', recordId: hook.id, label: webhookLabel(hook.url), meta: {changed: Object.keys(data), ...(body.events ? {events: body.events} : {}), ...(body.active !== undefined ? {active: body.active} : {})}});
     return c.json({webhook: hook});
   })
 
   .delete('/:id', async (c) => {
     const gone = await c.var.db.webhook.findUnique({where: {id: c.req.param('id')}, select: {id: true, url: true, events: true}});
     await c.var.db.webhook.deleteMany({where: {id: c.req.param('id')}});
-    if (gone) await audit(c.var.db, c, {action: 'webhook.deleted', entity: 'webhook', recordId: gone.id, label: gone.url, meta: {events: gone.events}});
+    if (gone) await audit(c.var.db, c, {action: 'webhook.deleted', entity: 'webhook', recordId: gone.id, label: webhookLabel(gone.url), meta: {events: gone.events}});
     return c.json({ok: true});
   })
 
@@ -82,7 +100,7 @@ export const webhooks = new Hono<AppEnv>()
     const hook = await c.var.db.webhook.findUnique({where: {id: c.req.param('id')}, select: {id: true, url: true, secret: true}});
     if (!hook) throw notFound('Webhook');
     const secret = await decryptJson<string>(hook.secret);
-    await audit(c.var.db, c, {action: 'webhook.secret_revealed', category: 'security', entity: 'webhook', recordId: hook.id, label: hook.url, meta: {signingKey: await fingerprint(secret)}});
+    await audit(c.var.db, c, {action: 'webhook.secret_revealed', category: 'security', entity: 'webhook', recordId: hook.id, label: webhookLabel(hook.url), meta: {signingKey: await fingerprint(secret)}});
     return c.json({secret});
   })
 
@@ -90,7 +108,7 @@ export const webhooks = new Hono<AppEnv>()
     const secret = newSecret();
     const hook = await c.var.db.webhook.update({where: {id: c.req.param('id')}, data: {secret: await encryptJson(secret)}, select: {id: true, url: true}}).catch(() => null);
     if (!hook) throw notFound('Webhook');
-    await audit(c.var.db, c, {action: 'webhook.secret_rotated', category: 'security', entity: 'webhook', recordId: hook.id, label: hook.url, meta: {signingKey: await fingerprint(secret)}});
+    await audit(c.var.db, c, {action: 'webhook.secret_rotated', category: 'security', entity: 'webhook', recordId: hook.id, label: webhookLabel(hook.url), meta: {signingKey: await fingerprint(secret)}});
     return c.json({secret});
   })
 

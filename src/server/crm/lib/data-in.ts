@@ -658,7 +658,7 @@ export async function handleDataIn(db: Db, input: DataInInput): Promise<DataInOu
           records: state.records as Prisma.InputJsonValue,
         },
       })
-      .catch((e) => console.error('[data-in] log', e));
+      .catch((e) => console.error('[data-in] log', String((e as Error)?.message ?? e).slice(0, 200)));
     return {status, body, headers: extraHeaders};
   };
   const fail = (code: DataInErrorCode, message: string, field?: string) => finish(DATA_IN_ERRORS[code].status, errorBody(code, message, field), code);
@@ -756,7 +756,7 @@ export async function handleDataIn(db: Db, input: DataInInput): Promise<DataInOu
     // A refused or failed request can be fixed and sent again with the same key.
     if (reservation) await db.dataInIdempotency.deleteMany({where: {id: reservation}});
     if (e instanceof DataInError) return fail(e.code, e.message, e.field);
-    console.error('[data-in]', action.key, e);
+    console.error('[data-in]', action.key, String((e as Error)?.message ?? e).slice(0, 200));
     return fail('E_INTERNAL', 'Something went wrong on our side. Retry with the same Idempotency-Key.');
   }
 }

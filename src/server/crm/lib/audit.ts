@@ -110,7 +110,7 @@ export async function audit(db: Db, c: AppContext | null, input: AuditInput) {
   try {
     await db.auditLog.create({data: await row(c, withAutomationMeta(db, c, input))});
   } catch (e) {
-    console.error('[audit]', input.action, e);
+    console.error('[audit]', input.action, (e as Error).name);
   }
 }
 
@@ -120,7 +120,7 @@ export async function auditMany(db: Db, c: AppContext | null, inputs: AuditInput
   try {
     await db.auditLog.createMany({data: await Promise.all(inputs.map((i) => row(c, withAutomationMeta(db, c, i))))});
   } catch (e) {
-    console.error('[audit]', inputs[0]?.action, e);
+    console.error('[audit]', inputs[0]?.action, (e as Error).name);
   }
 }
 

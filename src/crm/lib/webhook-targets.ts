@@ -39,3 +39,14 @@ export function webhookTarget(raw: string | null | undefined): {url: URL; servic
   );
   return service ? {url, service: service.name} : null;
 }
+
+/** How a webhook is named where its full URL must not go (the audit log): the path is the service's secret. */
+export function webhookLabel(raw: string): string {
+  const target = webhookTarget(raw);
+  if (target) return `${target.service} (${target.url.hostname})`;
+  try {
+    return new URL(raw).hostname;
+  } catch {
+    return 'webhook';
+  }
+}

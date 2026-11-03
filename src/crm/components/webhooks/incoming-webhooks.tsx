@@ -35,12 +35,14 @@ import {
   IN_MODES,
   IN_STATUSES,
   IN_VERIFY,
+  INCOMING_SECRET_NAME,
   inTargets,
   LISTEN_MINUTES,
   MAX_BODY_BYTES,
   samplePaths,
   suggestIdempotencyPath,
   suggestMapping,
+  suggestSecretName,
   type IncomingRequestRow,
   type IncomingWebhookRow,
   type InAction,
@@ -117,7 +119,7 @@ export function IncomingWebhooks() {
                 Send a <code className="text-slate-700">POST</code> with a JSON, form-encoded or query-string body (up to {MAX_BODY_BYTES / 1024} KB) to the webhook's URL. It answers <code className="text-slate-700">200 {'{"ok": true, "id": …}'}</code> right away and the data is processed in the background, retried if something fails.
               </p>
               <p>
-                The URL is the key: keep it private, and regenerate it if it leaks. For more safety, ask the sender to add a shared secret header or an HMAC-SHA256 signature of the body. Map an id from the payload as the idempotency path (or send an <code className="text-slate-700">Idempotency-Key</code> header) so repeats are ignored.
+                Keep the URL private and regenerate it if it leaks. Every request must also pass the webhook's check: a shared secret header or an HMAC-SHA256 signature of the body, with the secret kept in a site secret in your dashboard. Map an id from the payload as the idempotency path (or send an <code className="text-slate-700">Idempotency-Key</code> header) so repeats are ignored.
               </p>
               <p className="text-xs">Requests are kept in the log for 30 days. Automations can start on “Incoming webhook received”.</p>
             </Disclosure>
@@ -159,7 +161,11 @@ function HookRow({hook: h, onEdit, onLog}: {hook: IncomingWebhookRow; onEdit: ()
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <Badge tone={h.active ? 'green' : 'neutral'}>{h.active ? 'On' : 'Off'}</Badge>
             <span>{IN_ACTIONS[h.action]?.short ?? h.action}</span>
-            {h.verify !== 'none' && <span className="inline-flex items-center gap-1"><ShieldCheck className="size-3" /> {h.verify === 'hmac' ? 'Signed' : 'Secret header'}</span>}
+            {h.verify === 'none' || !h.secretAdded ? (
+              <span className="inline-flex items-center gap-1 text-amber-700"><ShieldCheck className="size-3" /> Sender check not ready: requests are refused</span>
+            ) : (
+              <span className="inline-flex items-center gap-1"><ShieldCheck className="size-3" /> {h.verify === 'hmac' ? 'Signed' : 'Secret header'}</span>
+            )}
             {h.lastRequestAt ? <span>· last request {ago(h.lastRequestAt)}{last ? ` (${last.label.toLowerCase()})` : ''}</span> : <span>· no requests yet</span>}
             {h.stats.day > 0 && <span>· {h.stats.day} today{h.stats.failed ? `, ${h.stats.failed} failed or rejected` : ''}</span>}
           </div>
@@ -277,10 +283,10 @@ function HookDialog({hook, onClose, onLog}: {hook: IncomingWebhookRow; onClose: 
   const [name, setName] = useState(hook.name);
   const [action, setAction] = useState<InAction>(hook.action);
   const [config, setConfig] = useState<InConfig>(hook.config);
-  const [verify, setVerify] = useState<InVerify>(hook.verify);
-  const [verifyHeader, setVerifyHeader] = useState(hook.verifyHeader ?? '');
+  const [verify, setVerify] = useState<InVerify>(hook.verify === 'none' ? 'header' : hook.verify);
+  const [verifyHeader, setVerifyHeader] = useState(hook.verifyHeader ?? (hook.verify === 'hmac' ? 'X-Signature' : 'X-Webhook-Secret'));
   const [verifyEncoding, setVerifyEncoding] = useState<'hex' | 'base64'>(hook.verifyEncoding ?? 'hex');
-  const [secret, setSecret] = useState('');
+  const [secretName, setSecretName] = useState(hook.secretName ?? suggestSecretName(hook.name));
   const set = (p: Partial<InConfig>) => setConfig((c) => ({...c, ...p}));
   const targets = useTargets(action);
 
@@ -313,9 +319,9 @@ function HookDialog({hook, onClose, onLog}: {hook: IncomingWebhookRow; onClose: 
         action,
         config: {...config, mapping: config.mapping.filter((m) => m.path.trim() && m.target), fixed: config.fixed.filter((f) => f.target)},
         verify,
-        verifyHeader: verify === 'none' ? (verifyHeader.trim() || null) : verifyHeader.trim(),
+        verifyHeader: verifyHeader.trim(),
         verifyEncoding: verify === 'hmac' ? verifyEncoding : null,
-        ...(secret.trim() ? {secret: secret.trim()} : {}),
+        secretName: secretName.trim(),
       }),
     {invalidate: [keys.incomingWebhooks], success: 'Incoming webhook saved', onSuccess: onClose},
   );
@@ -355,9 +361,9 @@ function HookDialog({hook, onClose, onLog}: {hook: IncomingWebhookRow; onClose: 
                   setHeader={setVerifyHeader}
                   encoding={verifyEncoding}
                   setEncoding={setVerifyEncoding}
-                  secret={secret}
-                  setSecret={setSecret}
-                  hasSecret={hook.hasSecret}
+                  secretName={secretName}
+                  setSecretName={setSecretName}
+                  secretAdded={current.secretAdded && current.secretName === secretName.trim()}
                   config={config}
                   onChange={set}
                 />
@@ -630,22 +636,24 @@ function SecurityEditor(p: {
   setHeader: (v: string) => void;
   encoding: 'hex' | 'base64';
   setEncoding: (v: 'hex' | 'base64') => void;
-  secret: string;
-  setSecret: (v: string) => void;
-  hasSecret: boolean;
+  secretName: string;
+  setSecretName: (v: string) => void;
+  secretAdded: boolean;
   config: InConfig;
   onChange: (c: Partial<InConfig>) => void;
 }) {
   const {ids, verify} = p;
+  const [generated, setGenerated] = useState('');
+  const nameError = INCOMING_SECRET_NAME.test(p.secretName.trim()) ? null : 'Use capital letters, digits and _ after INCOMING_, e.g. INCOMING_STRIPE_SECRET';
   const pickVerify = (v: InVerify) => {
     p.setVerify(v);
-    if (!p.header.trim()) p.setHeader(v === 'hmac' ? 'X-Signature' : v === 'header' ? 'X-Webhook-Secret' : '');
+    if (!p.header.trim()) p.setHeader(v === 'hmac' ? 'X-Signature' : 'X-Webhook-Secret');
   };
   return (
-    <Section title="Security and limits" hint="The URL is always required. Add a check the sender must pass too.">
+    <Section title="Security and limits" hint="Every request needs the secret URL AND passes a check: a secret header or a signature.">
       <div className="grid gap-4">
-        <div role="radiogroup" aria-label="Verification" className="grid grid-cols-1 gap-2 @xl:grid-cols-3">
-          {(Object.keys(IN_VERIFY) as InVerify[]).map((v) => (
+        <div role="radiogroup" aria-label="Verification" className="grid grid-cols-1 gap-2 @xl:grid-cols-2">
+          {(Object.keys(IN_VERIFY) as (keyof typeof IN_VERIFY)[]).map((v) => (
             <label key={v} className={cn('flex cursor-pointer items-start gap-2.5 rounded-xl border px-3 py-2.5 transition-colors', verify === v ? 'border-primary bg-primary/5' : 'border-slate-200 hover:border-slate-300')}>
               <input type="radio" name={`${ids}-verify`} className="mt-1 accent-[var(--primary)]" checked={verify === v} onChange={() => pickVerify(v)} />
               <span className="min-w-0">
@@ -655,8 +663,7 @@ function SecurityEditor(p: {
             </label>
           ))}
         </div>
-        {verify !== 'none' && (
-          <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
             <Field label={verify === 'hmac' ? 'Signature header' : 'Header name'} htmlFor={`${ids}-header`} hint={verify === 'hmac' ? 'An optional sha256= prefix is accepted.' : undefined}>
               <Input id={`${ids}-header`} value={p.header} onChange={(e) => p.setHeader(e.target.value.replace(/[^A-Za-z0-9-]/g, ''))} placeholder={verify === 'hmac' ? 'X-Signature' : 'X-Webhook-Secret'} className="font-mono text-xs" required />
             </Field>
@@ -669,19 +676,30 @@ function SecurityEditor(p: {
               </Field>
             )}
             <Field
-              label={verify === 'hmac' ? 'Signing key' : 'Secret'}
+              label={verify === 'hmac' ? 'Site secret with the signing key' : 'Site secret with the secret'}
               htmlFor={`${ids}-secret`}
               className="@xl:col-span-2"
-              hint={p.hasSecret && !p.secret ? 'A secret is saved. It is never shown again; type or generate a new one to replace it.' : p.secret ? 'Copy it into the sending tool, then save.' : 'Paste the one the sending tool gives you, or generate one.'}
+              error={nameError}
+              hint={p.secretAdded ? 'Added in your dashboard. Requests must match its value.' : 'Not added yet: until it is, every request is refused. In your dashboard, add a secret with this name and the value the sending tool uses.'}
             >
-              <div className="flex gap-2">
-                <Input id={`${ids}-secret`} value={p.secret} onChange={(e) => p.setSecret(e.target.value)} placeholder={p.hasSecret ? '•••••••• (saved)' : 'At least 8 characters'} className="font-mono text-xs" autoComplete="off" spellCheck={false} />
-                {p.secret && <Button type="button" variant="secondary" size="icon" onClick={() => copy(p.secret, 'Secret copied')} aria-label="Copy secret"><Copy /></Button>}
-                <Button type="button" variant="secondary" onClick={() => p.setSecret(randomSecret())}><KeyRound /> Generate</Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input id={`${ids}-secret`} value={p.secretName} onChange={(e) => p.setSecretName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))} aria-invalid={!!nameError} className="min-w-0 flex-1 font-mono text-xs" autoComplete="off" spellCheck={false} />
+                <Badge tone={p.secretAdded ? 'green' : 'amber'}>{p.secretAdded ? 'Added' : 'Not added'}</Badge>
               </div>
             </Field>
-          </div>
-        )}
+            <div className="grid gap-2 rounded-xl bg-slate-50 p-3 text-xs text-muted-foreground @xl:col-span-2">
+              <p>The sending tool gives you a secret, or make one here. Its value goes in two places: the site secret above (in your dashboard) and the sending tool. Kinroot never stores it.</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant="secondary" size="sm" onClick={() => setGenerated(randomSecret())}><KeyRound /> Make a secret</Button>
+                {generated && (
+                  <>
+                    <code className="break-all rounded-md bg-card px-2 py-1 text-slate-800">{generated}</code>
+                    <Button type="button" variant="secondary" size="icon" onClick={() => copy(generated, 'Secret copied')} aria-label="Copy secret"><Copy /></Button>
+                  </>
+                )}
+              </div>
+            </div>
+        </div>
         <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
           <Field label="Idempotency path" hint="A unique id in the payload, e.g. id. Repeats with the same value are ignored. An Idempotency-Key header works too.">
             <Input value={p.config.idempotencyPath} onChange={(e) => p.onChange({idempotencyPath: e.target.value})} placeholder="id" className="font-mono text-xs" maxLength={200} />
@@ -786,7 +804,7 @@ function EndpointPanel({hook, action, paths, verify, header, encoding, onLog, on
       )}
 
       <Disclosure summary="Send a sample request" icon={<Terminal />} className="bg-card">
-        <p className="text-xs">Run this in a terminal{verify !== 'none' ? ' (put your secret in)' : ''}. {hook.listening ? 'You are listening, so it becomes the sample.' : 'Click Listen first to capture it as the sample without writing anything.'}</p>
+        <p className="text-xs">Run this in a terminal (put your secret in). {hook.listening ? 'You are listening, so it becomes the sample.' : 'Click Listen first to capture it as the sample without writing anything.'}</p>
         <CodeBlock code={curlCommand(hook.url, body, verify, header, encoding)} label="curl command" className="max-h-64 text-[10.5px] whitespace-pre-wrap break-all" />
       </Disclosure>
     </aside>

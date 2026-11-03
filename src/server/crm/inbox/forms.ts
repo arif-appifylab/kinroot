@@ -58,7 +58,7 @@ export async function formConversation(db: Db, form: Pick<Form, 'id' | 'name'>, 
     const routed = await onInbound(db, thread, message);
     return routed.thread;
   } catch (e) {
-    console.error('[inbox] form conversation', form.id, e);
+    console.error('[inbox] form conversation', form.id, String((e as Error)?.message ?? e).slice(0, 200));
     return null;
   }
 }

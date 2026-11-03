@@ -38,3 +38,50 @@ export async function teammate(ownerBrowser: Browser, email: string, role: 'ADMI
   expect(joined.status).toBe(200);
   return {browser, token};
 }
+
+/**
+ * The platform's file storage, faked for Kinroot's import / export / upload tests (the harness
+ * fakes only emails and owner sign-in). Same contract as src/platform/files.ts: create an upload,
+ * PUT the bytes to the site-relative upload URL, complete, then short links to read them.
+ */
+export const storedFiles = new Map<string, {name: string; contentType: string; size: number; visibility: string; bytes: Uint8Array | null}>();
+let storageOn = false;
+
+export function fakeStorage() {
+  if (storageOn) return;
+  storageOn = true;
+  const previous = globalThis.fetch;
+  const json = (data: unknown, status = 200) => new Response(JSON.stringify({data}), {status, headers: {'content-type': 'application/json'}});
+  const meta = (id: string) => {
+    const f = storedFiles.get(id)!;
+    const now = new Date().toISOString();
+    return {id, name: f.name, contentType: f.contentType, size: f.size, visibility: f.visibility, status: f.bytes ? 'ready' : 'pending', environment: 'staging', createdAt: now, completedAt: f.bytes ? now : null};
+  };
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    const method = (init?.method ?? 'GET').toUpperCase();
+    const api = /^\/api\/site\/v1\/files(?:\/(file_[0-9a-z]{26}))?(\/[a-z]+)?$/.exec(url.pathname);
+    if (api) {
+      const [, id, action] = api;
+      if (!id && action === '/uploads' && method === 'POST') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {name: string; contentType: string; size: number; visibility?: string};
+        const fileId = `file_${crypto.randomUUID().replace(/-/g, '').slice(0, 26)}`;
+        storedFiles.set(fileId, {name: body.name, contentType: body.contentType, size: body.size, visibility: body.visibility ?? 'private', bytes: null});
+        return json({file: meta(fileId), upload: {method: 'PUT', url: `/__platform/files/put/${fileId}`, headers: {}, expiresAt: new Date(Date.now() + 600_000).toISOString()}}, 201);
+      }
+      if (!id || !storedFiles.has(id)) return new Response(JSON.stringify({errors: [{code: 'E_NOT_FOUND', message: 'No such file'}]}), {status: 404});
+      if (action === '/complete') return json({file: meta(id)});
+      if (action === '/url') return json({url: `/__platform/files/get/${id}`, expiresAt: new Date(Date.now() + 300_000).toISOString()});
+      if (action === '/delete') return storedFiles.delete(id), json({deleted: true});
+      if (!action) return json({file: meta(id)});
+    }
+    const put = /^\/__platform\/files\/put\/(file_[0-9a-z]{26})$/.exec(url.pathname);
+    if (put && method === 'PUT' && storedFiles.has(put[1]!)) {
+      storedFiles.get(put[1]!)!.bytes = new Uint8Array(await new Response(init?.body ?? null).arrayBuffer());
+      return json({file: meta(put[1]!)});
+    }
+    const get = /^\/__platform\/files\/get\/(file_[0-9a-z]{26})$/.exec(url.pathname);
+    if (get && storedFiles.get(get[1]!)?.bytes) return new Response(storedFiles.get(get[1]!)!.bytes as Uint8Array<ArrayBuffer>);
+    return previous(input, init);
+  };
+}

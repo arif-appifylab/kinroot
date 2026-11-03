@@ -61,6 +61,9 @@ import {recycleBin} from './routes/recycle-bin';
 import {automations} from './routes/automations';
 import {reportSchedules, reportSchedulesPublic} from './routes/report-schedules';
 import './lib/automation-reports'; // registers the Automation runs report object
+// The job handlers, wherever this app runs: pages call it in-process too, and on your machine / in the
+// Preview a job sent before they are registered would run nowhere and be dropped.
+import '../background';
 import {drainBacklog, withOutbox} from './lib/jobs';
 
 /**
@@ -88,7 +91,7 @@ const withCrmDb: MiddlewareHandler<AppEnv> = async (c, next) => {
 const withJobs: MiddlewareHandler<AppEnv> = async (c, next) => {
   await withOutbox(() => next());
   // On your machine jobs run as they are sent; ones planned for later wait in the backlog until due.
-  if (runsJobsLocally()) await drainBacklog(c.var.db, 20).catch((e) => console.error('[jobs] backlog', e));
+  if (runsJobsLocally()) await drainBacklog(c.var.db, 20).catch((e) => console.error('[jobs] backlog', String((e as Error)?.message ?? e).slice(0, 200)));
 };
 
 const onError: ErrorHandler<AppEnv> = (err, c) => {
