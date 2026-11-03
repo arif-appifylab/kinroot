@@ -6,17 +6,20 @@ import {abilitiesOf, type AbilitiesOf, codenamesOf, CORE_PERMISSIONS, definePerm
  *
  *   - `PERMISSIONS.<KEY>` is its codename, for `requirePermission` / `can`;
  *   - `ability` adds a flag to `/me` `abilities` (and to the `Abilities` type)
- *     for the UI: portal nav items, buttons, `pageContext()` pages;
+ *     for the UI: Kinroot's screens, buttons, `pageContext()` pages;
  *   - the row reaches the `permissions` table (the roles screen) on the next
  *     signed-in request after deploy, and `roles` get it that first time only
  *     (`src/platform/permission-sync.ts`). No migration.
  *
  * Never rename or reuse a shipped codename: roles hold it by name. Browser-safe
- * (no server imports): the portal reads the `Abilities` type from here.
+ * (no server imports): the browser may read the `Abilities` type from here.
  */
 export const CATALOGUE = definePermissions({
   ...CORE_PERMISSIONS,
-  /** Post, edit, close and delete jobs (`/dashboard/jobs`). */
+  /**
+   * The template's job board (removed in phase 10D: no route checks it now). Kept so roles that
+   * hold it stay valid; remove it with the `jobs` table in a later clean-up.
+   */
   JOB_MANAGE: {
     codename: 'site:job:manage',
     title: 'Manage jobs',

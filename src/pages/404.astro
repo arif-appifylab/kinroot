@@ -1,15 +1,25 @@
 ---
 /**
- * Any address on the site that matches no page. Rendered on request (so it
- * shows the brand) with a 404 status.
+ * Any address on the site that matches no page, in Kinroot's design (the company's brand, as on the
+ * website pages). Rendered on request with a 404 status; kept out of search (`noindex`). The brand is a
+ * cached in-process read that falls back to Kinroot's defaults, so this page never fails on it.
  */
-import NotFound from '../components/NotFound.astro';
-import Base from '../layouts/Base.astro';
-import {pageContext} from '../server/page';
+import ErrorPage from '../components/ErrorPage.astro';
+import CrmPublic from '../layouts/CrmPublic.astro';
+import {crmBrand} from '../server/crm/page';
 
-const {site, viewer} = await pageContext(Astro.request, Astro.response);
+export const prerender = false;
+
+const brand = await crmBrand(Astro.request);
+Astro.response.status = 404;
+Astro.response.headers.set('Cache-Control', 'no-store');
 ---
 
-<Base site={site} viewer={viewer} title="Page not found" noindex>
-  <NotFound site={site} />
-</Base>
+<CrmPublic brand={brand} title="Page not found" noindex>
+  <ErrorPage
+    brand={brand}
+    code={404}
+    heading="This page does not exist"
+    text="The address may be mistyped, or the page has moved. Check the link, or start again from the home page."
+  />
+</CrmPublic>

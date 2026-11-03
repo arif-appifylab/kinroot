@@ -1,8 +1,9 @@
 import {createFileRoute, Link, Outlet, useRouterState} from '@tanstack/react-router';
-import {CalendarDays, Columns3, CopyCheck, FileText, Flame, Globe, Inbox, LifeBuoy, Mail, ScrollText, Settings2, SlidersHorizontal, Trash2, UserCircle, Users, Webhook} from 'lucide-react';
+import {CalendarDays, Columns3, CopyCheck, FileText, Flame, Globe, Inbox, KeyRound, LifeBuoy, Mail, ScrollText, Settings2, ShieldCheck, SlidersHorizontal, Trash2, UserCircle, UserCog, Users, Webhook} from 'lucide-react';
 
 import {PageHeader} from '@/components/ui/misc';
 import {pageTitle} from '@/lib/brand';
+import {useSiteMe} from '@/lib/site-admin';
 import {useBrand} from '@/lib/use-brand';
 import {cn} from '@/lib/utils';
 
@@ -14,7 +15,10 @@ export const Route = createFileRoute('/_app/settings')({
 const NAV = [
   {to: '/settings', label: 'General', icon: Settings2, exact: true},
   {to: '/settings/profile', label: 'Profile', icon: UserCircle},
+  {to: '/settings/security', label: 'Security', icon: KeyRound},
   {to: '/settings/team', label: 'Team', icon: Users},
+  {to: '/settings/accounts', label: 'Accounts', icon: UserCog, ability: 'manageUsers'},
+  {to: '/settings/roles', label: 'Roles', icon: ShieldCheck, ability: 'manageRoles'},
   {to: '/settings/pipelines', label: 'Pipelines', icon: Columns3},
   {to: '/settings/fields', label: 'Custom fields', icon: SlidersHorizontal},
   {to: '/settings/email', label: 'Email', icon: Mail},
@@ -33,12 +37,15 @@ const NAV = [
 function SettingsLayout() {
   const path = useRouterState({select: (s) => s.location.pathname});
   const brand = useBrand();
+  // Site admin screens only for people with that site permission (the server checks every call again).
+  const {abilities} = useSiteMe();
+  const nav = NAV.filter((n) => !('ability' in n) || abilities?.[n.ability]);
   return (
     <div>
       <PageHeader title="Settings" description={`Shape ${brand.name} around how your team sells.`} />
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[210px_minmax(0,1fr)]">
         <nav className="-mx-4 flex gap-1 overflow-x-auto px-4 pb-1 scrollbar-thin xl:mx-0 xl:flex-col xl:px-0" aria-label="Settings">
-          {NAV.map((n) => {
+          {nav.map((n) => {
             const active = 'exact' in n ? path === n.to || path === `${n.to}/` : path.startsWith(n.to);
             return (
               <Link

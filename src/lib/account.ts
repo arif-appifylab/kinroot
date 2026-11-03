@@ -2,12 +2,15 @@ import {siteFetch} from '../platform/browser';
 import type {Viewer} from '../platform/types';
 
 /**
- * BROWSER helpers shared by the `/account/*` pages (prerendered: they know no
- * visitor until their script runs).
+ * BROWSER helpers shared by the `/account/*` pages (their server render reads no
+ * visitor: they know who it is only once their island runs).
  */
 
-/** `?next=` as a same-site PATH, or the fallback. Mirrors `safeNext` on the server. */
-export function nextPath(fallback = '/dashboard'): string {
+/**
+ * `?next=` as a same-site PATH, or the fallback. Mirrors `safeNext` on the server.
+ * The fallback is Kinroot (`/crm/`): the template's dashboard is going away.
+ */
+export function nextPath(fallback = '/crm/'): string {
   const value = new URLSearchParams(window.location.search).get('next');
   if (!value || value.length > 512) return fallback;
   if (!value.startsWith('/') || value.startsWith('//') || value.startsWith('/\\')) return fallback;

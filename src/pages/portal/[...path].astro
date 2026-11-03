@@ -1,11 +1,14 @@
 ---
 /**
- * The dashboard's old address. `/portal/<anything>?<query>` → `/dashboard/<anything>?<query>`,
- * keeping the query string: the dashboard's one-click owner sign-in into the Preview opens
- * `/portal/?owner_ticket=…`, and old links and bookmarks keep working. Keep this page.
+ * The dashboard's old address. `/portal/<anything>?<query>` → Kinroot at `/crm/` (the same place
+ * `/dashboard/<anything>` goes: `src/server/legacy-addresses.ts`), keeping the query string: the
+ * dashboard's one-click owner sign-in into the Preview opens `/portal/?owner_ticket=…`, and old links
+ * and bookmarks keep working. Keep this page.
  */
+import {kinrootAddress} from '../../server/legacy-addresses';
+
 export const prerender = false;
 
 const rest = Astro.url.pathname.replace(/^\/portal/, '');
-return Astro.redirect(`/dashboard${rest}${Astro.url.search}`, 308);
+return Astro.redirect(kinrootAddress(rest, Astro.url.search), 302);
 ---

@@ -7,8 +7,10 @@ import {ThemeToggle} from './theme-toggle';
 /**
  * Split auth screen: form on the left, an isometric "live pipeline" card on
  * the right floating over soft gradient orbs, the style's signature moment.
+ * Used by the CRM's own screens and by the sign-in pages (src/crm/public/auth); `footer` sits under
+ * the card (links to the other sign-in pages).
  */
-export function AuthLayout({title, highlight, subtitle, children}: {title: string; highlight: string; subtitle: string; children: ReactNode}) {
+export function AuthLayout({title, highlight, subtitle, children, footer}: {title: string; highlight: string; subtitle?: ReactNode; children: ReactNode; footer?: ReactNode}) {
   return (
     <div className="relative min-h-dvh overflow-hidden bg-background">
       <div className="blob -top-40 -left-32 size-[520px] bg-blue-300/40" />
@@ -22,8 +24,9 @@ export function AuthLayout({title, highlight, subtitle, children}: {title: strin
           <h1 className="mt-10 text-3xl font-extrabold leading-[1.1] text-slate-900 sm:text-4xl">
             {title} <span className="text-brand">{highlight}</span>
           </h1>
-          <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-muted-foreground">{subtitle}</p>
+          {subtitle && <p className="mt-3 max-w-xl text-[15px] leading-relaxed text-muted-foreground">{subtitle}</p>}
           <div className="mt-8 rounded-2xl border border-slate-100 bg-card/90 p-6 shadow-soft backdrop-blur sm:p-8">{children}</div>
+          {footer && <div className="mt-6 text-sm text-muted-foreground">{footer}</div>}
         </div>
 
         <div className="hidden [perspective:2000px] lg:block" aria-hidden>

@@ -6,30 +6,29 @@ import tailwindcss from '@tailwindcss/vite';
 import {tanstackRouter} from '@tanstack/router-plugin/vite';
 import {defineConfig} from 'astro/config';
 
-// Pages render on request on a Cloudflare Worker (marketing and account pages
-// are prerendered). Beside them the same Worker serves the portal
-// (`/dashboard/*`, a React app) and the Site API (`/site-api/*`, a Hono app).
+// Pages render on request on a Cloudflare Worker (the account pages are
+// prerendered). Beside them the same Worker serves Kinroot, the CRM
+// (`/crm/*`, a React app) and the Site API (`/site-api/*`, a Hono app).
 // One project, one build, one dev server.
 //
-// Public pages stay real HTML pages (best for search), navigated client-side
-// by `<ClientRouter />` (src/layouts/Base.astro) and fetched ahead by
-// `prefetch` (below). The portal is a React app with its own router.
+// Public pages stay real HTML pages (best for search), fetched ahead by
+// `prefetch` (below) where a link asks for it. Kinroot is a React app with its own router.
 //
 // No wrangler config is committed: the platform writes the deploy config at
 // build time, so it can never be broken by an edit here.
 export default defineConfig({
   output: 'server',
   // Fetch a page before the click, for links marked `data-astro-prefetch`:
-  // on hover or focus (`hover`), the header nav as soon as it is on screen
-  // (`data-astro-prefetch="viewport"` in Base.astro: phones have no hover).
+  // on hover or focus (`hover`), or as soon as it is on screen
+  // (`data-astro-prefetch="viewport"`: phones have no hover).
   // OPT-IN, not `prefetchAll`: only links to PRERENDERED pages are marked.
-  // Per-visit pages (`/jobs/*`, `/dashboard`) answer `no-store`, so a prefetch of
-  // them would be thrown away (a wasted Worker request), and the portal
+  // Per-visit pages (`/crm/*`) answer `no-store`, so a prefetch of
+  // them would be thrown away (a wasted Worker request), and Kinroot
   // preloads its own screens (TanStack Router). Skipped on slow connections
   // and with Data Saver. The script is a small deferred module from 'self'.
   prefetch: {prefetchAll: false, defaultStrategy: 'hover'},
   adapter: cloudflare({
-    // Images in PRERENDERED pages (blog covers from src/assets) are optimised at
+    // Images in PRERENDERED pages (files in src/assets) are optimised at
     // BUILD time with sharp (AVIF/WebP, several widths); on the Worker they are
     // passed through, never resized: on-demand transforms need a Cloudflare
     // Images binding the platform does not give a Site.
@@ -82,7 +81,7 @@ export default defineConfig({
     // each script and style it emits: no inline code it did not write runs.
     // `connect-src 'self'`: the browser only ever talks to this site's own
     // `/site-api` (file uploads too: their URL is a path on this site). Images, audio and
-    // video may come from any https CDN (logos, blog covers, stored files' signed links).
+    // video may come from any https CDN (logos, stored files' signed links).
     // Frame protection is a header (`X-Frame-Options`, src/platform/headers.ts
     // and public/_headers): a meta CSP cannot set `frame-ancestors`.
     csp: {
@@ -96,7 +95,7 @@ export default defineConfig({
         "object-src 'none'",
         "base-uri 'self'",
         "form-action 'self'",
-        // Blog posts may embed these players (src/platform/sanitize.ts allows them).
+        // Sanitized HTML may embed these players (src/platform/sanitize.ts allows them).
         'frame-src https://www.youtube.com https://www.youtube-nocookie.com https://player.vimeo.com',
       ],
     },

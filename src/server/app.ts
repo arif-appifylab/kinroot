@@ -10,15 +10,14 @@ import {authSettings} from './auth-settings';
 import {checkoutRoutes, membershipRoutes} from './routes/checkout';
 import {crmApp, crmHooks} from './crm/app';
 import {abilitiesFor, CATALOGUE} from './permissions';
-import {jobRoutes} from './routes/jobs';
 import {siteRoutes} from './routes/site';
 
 /**
  * The Site API: this site's ONLY backend, one Hono app at `/site-api/*`.
  *
  * Everything reads and writes through it: the Astro pages call it IN-PROCESS
- * (`src/server/backend.ts`), the portal and the `/account` pages call it from
- * the browser (`siteFetch` / the typed `hc` client, `src/portal/api.ts`).
+ * (`src/server/backend.ts`), Kinroot (`/crm`) and the `/account` pages call it
+ * from the browser (`siteFetch`).
  * Mounted by ONE catch-all page, `src/pages/site-api/[...path].ts`.
  *
  *   GET  /health        what this site has been given (booleans only)
@@ -26,7 +25,6 @@ import {siteRoutes} from './routes/site';
  *   *    /auth/...      sign-up, sign-in, sessions, passwords   platform/auth/routes.ts
  *   *    /admin/...     users, roles, audit log (admins)        platform/auth/admin.ts
  *   GET  /site          the site's brand                        routes/site.ts
- *   *    /jobs/...      the job board (Site Database)           routes/jobs.ts
  *   *    /checkout/...  start and confirm a payment             routes/checkout.ts
  *   *    /memberships/... the member's memberships               routes/checkout.ts
  *   *    /crm/...      Kinroot CRM (its own Site API)           crm/app.ts
@@ -79,7 +77,6 @@ export const app = new Hono()
   .route('/auth', authRoutes(authSettings))
   .route('/admin', adminRoutes)
   .route('/site', siteRoutes)
-  .route('/jobs', jobRoutes)
   .route('/memberships', membershipRoutes)
   .route('/crm', crmApp)
 

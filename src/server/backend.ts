@@ -7,10 +7,10 @@ import {app, type AppType} from './app';
  * browser reaches at `/site-api/*`, invoked directly (`app.request`) with no
  * network hop and nothing in between. Pages are only the view; every read and
  * write goes through Hono, so one set of routes, validators and guards serves
- * the pages, the portal and any other client.
+ * the pages, Kinroot and any other client.
  *
  *   const api = backend(Astro.request);
- *   const page = await read<JobsPage>(api.jobs.$get({query: {search: '', type: '', remote: '', before: ''}}));
+ *   const site = await read<{site: Site | null}>(api.site.$get());
  *
  * The visitor's own credentials (their `cookie` header) are passed through, so
  * `withViewer` sees the same visitor the page does. Never `fetch()` this

@@ -27,7 +27,7 @@ export const xmlEscape = (value: string) =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /**
- * Structured data (schema.org JSON-LD) for search engines. `<Base>` renders it
+ * Structured data (schema.org JSON-LD) for search engines. `CrmPublic.astro` renders it
  * as `<script type="application/ld+json">`: a data block, never executed, so
  * the CSP does not apply to it. Only facts the page itself shows; absolute
  * URLs only when the site's address is known (`siteOrigin()`).
@@ -71,60 +71,5 @@ export function siteJsonLd(site: {name: string; logo?: string | null}, descripti
       },
       organization(site),
     ],
-  };
-}
-
-/** A blog post's `BlogPosting`, from its front matter. */
-export function postJsonLd(
-  site: {name: string; logo?: string | null},
-  post: {path: string; title: string; description: string; publishedAt: Date; updatedAt?: Date; author?: string; image?: string | null}
-): JsonLd {
-  const url = absoluteUrl(post.path);
-  const image = post.image ? absoluteUrl(post.image) : null;
-  const publisher = organization(site);
-  return {
-    '@context': 'https://schema.org',
-    '@type': 'BlogPosting',
-    headline: post.title,
-    description: post.description,
-    datePublished: post.publishedAt.toISOString(),
-    dateModified: (post.updatedAt ?? post.publishedAt).toISOString(),
-    author: post.author ? {'@type': 'Person', name: post.author} : publisher,
-    publisher,
-    ...(url && {url, mainEntityOfPage: url}),
-    ...(image && {image}),
-  };
-}
-
-const EMPLOYMENT_TYPE: Record<string, string> = {
-  'full-time': 'FULL_TIME',
-  'part-time': 'PART_TIME',
-  contract: 'CONTRACTOR',
-  internship: 'INTERN',
-};
-
-/** An open job's `JobPosting` (Google for Jobs). The description is plain text, as on the page. */
-export function jobJsonLd(job: {
-  slug: string;
-  title: string;
-  company: string;
-  location: string;
-  type: string;
-  remote: boolean;
-  description: string;
-  createdAt: string;
-}): JsonLd {
-  const url = absoluteUrl(`/jobs/${encodeURIComponent(job.slug)}/`);
-  return {
-    '@context': 'https://schema.org',
-    '@type': 'JobPosting',
-    title: job.title,
-    description: job.description,
-    datePosted: job.createdAt,
-    hiringOrganization: {'@type': 'Organization', name: job.company},
-    jobLocation: {'@type': 'Place', address: {'@type': 'PostalAddress', addressLocality: job.location}},
-    ...(job.remote && {jobLocationType: 'TELECOMMUTE'}),
-    ...(EMPLOYMENT_TYPE[job.type] && {employmentType: EMPLOYMENT_TYPE[job.type]}),
-    ...(url && {url}),
   };
 }

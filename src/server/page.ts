@@ -31,8 +31,7 @@ export async function pageContext(request: Request, response: {headers: Headers}
 /**
  * What a PRERENDERED page needs (`export const prerender = true`): the brand
  * only, read once at BUILD time. There is no visitor at build time: the page
- * renders signed out and passes `isStatic` to `<Base>`, which fills the
- * visitor in, in the browser.
+ * renders signed out; fill the visitor in, in the browser.
  *
  *   export const prerender = true;
  *   const {site, viewer} = await staticContext(Astro.request);

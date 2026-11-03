@@ -18,6 +18,36 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | done |
 | 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | done |
 | 9 | Public site pages (`/`, `/contact/`, `/demo/`), SEO, tests ported to vitest, build, `review.md` | done |
+| 10 | Kinroot's design everywhere: sign-in, account and admin on the template's backend; template pages removed | done |
+
+## Phase 10 plan: Kinroot's design everywhere (owner's request)
+
+The template's auth BACKEND stays (`/site-api/auth/*`, `src/platform/auth`: sessions, passwords, two-step,
+rate limits, emails). Every screen a person sees becomes Kinroot's design and UI kit. URLs stay where the
+platform expects them (`/account/*` for sign-in; `/portal` and `/dashboard` still answer, then open Kinroot).
+
+- **10A Sign-in pages** (`/account/login/`, `register/`, `forgot/`, `reset/`, `verify/`, `confirm-email/`):
+  Astro pages with React islands in Kinroot's auth layout (the original `auth-layout.tsx` / `login.tsx` look),
+  calling the same endpoints through `siteFetch`. Every flow kept: password, 6-digit email code, two-step code
+  and recovery code, owner-link notices, `?next=`, the Preview's cookie bridge. Form rules: `noValidate`, errors
+  under fields, pending buttons, show / hide on every password field.
+- **10B Account in Kinroot Settings**: Profile (name, change email with its confirmation link) and a new
+  Security tab (set or change password, two-step setup with QR and recovery codes, turn off, signed-in devices,
+  sign out everywhere, delete account). No more links to `/dashboard/account`.
+- **10C Site admin in Kinroot Settings** (owners and admins, by the site permissions): Accounts (everyone with an
+  account, support customers included: search, roles, block, delete), Roles (site roles and their permissions),
+  and the sign-in / security events in the Audit log screen. `/dashboard/*` and `/portal/*` open `/crm/`; the
+  platform's one-click owner sign-in (`?owner_ticket=`) is redeemed by Kinroot's host page.
+- **10D Template leftovers removed**: the dashboard SPA (`src/portal`, `App.astro`), Blog, Jobs board, About,
+  Checkout, Thanks, the RSS feed and the template's `Base` header and footer. The 404 and 500 pages in
+  Kinroot's design. Sitemap and robots.txt stay. Database tables of removed features are left in place (no
+  destructive migration) and listed for a later clean-up.
+- **Checks**: integration tests for each auth flow through the new pages' API calls, the owner ticket, the
+  admin screens' authorization (non-admins get 403/404); build, CSP check of every new page, review.md.
+
+Background jobs: their lists and schedules come from `background.json` and the handlers in
+`src/server/background.ts`; the EzyStudio dashboard's Jobs tab shows and runs them. Kinroot's Settings →
+Webhooks card only reports status and points there.
 
 ## Where things live
 
@@ -196,12 +226,34 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
   the database's `now()` (stuck-run rescue, `scoreUpdatedAt`): wrong on a database not in UTC, now bound from code.
 - `/site-api/crm/public/website` is in the Site Cache (5 minutes, cleared when Settings → Website saves).
 
+## Decisions (phase 10)
+
+- Sign-in pages (`/account/*`) are server-rendered `CrmPublic` pages with one React island each
+  (`src/crm/public/auth/`), Kinroot's split auth layout, the same `/site-api/auth/*` calls and shared rules.
+  Pages whose address carries a secret (reset, verify, confirm-email, `?mfa=`) are `no-store` + `no-referrer`.
+  `nextPath()` falls back to `/crm/`.
+- Settings → Profile (name, picture, email change) and Settings → Security (password, two-step, devices, delete
+  account) replace the template's account screen (`src/crm/components/account/`, `src/crm/lib/account-api.ts`).
+  An account with no password gets "email me a link to set one". Turning two-step off, new recovery codes and
+  deleting the account ask first.
+- Settings → Accounts and Roles, and a "Sign-in & security" tab in the Audit log, replace the template's Users,
+  Roles and Activity screens (`src/crm/components/site-admin/`, `src/crm/lib/site-admin.ts`), shown only with the
+  site permission (the menu hides them too). No admin "delete account": the backend has none (block instead).
+- `/dashboard/*` and `/portal/*` redirect into Kinroot (`src/server/legacy-addresses.ts`), keeping the query;
+  Kinroot redeems the one-click `?owner_ticket=` itself (`CrmApp.tsx`).
+- Removed: the template dashboard SPA, Blog, Jobs board (pages and API), About, Checkout, Thanks, RSS, `Base.astro`
+  and its styles. 404 / 500 in Kinroot's design. `CrmPublic` boots the theme before the first paint.
+
 ## Open items (tracked)
 
 - Plain `<a href>` links to `/site-api/crm/...` downloads (exports, files) carry the session by cookie: fine live, signed out in the editor Preview.
 - Email preview frame (`components/inbox/parts.tsx`) inherits the page CSP: check its styles in phase 4.
 - Lists page with OFFSET and show totals from `count(*)` (contacts, companies, duplicates, audit, forms, automation
   runs), as the original did; the rules want keyset paging and "25+". Owner to decide (visible change).
+- Template clean-up left: the `jobs` table and `site:job:manage` (still in the Admin role, shown as "Manage jobs"),
+  the Admin role's seeded description mentioning jobs, `orders` / `memberships` tables and the checkout API (its
+  pages are gone), `public/favicon.svg`. Needs a small data migration and template test updates.
+- After sign-in the platform's default destination is `/dashboard` (one redirect to `/crm/`).
 - Brand logo is still a data URL in the settings row (file bytes in the database): move to a public storage file.
 - The sonner toast library logs one CSP message per page load (its CSS loads from our stylesheet; harmless).
 - Report filter picker lists every company name to members limited to their own records (as before; contacts are not listed).

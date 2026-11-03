@@ -125,9 +125,10 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
   });
 
   it('permissions apply on the next request, and the audit log records changes', async () => {
-    expect((await member.get('/site-api/jobs/manage?before=')).status).toBe(403);
+    // A route behind an admin permission (`site:audit:read`, held by the `admin` role).
+    expect((await member.get('/site-api/admin/audit')).status).toBe(403);
     await owner.request('PUT', `/site-api/admin/users/${ids.member}/roles`, {roles: ['member', 'admin']});
-    expect((await member.get('/site-api/jobs/manage?before=')).status).toBe(200);
+    expect((await member.get('/site-api/admin/audit')).status).toBe(200);
     const audit = await owner.get('/site-api/admin/audit');
     expect(audit.status).toBe(200);
     const actions = (audit.json.events as {action: string}[]).map(e => e.action);

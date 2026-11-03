@@ -1,20 +1,22 @@
 import {keepPreviousData, useQuery} from '@tanstack/react-query';
 import {createFileRoute, Link} from '@tanstack/react-router';
-import {ChevronDown, Download, History, LogIn, ScrollText, Settings2, ShieldAlert, Users} from 'lucide-react';
+import {ChevronDown, Download, History, LogIn, ScrollText, Settings2, ShieldAlert, ShieldCheck, Users} from 'lucide-react';
 import {useState} from 'react';
 
 import {Pagination, SearchInput} from '@/components/data-table';
 import {FilterBar, FilterDateRange} from '@/components/filter-bar';
 import {AdminOnly, SettingsSection} from '@/components/settings-section';
+import {SecurityEvents} from '@/components/site-admin/security-events';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {NativeSelect} from '@/components/ui/form';
-import {EmptyState, IconBadge, Skeleton} from '@/components/ui/misc';
+import {EmptyState, IconBadge, Skeleton, Tabs, TabsContent, TabsList, TabsTrigger} from '@/components/ui/misc';
 import {api, qs} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
 import {ago, dateTime} from '@/lib/format';
 import {actionLabel, AUDIT_CATEGORIES, AUDIT_RETENTION_DAYS, ENTITY_LABELS, type AuditCategory} from '@/lib/hygiene';
 import {keys, useApiMutation, useMe, useTeam} from '@/lib/queries';
+import {useSiteMe} from '@/lib/site-admin';
 import type {AuditEntry, AuditResponse} from '@/lib/types';
 import {cn} from '@/lib/utils';
 
@@ -136,7 +138,45 @@ function AuditRow({entry: e, live}: {entry: AuditEntry; live: Set<string>}) {
   );
 }
 
+type AuditTab = 'crm' | 'security';
+
+/**
+ * Two logs, two gates. "CRM activity" is Kinroot's own log (team Owners and Admins). "Sign-in &
+ * security" is the site's `audit_events` (sign-ups, sign-ins, password, two-step and role changes,
+ * blocked accounts), read from `/site-api/admin/audit` and shown to whoever holds the SITE
+ * permission site:audit:read, as the template's Activity screen was.
+ */
 function AuditLogSettings() {
+  const {isAdmin} = useMe();
+  const site = useSiteMe();
+  const canSecurity = Boolean(site.abilities?.readAudit);
+  const [picked, setPicked] = useState<AuditTab | null>(null);
+  const tab: AuditTab = picked ?? (isAdmin || !canSecurity ? 'crm' : 'security');
+
+  if (!canSecurity) return <CrmAuditLog />;
+  return (
+    <Tabs value={tab} onValueChange={(v) => setPicked(v as AuditTab)}>
+      <TabsList className="mb-4" aria-label="Which log">
+        <TabsTrigger value="crm">
+          <History /> CRM activity
+        </TabsTrigger>
+        <TabsTrigger value="security">
+          <ShieldCheck /> Sign-in &amp; security
+        </TabsTrigger>
+      </TabsList>
+      <TabsContent value="crm">
+        <CrmAuditLog />
+      </TabsContent>
+      <TabsContent value="security">
+        <SettingsSection title="Sign-in & security" description="Everyone with an account on this site, team and support customers: sign-ups, sign-ins with a code or from the platform, password and email changes, two-step sign-in, role changes, blocked accounts and refused sign-in tokens.">
+          <SecurityEvents />
+        </SettingsSection>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function CrmAuditLog() {
   const {isAdmin} = useMe();
   const team = useTeam();
   const [f, setF] = useState<Filters>({});

@@ -301,7 +301,7 @@ export function watchPaymentWindow(
 }
 
 /**
- * On every page (`Base.astro`): a page loaded INSIDE the payment window (the provider sent the
+ * On a page that hosts a checkout (none since phase 10D removed the template's `Base` layout): a page loaded INSIDE the payment window (the provider sent the
  * buyer back to this site, paid or not) tells the page that opened it, then closes itself. That
  * page checks the checkout's status and goes on.
  */

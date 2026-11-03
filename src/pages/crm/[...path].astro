@@ -19,7 +19,12 @@ const [{viewer}, brand] = await Promise.all([pageContext(Astro.request, Astro.re
 const back = encodeURIComponent(`${Astro.url.pathname}${Astro.url.search}`);
 // The editor Preview's gateway drops cookies, so this page never sees the session there: the
 // app starts anyway and asks the Site API itself (it sends a signed-out visitor to sign in).
-const open = viewer.state === 'user' || config.preview;
+// The platform's one-click owner sign-in (`/portal/?owner_ticket=…` → `/crm/?owner_ticket=…`)
+// arrives signed out by design: the app redeems the ticket first (src/crm/CrmApp.tsx).
+const ownerTicket = Astro.url.searchParams.has('owner_ticket');
+const open = viewer.state === 'user' || config.preview || ownerTicket;
+// The ticket is in this page's address until the app removes it: never send it on as a referrer.
+if (ownerTicket) Astro.response.headers.set('Referrer-Policy', 'no-referrer');
 ---
 
 <Crm brand={brand} viewer={viewer} title="CRM">

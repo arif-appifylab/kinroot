@@ -1,0 +1,26 @@
+---
+/**
+ * What a sign-in page shows until its island runs (the `fallback` slot of a `client:only`
+ * component): the company's name and a spinner, in Kinroot's colours, so the page never opens
+ * blank. Without JavaScript it says so. The underscore keeps it from being a page itself.
+ */
+import {BRAND, type Brand} from '../../crm/lib/brand';
+
+interface Props {
+  brand: Brand;
+}
+
+const {brand} = Astro.props;
+const name = brand.name || BRAND.name;
+---
+
+<div class="grid min-h-dvh place-items-center bg-background px-4">
+  <div class="grid justify-items-center gap-4 text-center">
+    <img src={brand.logo || '/kinroot-mark.svg'} alt="" width="40" height="40" class="size-10 rounded-xl object-contain" />
+    <p class="text-lg font-extrabold tracking-tight text-slate-900">{name}</p>
+    <span class="size-6 animate-spin rounded-full border-2 border-slate-200 border-t-primary" role="status" aria-label="Loading"></span>
+    <noscript>
+      <p class="max-w-xs text-sm text-muted-foreground">Signing in needs JavaScript. Turn it on in your browser, then reload this page.</p>
+    </noscript>
+  </div>
+</div>

@@ -1,8 +1,7 @@
 import type {Rule} from './rules';
 
 /**
- * BROWSER: the website's form controller, for `.astro` pages (the portal uses
- * `useForm` in React). It applies the template's form rules (AGENTS.md
+ * BROWSER: the website's form controller, for `.astro` pages. It applies the template's form rules (AGENTS.md
  * "Buttons and forms") to a plain `<form novalidate>`:
  *
  * - every field validates IN PLACE: on blur, then on every keystroke once

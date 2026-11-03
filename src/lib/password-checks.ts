@@ -6,8 +6,7 @@ import {PASSWORD_LIMITS} from '../platform/auth/password';
  * Mirrors `passwordProblem` in `src/platform/auth/password.ts`; the server
  * still checks everything (and also turns away the most common passwords).
  *
- * Shared by the website's forms (`bindPasswordChecks`, below) and the portal
- * (`PasswordChecks` in `src/portal/ui/form.tsx`).
+ * Used by the website's forms (`bindPasswordChecks`, below).
  */
 export interface PasswordCheck {
   id: string;

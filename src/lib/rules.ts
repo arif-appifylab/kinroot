@@ -1,6 +1,5 @@
 /**
- * Pure field rules, shared by the portal (`useForm` in `src/portal/ui/form.tsx`)
- * and the website's forms (`bindForm` in `src/lib/form.ts`). A rule returns
+ * Pure field rules for the website's forms (`bindForm` in `src/lib/form.ts`). A rule returns
  * the error message when the value is wrong, `null` when it is fine. Mirror
  * the server's limits exactly; the server always checks again.
  */
