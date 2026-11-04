@@ -4,7 +4,7 @@ import {Input} from '@/components/ui/form';
 import {PasswordInput} from '@/components/ui/password-input';
 import {BRAND, type Brand} from '@/lib/brand';
 
-import {signedIn} from '../../../lib/account';
+import {rememberSignUpEmail, signedIn} from '../../../lib/account';
 import {postJson, type SubmitResult} from '../../../lib/form';
 import {AUTH_RULES, rules} from '../../../lib/rules';
 import {siteFetch} from '../../../platform/browser';
@@ -116,6 +116,11 @@ export default function LoginPage({brand}: {brand: Brand}) {
       if (result.ok && data?.twoFactor === true && typeof data.challenge === 'string') {
         askTwoFactor(data.challenge);
         return {ok: true};
+      }
+      // Never confirmed: this browser knows the password, and the emailed code finishes it.
+      if (result.ok && data?.needsCode === true) {
+        rememberSignUpEmail(values.email.trim());
+        return {ok: true, redirect: withNext('/account/verify/', next)};
       }
       // A wrong email or password is ONE generic line (the server never says which).
       return result.ok ? done(data) : result;

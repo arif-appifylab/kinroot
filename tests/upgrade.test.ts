@@ -15,6 +15,6 @@ describe('this site has what the managed code needs (docs/agent/upgrade.md)', ()
     // Kinroot sells nothing: the template's checkout files (and their idempotency checks) are removed.
   });
   it('both generators: relationJoins', () => {
-    expect(schema.match(/previewFeatures\s*=\s*\[[^\]]*"relationJoins"/g)?.length).toBeGreaterThanOrEqual(1);
+    expect(schema.match(/previewFeatures\s*=\s*\[[^\]]*"relationJoins"/g)?.length).toBe(2);
   });
 });

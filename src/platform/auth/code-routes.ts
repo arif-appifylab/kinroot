@@ -5,7 +5,8 @@ import {audit} from './audit';
 import {toHex, utf8} from './encoding';
 import {normalizeEmail, safeNext} from './input';
 import {hmacKey} from './keys';
-import {attempt, body, type Ctx, type Env, invalid, keysFor, maybeSweep, publicUser, sendEmail, settle, startSession, text} from './kit';
+import {claimUnconfirmed} from './end-access';
+import {attempt, background, body, type Ctx, deviceTrusted, type Env, forgiveAddress, invalid, keysFor, mailDue, maybeSweep, newResetPath, publicUser, RESET_TTL_MINUTES, sendEmail, settle, startSession, text} from './kit';
 import {type AuthSettings} from './settings';
 import {signChallenge} from './two-factor';
 
@@ -16,14 +17,19 @@ import {signChallenge} from './two-factor';
  *   POST /code         {email, next?}        emails a 6-digit code; always the same answer
  *   POST /code/verify  {email, code, next?}  the code → a session, or the two-step challenge
  *
- * A code works once, for 10 minutes; 5 wrong tries spend it; a new code ends the older ones. Only
+ * A code works once, for 30 minutes; asking again doesn't end one someone may be typing (the newest 3
+ * work, and using one ends them all), and wrong guesses don't end it either: the limits on guessing
+ * are per address, so a stranger can't spend a person's code. Only
  * its keyed hash is stored (HMAC with a key of its own, bound to the account), and the answer never
- * says whether an email has an account. A code proves the inbox, so it also confirms the address.
+ * says whether an email has an account. A code proves the inbox, so on an account never confirmed
+ * it ends everything set before that (`claimUnconfirmed`): whoever registered may be a stranger.
  * With two-step sign-in on, the code is the first step only: `/login/two-factor` finishes it.
  */
 
-export const CODE_TTL_MINUTES = 10;
-export const CODE_MAX_TRIES = 5;
+export const CODE_TTL_MINUTES = RESET_TTL_MINUTES;
+const LIVE_CODES = 3;
+
+const RESET_HINT = 'Too many wrong codes for this email. Check your inbox for a link from us, or use Forgot password. It works from any browser.';
 
 const GENERIC = {
   sent: `If that email has an account here, we sent it a 6-digit code. It works for ${CODE_TTL_MINUTES} minutes.`,
@@ -47,7 +53,7 @@ export async function codeHash(secret: string, userId: number, code: string): Pr
 }
 
 /** Constant-time compare of two equal-length hex strings. */
-function sameHex(a: string, b: string): boolean {
+export function sameHex(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
@@ -57,8 +63,6 @@ function sameHex(a: string, b: string): boolean {
 async function issueCode(c: Ctx, user: {id: number; email: string}, ipHash: string) {
   const db = c.var.db;
   const now = new Date();
-  // One live code per account: a new one ends the others.
-  await db.signInCode.updateMany({where: {userId: user.id, usedAt: null}, data: {usedAt: now}});
   const code = newCode();
   await db.signInCode.create({
     data: {
@@ -69,7 +73,9 @@ async function issueCode(c: Ctx, user: {id: number; email: string}, ipHash: stri
     },
     select: {id: true},
   });
-  sendEmail(c, {kind: 'sign_in_code', to: user.email, code, expiresInMinutes: CODE_TTL_MINUTES});
+  // A link too, in every code email. An address gets one email per gap, whoever asked for what, so a
+  // stranger asking for codes must still leave a way in that no limit on guessing can block.
+  sendEmail(c, {kind: 'sign_in_code', to: user.email, code, path: await newResetPath(c, user.id, ipHash), expiresInMinutes: CODE_TTL_MINUTES});
 }
 
 export function codeRoutes(settings: AuthSettings) {
@@ -86,8 +92,21 @@ export function codeRoutes(settings: AuthSettings) {
         const keys = await keysFor(c, email);
         const {stop} = await attempt(c, 'code', keys);
         if (stop) return stop;
-        const user = await c.var.db.user.findUnique({where: {email}, select: {id: true, email: true, status: true}});
-        if (user && user.status === 'active') await issueCode(c, user, keys.ipHash);
+        // After the answer, so an address with an account answers as fast as one without.
+        background(
+          c,
+          (async () => {
+            const user = await c.var.db.user.findUnique({where: {email}, select: {id: true, email: true, status: true, emailVerifiedAt: true}});
+            if (!user || user.status !== 'active') {
+              await mailDue(c, keys);
+              return;
+            }
+            // Never confirmed: the last email may be a sign-up code that only works in a stranger's
+            // browser, so it can't stand in for this one. This address gets its own gap.
+            const gate = user.emailVerifiedAt ? keys : await keysFor(c, `unconfirmed:${email}`);
+            if (await mailDue(c, gate)) await issueCode(c, user, keys.ipHash);
+          })()
+        );
         maybeSweep(c);
         return c.json({ok: true, message: GENERIC.sent});
       }
@@ -107,8 +126,9 @@ export function codeRoutes(settings: AuthSettings) {
       async c => {
         const {email, code, next} = c.req.valid('json');
         const db = c.var.db;
-        const keys = await keysFor(c, email);
-        const {stop, id: attemptId} = await attempt(c, 'codecheck', keys);
+        // A browser that has signed in here has a budget of its own, so strangers can't use it up.
+        const keys = await keysFor(c, (await deviceTrusted(c, email)) ? `${email}|device` : email);
+        const {stop, id: attemptId} = await attempt(c, 'codecheck', keys, {subjectHint: RESET_HINT});
         if (stop) return stop;
         const wrong = () => c.json(problem('invalid_code', GENERIC.wrong), 401);
 
@@ -117,54 +137,47 @@ export function codeRoutes(settings: AuthSettings) {
           select: {id: true, name: true, email: true, status: true, emailVerifiedAt: true, sessionVersion: true, totpEnabledAt: true},
         });
         const now = new Date();
-        const row = user
-          ? await db.signInCode.findFirst({
-              where: {userId: user.id, usedAt: null, expiresAt: {gt: now}},
-              orderBy: {id: 'desc'},
-              select: {id: true, codeHash: true, tries: true},
-            })
-          : null;
-        // No account or no live code: the same work and answer as a wrong code.
+        // The same work with or without an account, so timing doesn't say which.
+        const rows = await db.signInCode.findMany({
+          where: {userId: user?.id ?? 0, usedAt: null, expiresAt: {gt: now}},
+          orderBy: {id: 'desc'},
+          take: LIVE_CODES,
+          select: {id: true, codeHash: true},
+        });
         const hash = await codeHash(c.var.secret, user?.id ?? 0, code);
-        if (!user || !row) return wrong();
-        if (!sameHex(hash, row.codeHash)) {
-          const tries = row.tries + 1;
-          await db.signInCode.update({
-            where: {id: row.id},
-            data: {tries, ...(tries >= CODE_MAX_TRIES ? {usedAt: now} : {})},
-            select: {id: true},
-          });
-          return wrong();
-        }
-        // One use: only the request that marks it used goes on.
+        const row = rows.find(one => sameHex(hash, one.codeHash));
+        if (!user) return wrong();
+        if (!row) return wrong();
+        // One use: only the request that marks it used goes on, and the others end with it.
         const {count} = await db.signInCode.updateMany({where: {id: row.id, usedAt: null}, data: {usedAt: now}});
         if (count !== 1) return wrong();
+        await db.signInCode.updateMany({where: {userId: user.id, usedAt: null}, data: {usedAt: now}});
         await settle(c, attemptId, true);
+        await forgiveAddress(db, (await keysFor(c, email)).emailHash);
 
         if (user.status !== 'active') {
           return c.json(problem('account_suspended', 'This account is suspended. Contact the site owner.'), 403);
         }
-        await db.user.update({
-          where: {id: user.id},
-          // The code proved the inbox: the address is confirmed.
-          data: {lastLoginAt: now, ...(user.emailVerifiedAt ? {} : {emailVerifiedAt: now})},
-          select: {id: true},
-        });
+        // First proof of this inbox: nothing set before it is this person's to inherit.
+        const claimed = user.emailVerifiedAt ? false : await claimUnconfirmed(db, user.id, {now});
+        await db.user.update({where: {id: user.id}, data: {lastLoginAt: now}, select: {id: true}});
         await audit(db, {actorUserId: user.id, action: 'signed_in_with_code', target: ['user', user.id], ipHash: keys.ipHash});
-        if (user.totpEnabledAt) {
+        // `claimUnconfirmed` changed the version and turned two-step sign-in off.
+        const current = claimed ? {...user, sessionVersion: user.sessionVersion + 1, totpEnabledAt: null, emailVerifiedAt: now} : user;
+        if (current.totpEnabledAt) {
           return c.json(
             {
               ok: false,
               twoFactor: true,
-              challenge: await signChallenge(c.var.secret, user.id, user.sessionVersion),
+              challenge: await signChallenge(c.var.secret, current.id, current.sessionVersion),
               message: 'Enter the 6-digit code from your authenticator app.',
             },
             202
           );
         }
-        await startSession(c, user, keys.ipHash);
+        await startSession(c, current, keys.ipHash);
         maybeSweep(c);
-        return c.json({ok: true, user: publicUser(user), next: safeNext(next, settings.afterSignInPath)});
+        return c.json({ok: true, user: publicUser(current), next: safeNext(next, settings.afterSignInPath)});
       }
     );
 }

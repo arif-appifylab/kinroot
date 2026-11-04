@@ -5,7 +5,7 @@ import {toHex, utf8} from './encoding';
  * separate key per purpose, so a key used for one job can never be replayed
  * against another (a rate-limit hash is never a valid JWT signature).
  */
-export type KeyPurpose = 'jwt-hs256' | 'subject-hash' | 'mfa-challenge' | 'totp-seal' | 'sign-in-code';
+export type KeyPurpose = 'jwt-hs256' | 'subject-hash' | 'mfa-challenge' | 'totp-seal' | 'sign-in-code' | 'device' | 'email-change-cancel' | 'recovery-code' | 'sign-up-code';
 
 const SALT = utf8('site-auth-v1');
 

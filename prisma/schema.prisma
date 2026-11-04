@@ -220,6 +220,25 @@ model SignInCode {
 
 /// Rate-limit ledger: one row per attempt. Keyed hashes only (never the raw
 /// email or IP). Rows older than a day are swept on the way.
+/// A sign-up waiting for its emailed code. No account exists until the same browser enters the
+/// code: that proves it chose this password and that it reads the inbox.
+model PendingSignUp {
+  id           Int       @id @default(autoincrement())
+  email        String    @db.VarChar(254)
+  name         String    @db.VarChar(80)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  browserHash  String    @map("browser_hash") @db.Char(64)
+  expiresAt    DateTime  @map("expires_at")
+  usedAt       DateTime? @map("used_at")
+  ipHash       String?   @map("ip_hash") @db.Char(64)
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@unique([email, browserHash])
+  @@index([browserHash])
+  @@index([expiresAt])
+  @@map("pending_sign_ups")
+}
+
 model LoginAttempt {
   id        BigInt   @id @default(autoincrement())
   /// `login`, `register`, `reset`, `verify`, `password`, `code`, `codecheck`, ….
@@ -367,7 +386,7 @@ model Member {
   id              String    @id @default(cuid())
   userId          Int?      @unique
   user            User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name            String
+  name            String @db.VarChar(80)
   role            TeamRole  @default(MEMBER)
   color           String    @default("#2563eb")
   avatarUrl       String? // profile picture: a public platform file's stable link
@@ -442,14 +461,14 @@ model Company {
   employees      Int?
   annualRevenue  Float?
   timezone       String?
-  website        String?
+  website        String? @db.VarChar(2000)
   phone          String?
   address        String?
   city           String?
   state          String?
   postalCode     String?
   country        String?
-  linkedin       String?
+  linkedin       String? @db.VarChar(2000)
   description    String?
   tags           Json  @default("[]")
   custom         Json      @default("{}")
@@ -485,7 +504,7 @@ model Contact {
   email          String?
   phone          String?
   title          String?
-  linkedin       String?
+  linkedin       String? @db.VarChar(2000)
   lifecycleStage LifecycleStage @default(LEAD)
   leadStatus     String?
   buyingRole     String?
@@ -708,7 +727,7 @@ enum Priority {
 
 model Task {
   id          String    @id @default(cuid())
-  title       String
+  title       String @db.VarChar(300)
   description String?
   type        TaskType  @default(TODO)
   priority    Priority  @default(NONE)
@@ -1578,7 +1597,7 @@ enum TicketSource {
 model Ticket {
   id                      String         @id @default(cuid())
   number                  Int            @unique @default(autoincrement()) // shown as #1001…
-  subject                 String
+  subject                 String @db.VarChar(300)
   description             String?
   descriptionHtml         String? // sanitised rich text (rich-text.ts); `description` stays its plain text
   status                  TicketStatus   @default(NEW)
@@ -1679,7 +1698,7 @@ model BookingLink {
   user         Member?  @relation(fields: [userId], references: [id], onDelete: SetNull)
   hostIds      Json @default("[]") // team links: users in the rotation
   slug         String
-  name         String
+  name         String @db.VarChar(120)
   description  String?
   durations    Json    @default("[30]") // minutes; the first one is preselected
   timezone     String   @default("UTC") // the timezone `availability` is written in

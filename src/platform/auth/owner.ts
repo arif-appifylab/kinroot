@@ -7,6 +7,7 @@ import {audit} from './audit';
 import {SYSTEM_ROLES} from './codenames';
 import {fromBase64Url} from './encoding';
 import {safeNext} from './input';
+import {endAccess} from './end-access';
 import {attempt, type Ctx, type Env, keysFor, maybeSweep, NO_PASSWORD, settle, startSession} from './kit';
 import {removeAdminRights} from './owner-seat';
 import {config} from '../config';
@@ -84,6 +85,35 @@ async function takeSeat(db: PrismaClient, userId: number, ownerId: string, ipHas
     select: {userId: true},
   });
   return true;
+}
+
+/**
+ * Is this still the account's owner? Asked of the platform each time an owner's session refreshes, so
+ * a site changing hands ends the old owner's access within one access token, not at the next Deploy.
+ * Only a clear answer counts: if the platform can't be reached, nothing changes.
+ *
+ * This takes only THIS person's rights: anything wider could land on a new owner who just clicked in.
+ * The seat stays, so the new owner's click, or the next Deploy, clears everyone else's (`takeSeat`,
+ * `reconcileOwnerSeat`).
+ */
+export async function stillOwner(c: Ctx, userId: number, ownerId: string): Promise<boolean> {
+  let answer: {status: number; data: {ownerId?: unknown} | null};
+  try {
+    answer = await siteKeyPostData<{ownerId?: unknown}>(c.req.url, '/owner-current', {});
+  } catch {
+    return true;
+  }
+  if (answer.status !== 200 || answer.data === null) return true;
+  const current = answer.data.ownerId;
+  // `null`: the account has no active owner now, so nobody holds this seat.
+  if (current !== null && (typeof current !== 'string' || !OWNER_ID.test(current) || current === ownerId)) return true;
+  const db = c.var.db;
+  const owner = await db.role.findUnique({where: {slug: SYSTEM_ROLES.OWNER}, select: {id: true}});
+  if (owner) await db.userRole.deleteMany({where: {userId, roleId: owner.id}});
+  await endAccess(db, userId, 'admin');
+  const {ipHash} = await keysFor(c, null);
+  await audit(db, {actorUserId: null, action: 'owner_removed', target: ['user', userId], ipHash});
+  return false;
 }
 
 type OwnerOutcome = {ok: true; next: string} | {ok: false; status: number};

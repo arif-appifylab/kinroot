@@ -63,8 +63,13 @@ const KINDS = [
   'confirm_email_change',
   'email_changed',
   'sign_in_code',
+  'sign_up_code',
+  'email_change_requested',
+  'two_factor_on',
+  'two_factor_off',
+  'recovery_codes_new',
 ];
-const LINK_REQUIRED = ['password_reset', 'verify_email', 'confirm_email_change'];
+const LINK_REQUIRED = ['password_reset', 'verify_email', 'confirm_email_change', 'sign_up_code', 'email_change_requested'];
 // eslint-disable-next-line no-control-regex
 const SITE_PATH = /^\/(?![/\\])[^\s\\\u0000-\u001f\u007f]*$/;
 
@@ -80,8 +85,8 @@ function assertContract(body: Record<string, unknown>) {
     fail('path');
   }
   if (LINK_REQUIRED.includes(String(body.kind)) && body.path === undefined) fail('path required');
-  if (body.kind === 'sign_in_code' && (typeof body.code !== 'string' || !/^\d{6}$/.test(body.code))) fail('code');
-  if (body.kind !== 'sign_in_code' && body.code !== undefined) fail('code only for sign_in_code');
+  if ((body.kind === 'sign_in_code' || body.kind === 'sign_up_code') && (typeof body.code !== 'string' || !/^\d{6}$/.test(body.code))) fail('code');
+  if (body.kind !== 'sign_in_code' && body.kind !== 'sign_up_code' && body.code !== undefined) fail('code only for code kinds');
   if (
     body.expiresInMinutes !== undefined &&
     (!Number.isInteger(body.expiresInMinutes) || (body.expiresInMinutes as number) < 1 || (body.expiresInMinutes as number) > 7 * 24 * 60)
@@ -96,6 +101,9 @@ function assertContract(body: Record<string, unknown>) {
  */
 export const ownerTickets = new Map<string, {ownerId: string}>();
 
+/** Who the fake platform says owns the site now (`POST /api/site/v1/owner-current`). Null: it can't be reached. Undefined: nobody. */
+export const platformOwner: {current: string | null | undefined} = {current: null};
+
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   if (url === `${PLATFORM}/api/site/v1/owner-sign-in`) {
@@ -106,6 +114,10 @@ globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!answer || !ticket) return new Response(JSON.stringify({errors: [{code: 'E_OWNER_TICKET_INVALID'}]}), {status: 404});
     ownerTickets.delete(ticket);
     return new Response(JSON.stringify({data: answer}), {status: 200});
+  }
+  if (url === `${PLATFORM}/api/site/v1/owner-current`) {
+    if (platformOwner.current === undefined) return new Response(JSON.stringify({data: {ownerId: null}}), {status: 200});
+    return platformOwner.current ? new Response(JSON.stringify({data: {ownerId: platformOwner.current}}), {status: 200}) : new Response('{}', {status: 503});
   }
   if (url === `${PLATFORM}/api/site/v1/emails`) {
     const body = JSON.parse(String(init?.body ?? '{}')) as SentEmail;
@@ -145,12 +157,14 @@ export const db = createDb(DATABASE_URL || 'postgresql://unused@localhost/unused
 
 export async function resetDatabase() {
   await db.$executeRawUnsafe(
-    'TRUNCATE "users", "user_roles", "refresh_tokens", "password_resets", "email_verifications", "email_changes", "recovery_codes", "sign_in_codes", "login_attempts", "audit_events", "job_deliveries" RESTART IDENTITY CASCADE'
+    // Kinroot removed the template's job board: no "jobs" table.
+    'TRUNCATE "pending_sign_ups", "users", "user_roles", "refresh_tokens", "password_resets", "email_verifications", "email_changes", "recovery_codes", "sign_in_codes", "login_attempts", "audit_events", "job_deliveries" RESTART IDENTITY CASCADE'
   );
   await db.$executeRawUnsafe('DELETE FROM "roles" WHERE NOT "is_system"');
   await db.$executeRawUnsafe('UPDATE "auth_state" SET "owner_user_id" = NULL, "owner_env_id" = NULL');
   emails.length = 0;
   ownerTickets.clear();
+  platformOwner.current = null;
   resetOwnerSeatForTests();
 }
 
@@ -243,11 +257,47 @@ export async function signedIn(app: App, email: string, password = 'a long test 
   const browser = new Browser(app, ip);
   const reg = await browser.post('/site-api/auth/register', {email, name: email.split('@')[0], password});
   if (reg.status !== 202) throw new Error(`register ${reg.status} ${JSON.stringify(reg.json)}`);
-  const verify = await browser.post('/site-api/auth/verify-email', {token: tokenFrom('verify_email', email)});
-  if (verify.status !== 200) throw new Error(`verify ${verify.status}`);
-  const login = await browser.post('/site-api/auth/login', {email, password});
-  if (login.status !== 200) throw new Error(`login ${login.status} ${JSON.stringify(login.json)}`);
+  const verify = await browser.post('/site-api/auth/register/verify', {email, code: signUpCodeFrom(email)});
+  if (verify.status !== 201) throw new Error(`verify ${verify.status} ${JSON.stringify(verify.json)}`);
+  // A new account's sign-up email shouldn't hold back what a test asks for next.
+  await mailGateOpen();
   return browser;
+}
+
+/**
+ * An account from before sign-up needed a code: a row with a password, never confirmed, and the
+ * link that used to be emailed for it. Sites that upgrade have these, some of them a stranger's.
+ */
+export async function unconfirmedAccount(email: string, password = 'a long test passphrase') {
+  const {hashPassword} = await import('../../../src/platform/auth/password');
+  const {sha256Hex} = await import('../../../src/platform/auth/encoding');
+  const created = await db.user.create({
+    data: {email, name: email.split('@')[0]!, passwordHash: await hashPassword(password), roles: {create: {role: {connect: {slug: 'member'}}}}},
+    select: {id: true},
+  });
+  const token = `${'t'.repeat(30)}${String(created.id).padStart(13, '0')}`;
+  await db.emailVerification.create({
+    data: {userId: created.id, email, tokenHash: await sha256Hex(token), expiresAt: new Date(Date.now() + 3600 * 1000)},
+    select: {id: true},
+  });
+  return {user: {id: created.id, token}, password};
+}
+
+/** The 15-minute gap between emails to an address has passed. */
+export const mailGateOpen = () => db.loginAttempt.deleteMany({where: {kind: {in: ['mail', 'notice']}}});
+
+/** The newest sign-up code emailed to this address. */
+export function signUpCodeFrom(to: string): string {
+  const mail = [...emails].reverse().find(one => one.kind === 'sign_up_code' && one.to === to);
+  if (!mail?.code) throw new Error(`no sign_up_code email to ${to}`);
+  return mail.code;
+}
+
+/** The token in the newest sign-up email to this address. */
+export function signUpTokenFrom(to: string): string {
+  const mail = [...emails].reverse().find(one => one.kind === 'sign_up_code' && one.to === to);
+  if (!mail?.path) throw new Error(`no sign_up_code email to ${to}`);
+  return new URL(mail.path, ORIGIN).searchParams.get('signup')!;
 }
 
 let ticketCount = 0;

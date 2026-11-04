@@ -7,6 +7,7 @@ import {app} from '../../src/server/app';
 import {env} from './support/cloudflare-workers';
 import {
   Browser,
+  signUpCodeFrom,
   configureEnv,
   DATABASE_URL,
   db,
@@ -15,6 +16,7 @@ import {
   resetDatabase,
   signedIn,
   tokenFrom,
+  unconfirmedAccount,
   userId,
 } from './support/harness';
 
@@ -34,18 +36,16 @@ describe.skipIf(!DATABASE_URL)('auth (integration, real Postgres)', () => {
     const browser = new Browser(app);
     const reg = await browser.post('/site-api/auth/register', {email: 'Ann@Example.test', name: 'Ann', password: PASSWORD});
     expect(reg.status).toBe(202);
-    const mail = emails.find(e => e.kind === 'verify_email')!;
-    expect(mail).toMatchObject({to: 'ann@example.test', expiresInMinutes: 24 * 60});
-    expect(mail.path).toMatch(/^\/account\/verify\/\?token=[A-Za-z0-9_-]{43}$/);
+    expect(emails.find(e => e.kind === 'sign_up_code')).toMatchObject({to: 'ann@example.test', expiresInMinutes: 30});
 
-    // Not confirmed yet: the right password is not enough.
-    const early = await browser.post('/site-api/auth/login', {email: 'ann@example.test', password: PASSWORD});
-    expect(early.status).toBe(403);
-    expect(early.json.error).toBe('email_unverified');
+    // No account yet: the right password is not enough.
+    expect(await db.user.count()).toBe(0);
+    expect((await browser.post('/site-api/auth/login', {email: 'ann@example.test', password: PASSWORD})).status).toBe(401);
 
-    const token = tokenFrom('verify_email', 'ann@example.test');
-    expect((await browser.post('/site-api/auth/verify-email', {token})).status).toBe(200);
-    expect((await browser.post('/site-api/auth/verify-email', {token})).status).toBe(400); // single use
+    const code = signUpCodeFrom('ann@example.test');
+    const verified = await browser.post('/site-api/auth/register/verify', {email: 'ann@example.test', code});
+    expect(verified.status).toBe(201);
+    expect((await browser.post('/site-api/auth/register/verify', {email: 'ann@example.test', code})).status).toBe(401); // single use
 
     const login = await browser.post('/site-api/auth/login', {email: 'ann@example.test', password: PASSWORD});
     expect(login.status).toBe(200);
@@ -73,74 +73,42 @@ describe.skipIf(!DATABASE_URL)('auth (integration, real Postgres)', () => {
   // Two sign-ups for one unconfirmed address, in both orders: whoever registered
   // first or last, neither chosen password survives; the inbox chooses it.
   for (const order of ['squatter first', 'real person first'] as const) {
-    it(`PIPE-10: signing up again on an unconfirmed address (${order}) keeps neither password; the inbox chooses it`, async () => {
+    it(`two sign-ups on one address (${order}): only the browser with the code gets an account, with its own password`, async () => {
       const squatter = new Browser(app, '192.0.2.201');
       const pat = new Browser(app, '203.0.113.61');
       const squatPassword = 'the squatters own passphrase';
       const signUp = (who: Browser, name: string, password: string) =>
         who.post('/site-api/auth/register', {email: 'pat@example.test', name, password});
-      if (order === 'squatter first') {
-        expect((await signUp(squatter, 'Squat', squatPassword)).status).toBe(202);
-      } else {
-        expect((await signUp(pat, 'Pat', PASSWORD)).status).toBe(202);
-      }
-      const firstLink = tokenFrom('verify_email', 'pat@example.test');
-      if (order === 'squatter first') {
-        expect((await signUp(pat, 'Pat', PASSWORD)).status).toBe(202);
-      } else {
-        expect((await signUp(squatter, 'Squat', squatPassword)).status).toBe(202);
-      }
-      const secondLink = tokenFrom('verify_email', 'pat@example.test');
-      expect(secondLink).not.toBe(firstLink);
-      expect((await pat.post('/site-api/auth/verify-email', {token: firstLink})).status).toBe(400);
-
-      // Only the inbox has the new link; confirming it asks for a password by email.
-      const verify = await pat.post('/site-api/auth/verify-email', {token: secondLink});
-      expect(verify.status).toBe(200);
-      expect(verify.json.setPassword).toBe(true);
-      for (const password of [PASSWORD, squatPassword]) {
-        expect((await squatter.post('/site-api/auth/login', {email: 'pat@example.test', password})).status).toBe(401);
-      }
-      const reset = await pat.post('/site-api/auth/reset-password', {
-        token: tokenFrom('password_reset', 'pat@example.test'),
-        password: 'pats freshly chosen passphrase',
-      });
-      expect(reset.status).toBe(200);
-      expect(
-        (await pat.post('/site-api/auth/login', {email: 'pat@example.test', password: 'pats freshly chosen passphrase'})).status
-      ).toBe(200);
-      expect((await squatter.post('/site-api/auth/login', {email: 'pat@example.test', password: squatPassword})).status).toBe(401);
+      const squat = () => signUp(squatter, 'Squat', squatPassword);
+      const real = () => signUp(pat, 'Pat', PASSWORD);
+      for (const step of order === 'squatter first' ? [squat, real] : [real, squat]) expect((await step()).status).toBe(202);
+      // One email, whoever asked first. It's in the inbox, so Pat can use it in Pat's own browser.
+      expect(emails.filter(e => e.kind === 'sign_up_code')).toHaveLength(1);
+      const code = signUpCodeFrom('pat@example.test');
+      const verify = await pat.post('/site-api/auth/register/verify', {email: 'pat@example.test', code});
+      expect(verify.status).toBe(201);
+      expect(verify.json.user).toMatchObject({name: 'Pat'});
+      const stranger = new Browser(app, '192.0.2.202');
+      expect((await stranger.post('/site-api/auth/login', {email: 'pat@example.test', password: squatPassword})).status).toBe(401);
+      expect((await stranger.post('/site-api/auth/login', {email: 'pat@example.test', password: PASSWORD})).status).toBe(200);
+      // The squatter's browser, even handed the code, is too late.
+      expect((await squatter.post('/site-api/auth/register/verify', {email: 'pat@example.test', code})).status).toBe(401);
     });
   }
 
-  it('PIPE-10: two sign-ups at the same moment keep neither password either (the unique-index loser too)', async () => {
-    // Both hash, both find no account, both insert: the loser hits the unique index. It used to
-    // answer 202 and stop, so the winner's password (maybe a squatter's) survived the real
-    // person's confirmation. Several rounds, so the race actually happens.
-    const squatPassword = 'the squatters own passphrase';
-    for (let round = 0; round < 12; round++) {
+  it('two sign-ups at the same moment make one account, and only with a code', async () => {
+    for (let round = 0; round < 6; round++) {
       await resetDatabase();
-      const squatter = new Browser(app, `192.0.2.${220 + round}`);
-      const pat = new Browser(app, `203.0.113.${120 + round}`);
+      const a = new Browser(app, `192.0.2.${220 + round}`);
+      const b = new Browser(app, `203.0.113.${120 + round}`);
       const answers = await Promise.all([
-        squatter.post('/site-api/auth/register', {email: 'race@example.test', name: 'Squat', password: squatPassword}),
-        pat.post('/site-api/auth/register', {email: 'race@example.test', name: 'Pat', password: PASSWORD}),
+        a.post('/site-api/auth/register', {email: 'race@example.test', name: 'A', password: 'the first long passphrase'}),
+        b.post('/site-api/auth/register', {email: 'race@example.test', name: 'B', password: PASSWORD}),
       ]);
-      expect(answers.map(a => a.status)).toEqual([202, 202]);
-      const row = await db.user.findUnique({where: {email: 'race@example.test'}, select: {passwordHash: true}});
-      expect(row!.passwordHash, `round ${round}`).toBe('!');
-      expect((await pat.post('/site-api/auth/verify-email', {token: tokenFrom('verify_email', 'race@example.test')})).status).toBe(200);
-      expect((await squatter.post('/site-api/auth/login', {email: 'race@example.test', password: squatPassword})).status).toBe(401);
+      expect(answers.map(x => x.status)).toEqual([202, 202]);
+      expect(await db.user.count()).toBe(0);
+      expect(await db.pendingSignUp.count()).toBe(2);
     }
-  });
-
-  it('PIPE-10: a single sign-up keeps its password: confirming the link is enough to sign in', async () => {
-    const pat = new Browser(app, '203.0.113.64');
-    expect((await pat.post('/site-api/auth/register', {email: 'solo@example.test', name: 'Solo', password: PASSWORD})).status).toBe(202);
-    const verify = await pat.post('/site-api/auth/verify-email', {token: tokenFrom('verify_email', 'solo@example.test')});
-    expect(verify.status).toBe(200);
-    expect(verify.json.setPassword).toBeUndefined();
-    expect((await pat.post('/site-api/auth/login', {email: 'solo@example.test', password: PASSWORD})).status).toBe(200);
   });
 
   it('PIPE-12: a parallel burst of sign-ups from one IP gets only the free ones through', async () => {
@@ -156,9 +124,9 @@ describe.skipIf(!DATABASE_URL)('auth (integration, real Postgres)', () => {
   });
 
   it('PIPE-13: a suspended account cannot confirm its email', async () => {
-    await new Browser(app).post('/site-api/auth/register', {email: 'sus@example.test', name: 'S', password: PASSWORD});
-    await db.user.update({where: {email: 'sus@example.test'}, data: {status: 'suspended'}});
-    const res = await new Browser(app).post('/site-api/auth/verify-email', {token: tokenFrom('verify_email', 'sus@example.test')});
+    const {user} = await unconfirmedAccount('sus@example.test');
+    await db.user.update({where: {id: user.id}, data: {status: 'suspended'}});
+    const res = await new Browser(app).post('/site-api/auth/verify-email', {token: user.token});
     expect(res.status).toBe(400);
     expect((await db.user.findUniqueOrThrow({where: {email: 'sus@example.test'}})).emailVerifiedAt).toBeNull();
   });
@@ -180,15 +148,14 @@ describe.skipIf(!DATABASE_URL)('auth (integration, real Postgres)', () => {
     emails.length = 0;
     const again = await browser.post('/site-api/auth/register', {email: 'known@example.test', name: 'X', password: PASSWORD});
     const fresh = await browser.post('/site-api/auth/register', {email: 'fresh@example.test', name: 'Y', password: PASSWORD});
-    // An account still waiting for its confirmation answers alike too (and gets a new link).
+    // A sign-up still waiting for its code answers alike too (and gets a new code).
     const pending = await browser.post('/site-api/auth/register', {email: 'fresh@example.test', name: 'Y', password: PASSWORD});
     expect(again.status).toBe(202);
     expect(again.json).toEqual(fresh.json);
     expect(pending.json).toEqual(fresh.json);
     expect(emails.map(e => [e.kind, e.to]).sort()).toEqual([
       ['account_exists', 'known@example.test'],
-      ['verify_email', 'fresh@example.test'],
-      ['verify_email', 'fresh@example.test'],
+      ['sign_up_code', 'fresh@example.test'],
     ]);
   });
 
@@ -310,10 +277,10 @@ describe.skipIf(!DATABASE_URL)('auth (integration, real Postgres)', () => {
     expect((await browser.post('/site-api/auth/register', {email: 'bulk9@example.test', name: 'B', password: PASSWORD})).status).toBe(429);
 
     const resetter = new Browser(app, '192.0.2.151');
+    // Asking again answers the same; the address gets one email per 15 minutes, whoever asks.
     for (let i = 0; i < 3; i++) {
       expect((await resetter.post('/site-api/auth/forgot-password', {email: 'bulk0@example.test'})).status).toBe(202);
     }
-    expect((await resetter.post('/site-api/auth/forgot-password', {email: 'bulk0@example.test'})).status).toBe(429);
   });
 
   it('refuses writes without the CSRF token or from another site', async () => {

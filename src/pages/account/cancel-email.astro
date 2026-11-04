@@ -1,0 +1,26 @@
+---
+/**
+ * Cancel a waiting email change, from the link mailed to the OLD address (`?token=`), in Kinroot's
+ * design (src/crm/public/auth/cancel-email.tsx). A button press, not the page load, uses the token:
+ * email scanners open links too.
+ *
+ * Server-rendered only to read the company's brand. The address carries a secret: never cached,
+ * never sent on as a Referer.
+ */
+import AuthFallback from './_auth-fallback.astro';
+import CancelEmailPage from '../../crm/public/auth/cancel-email';
+import CrmPublic from '../../layouts/CrmPublic.astro';
+import {crmBrand} from '../../server/crm/page';
+
+export const prerender = false;
+
+const brand = await crmBrand(Astro.request);
+Astro.response.headers.set('Cache-Control', 'no-store');
+Astro.response.headers.set('Referrer-Policy', 'no-referrer');
+---
+
+<CrmPublic brand={brand} title="Cancel the email change" noindex>
+  <CancelEmailPage client:only="react" brand={brand}>
+    <AuthFallback slot="fallback" brand={brand} />
+  </CancelEmailPage>
+</CrmPublic>

@@ -6,13 +6,10 @@ export interface AuthSettings {
   /** `open`: anyone may create an account. `closed`: the register route answers 403. */
   registration: 'open' | 'closed';
   /**
-   * `true`: a new account must confirm its email before it can sign in (the
-   * confirmation link is relayed by the platform). `false`: sign-up signs the
-   * person in at once, but the register answer then differs for a taken email
-   * (a person can learn an email has an account here). Keep `true` unless the
-   * owner accepts that.
+   * Ignored, always on: no account exists until an emailed code comes back in the browser that
+   * signed up (`sign-up.ts`). Otherwise anyone could take an address before its owner does.
    */
-  requireEmailVerification: boolean;
+  requireEmailVerification?: boolean;
   /** Ignored: nobody becomes owner from settings. The owner comes only from the dashboard (owner.ts). */
   firstUserBecomesOwner?: boolean;
   /** Ignored, as above. */
@@ -25,7 +22,6 @@ export interface AuthSettings {
 
 export const DEFAULT_AUTH_SETTINGS: AuthSettings = {
   registration: 'open',
-  requireEmailVerification: true,
   defaultRole: 'member',
   afterSignInPath: '/dashboard',
 };

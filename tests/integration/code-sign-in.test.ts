@@ -1,6 +1,6 @@
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
 
-import {CODE_MAX_TRIES} from '../../src/platform/auth/code-routes';
+import {} from '../../src/platform/auth/code-routes';
 import {fromBase32, stepAt, totpCode} from '../../src/platform/auth/two-factor';
 import {app} from '../../src/server/app';
 import {env} from './support/cloudflare-workers';
@@ -43,10 +43,10 @@ describe.skipIf(!DATABASE_URL)('code sign-in and the admin (integration, real Po
     expect(emails.map(e => e.to)).toEqual(['ann@example.test']);
     expect(emails[0]!.kind).toBe('sign_in_code');
     expect(emails[0]!.code).toMatch(/^\d{6}$/);
-    expect(emails[0]!.path).toBeUndefined();
+    expect(emails[0]!.path).toMatch(/^\/account\/reset\/\?token=/);
   });
 
-  it('a code works once; a newer one ends the older one; only its hash is stored', async () => {
+  it('a code works once, using one ends the others; only its hash is stored', async () => {
     await signedIn(app, 'ann@example.test');
     const browser = new Browser(app);
     await browser.post('/site-api/auth/code', {email: 'ann@example.test'});
@@ -56,23 +56,24 @@ describe.skipIf(!DATABASE_URL)('code sign-in and the admin (integration, real Po
     const rows = await db.signInCode.findMany({select: {codeHash: true}});
     for (const row of rows) expect(row.codeHash).not.toContain(second);
 
+    // Asking again keeps the first alive, in case someone else asked. Using one ends both.
+    expect((await browser.post('/site-api/auth/code/verify', {email: 'ann@example.test', code: first})).status).toBe(200);
     if (first !== second) {
-      expect((await browser.post('/site-api/auth/code/verify', {email: 'ann@example.test', code: first})).status).toBe(401);
+      expect((await new Browser(app).post('/site-api/auth/code/verify', {email: 'ann@example.test', code: second})).status).toBe(401);
     }
-    expect((await browser.post('/site-api/auth/code/verify', {email: 'ann@example.test', code: second})).status).toBe(200);
-    expect((await new Browser(app).post('/site-api/auth/code/verify', {email: 'ann@example.test', code: second})).status).toBe(401);
+    expect((await new Browser(app).post('/site-api/auth/code/verify', {email: 'ann@example.test', code: first})).status).toBe(401);
   });
 
-  it(`${CODE_MAX_TRIES} wrong tries spend the code`, async () => {
+  it("wrong guesses don't spend a code: the limit on guessing is per address", async () => {
     await signedIn(app, 'ann@example.test');
     const browser = new Browser(app);
     await browser.post('/site-api/auth/code', {email: 'ann@example.test'});
     const good = codeFrom('ann@example.test');
     const bad = good === '000000' ? '111111' : '000000';
-    for (let i = 0; i < CODE_MAX_TRIES; i++) {
-      expect((await browser.post('/site-api/auth/code/verify', {email: 'ann@example.test', code: bad})).status).toBe(401);
+    for (let i = 0; i < 6; i++) {
+      expect((await new Browser(app, `192.0.2.${60 + i}`).post('/site-api/auth/code/verify', {email: 'ann@example.test', code: bad})).status).toBe(401);
     }
-    expect((await browser.post('/site-api/auth/code/verify', {email: 'ann@example.test', code: good})).status).toBe(401);
+    expect((await browser.post('/site-api/auth/code/verify', {email: 'ann@example.test', code: good})).status).toBe(200);
   });
 
   it('an expired code never works', async () => {
@@ -104,13 +105,14 @@ describe.skipIf(!DATABASE_URL)('code sign-in and the admin (integration, real Po
     expect(res.status).toBe(403);
   });
 
-  it('asking for codes is rate-limited per address', async () => {
+  it('an address gets one code email per 15 minutes, whoever asks, and every ask answers the same', async () => {
     await signedIn(app, 'ann@example.test');
-    const browser = new Browser(app);
-    const statuses: number[] = [];
-    for (let i = 0; i < 5; i++) statuses.push((await browser.post('/site-api/auth/code', {email: 'ann@example.test'})).status);
-    expect(statuses.slice(0, 3)).toEqual([200, 200, 200]);
-    expect(statuses).toContain(429);
+    const stranger = new Browser(app, '192.0.2.77');
+    emails.length = 0;
+    const asked: number[] = [];
+    for (let i = 0; i < 5; i++) asked.push((await stranger.post('/site-api/auth/code', {email: 'ann@example.test'})).status);
+    expect(asked).toEqual([200, 200, 200, 200, 200]);
+    expect(emails.filter(e => e.kind === 'sign_in_code')).toHaveLength(1);
   });
 
   describe('in the editor Preview (cookies travel in headers)', () => {

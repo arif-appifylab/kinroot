@@ -9,6 +9,8 @@ import {env} from './support/cloudflare-workers';
 import {
   Browser,
   codeFrom,
+  mailGateOpen,
+  signUpCodeFrom,
   configureEnv,
   DATABASE_URL,
   db,
@@ -114,6 +116,7 @@ describe.skipIf(!DATABASE_URL)('the site owner (integration, real Postgres)', ()
         await browser.post('/site-api/auth/reset-password', {token: tokenFrom('password_reset', boss), password: 'a brand new long passphrase'});
         expect(await db.userRole.count({where: {role: {slug: 'owner'}}})).toBe(0);
         const code = new Browser(old);
+        await mailGateOpen();
         await code.post('/site-api/auth/code', {email: boss});
         await code.post('/site-api/auth/code/verify', {email: boss, code: codeFrom(boss)});
         expect(await db.userRole.count({where: {role: {slug: 'owner'}}})).toBe(0);
@@ -139,19 +142,16 @@ describe.skipIf(!DATABASE_URL)('the site owner (integration, real Postgres)', ()
       const email = 'boss@example.test';
       const stranger = new Browser(app, '192.0.2.50');
       await stranger.post('/site-api/auth/register', {email, name: 'Stranger', password: PASSWORD});
-      // The real owner clicks: their account is a different row, and that sign-up isn't touched.
+      // The real owner clicks: that account has its own id, and nothing about the sign-up touches it.
       const owner = await ownerSignedIn(app);
       expect(await roles(owner)).toEqual(['owner']);
-      const row = await db.user.findUniqueOrThrow({where: {email}});
-      expect(row.emailVerifiedAt).toBeNull();
-      expect(row.platformOwnerId).toBeNull();
-      // Still unconfirmed, and no owner if they ever confirm it.
-      expect((await stranger.post('/site-api/auth/login', {email, password: PASSWORD})).status).toBe(403);
-      await stranger.post('/site-api/auth/verify-email', {token: tokenFrom('verify_email', email)});
-      const after = new Browser(app, '192.0.2.51');
-      expect((await after.post('/site-api/auth/login', {email, password: PASSWORD})).status).toBe(200);
-      expect(await roles(after)).toEqual(['member']);
-      expect((await after.get('/site-api/admin/users')).status).toBe(403);
+      expect(await db.user.findUnique({where: {email}})).toBeNull();
+      // Whoever holds the code gets a normal account, never the owner's.
+      const code = signUpCodeFrom(email);
+      const made = await stranger.post('/site-api/auth/register/verify', {email, code});
+      expect(made.status).toBe(201);
+      expect(await roles(stranger)).toEqual(['member']);
+      expect((await stranger.get('/site-api/admin/users')).status).toBe(403);
     });
   });
 

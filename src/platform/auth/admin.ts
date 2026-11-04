@@ -8,7 +8,8 @@ import type {AdminUser, AuditRow, PermissionRow, RoleRow, Viewer} from '../types
 import {audit} from './audit';
 import {canDelegate, CODENAME_RE, CORE, grants, SYSTEM_ROLES} from './codenames';
 import {subjectHash} from './keys';
-import {refreshStore} from './store';
+import {endAccess} from './end-access';
+import {sendEmail} from './kit';
 import {getAccess} from './session';
 import {normalizeEmail} from './input';
 
@@ -255,13 +256,9 @@ export const adminRoutes = new Hono<Env>()
       if (target.platformOwnerId) return forbidden(c, OWNER_IS_MANAGED);
       if (!canDelegate(await actorPermissions(c), await permissionsOfUser(db, id))) return forbidden(c);
 
-      const row = await db.user.update({
-        where: {id},
-        // Suspending ends every session at once (session_version) and for good (refresh tokens).
-        data: {status, ...(status === 'suspended' ? {sessionVersion: {increment: 1}} : {})},
-        select: userSelect,
-      });
-      if (status === 'suspended') await refreshStore(db).revokeAllForUser(id, new Date(), 'suspended');
+      // Suspending ends every session, link and code, at once and for good.
+      if (status === 'suspended') await endAccess(db, id, 'suspended', {set: {status}});
+      const row = await db.user.update({where: {id}, data: {status}, select: userSelect});
       await audit(db, {
         actorUserId: c.var.viewer.id,
         action: status === 'suspended' ? 'user_suspended' : 'user_reactivated',
@@ -350,8 +347,7 @@ export const adminRoutes = new Hono<Env>()
       if (id !== c.var.viewer.id && !canDelegate(await actorPermissions(c), await permissionsOfUser(db, target.id))) {
         return forbidden(c);
       }
-      await db.user.update({where: {id: target.id}, data: {sessionVersion: {increment: 1}}, select: {id: true}});
-      await refreshStore(db).revokeAllForUser(target.id, new Date(), 'admin');
+      await endAccess(db, target.id, 'admin');
       await audit(db, {
         actorUserId: c.var.viewer.id,
         action: 'user_sessions_revoked',
@@ -384,6 +380,8 @@ export const adminRoutes = new Hono<Env>()
         select: {id: true},
       });
       await db.recoveryCode.deleteMany({where: {userId: target.id}});
+      const notified = await db.user.findUnique({where: {id: target.id}, select: {email: true}});
+      if (notified) sendEmail(c, {kind: 'two_factor_off', to: notified.email});
       await audit(db, {
         actorUserId: c.var.viewer.id,
         action: 'user_two_factor_disabled',

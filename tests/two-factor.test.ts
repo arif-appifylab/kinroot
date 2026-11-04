@@ -9,6 +9,7 @@ import {
   newTotpSecret,
   openSecret,
   otpauthUri,
+  legacyRecoveryCodeHash,
   recoveryCodeHash,
   sealSecret,
   signChallenge,
@@ -67,7 +68,11 @@ describe('two-step sign-in (pure)', () => {
     expect(new Set(codes).size).toBe(10);
     for (const code of codes) expect(code).toMatch(/^[a-z2-9]{4}-[a-z2-9]{4}-[a-z2-9]{4}$/);
     const first = codes[0]!;
-    expect(await recoveryCodeHash(first.toUpperCase().replace(/-/g, ' '))).toBe(await recoveryCodeHash(first));
+    expect(await recoveryCodeHash('secret-a', first.toUpperCase().replace(/-/g, ' '))).toBe(await recoveryCodeHash('secret-a', first));
+    // Keyed: the stored form is useless without the site's secret.
+    expect(await recoveryCodeHash('secret-b', first)).not.toBe(await recoveryCodeHash('secret-a', first));
+    // Older codes, stored unkeyed, still match the form they were stored in.
+    expect(await legacyRecoveryCodeHash(first.toUpperCase())).toBe(await legacyRecoveryCodeHash(first));
     expect(looksLikeRecoveryCode(first)).toBe(true);
     expect(looksLikeRecoveryCode('123456')).toBe(false);
   });

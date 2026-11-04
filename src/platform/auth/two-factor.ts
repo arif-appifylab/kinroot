@@ -1,4 +1,4 @@
-import {constantTimeEqualText, fromBase64Url, fromUtf8, randomBytes, sha256Hex, toBase64Url, utf8} from './encoding';
+import {constantTimeEqualText, fromBase64Url, fromUtf8, randomBytes, sha256Hex, toBase64Url, toHex, utf8} from './encoding';
 import {aesKey, hmacKey} from './keys';
 
 /**
@@ -10,7 +10,7 @@ import {aesKey, hmacKey} from './keys';
  *     users sign in with a recovery code, or an owner turns two-step off for them in Users.
  *   - A code is accepted once: the step it matched is stored, and that step or an older one
  *     never works again (no replay of a code someone watched being typed).
- *   - Recovery codes are kept as SHA-256 hashes; each works once.
+ *   - Recovery codes are kept as keyed hashes (HMAC); each works once.
  *   - Between the password and the code, the browser holds a CHALLENGE: a signed 5-minute token
  *     naming the user and their session version (a password change voids it). Pure functions.
  */
@@ -144,17 +144,33 @@ export async function openSecret(jwtSecret: string, userId: number, sealed: stri
 
 const RECOVERY_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 
-/** Ten codes like `k7m2-x9qp-4hzt` (about 70 bits each), shown once. */
+/** One unbiased character: a byte past the last whole multiple of the alphabet is drawn again. */
+function recoveryChar(): string {
+  const limit = 256 - (256 % RECOVERY_ALPHABET.length);
+  for (;;) {
+    const byte = randomBytes(1)[0]!;
+    if (byte < limit) return RECOVERY_ALPHABET[byte % RECOVERY_ALPHABET.length]!;
+  }
+}
+
+/** Ten codes like `k7m2-x9qp-4hzt` (about 59 bits each), shown once. */
 export function newRecoveryCodes(): string[] {
   return Array.from({length: RECOVERY_CODE_COUNT}, () => {
-    const bytes = randomBytes(12);
-    const chars = Array.from(bytes, b => RECOVERY_ALPHABET[b % RECOVERY_ALPHABET.length]).join('');
+    const chars = Array.from({length: 12}, recoveryChar).join('');
     return `${chars.slice(0, 4)}-${chars.slice(4, 8)}-${chars.slice(8, 12)}`;
   });
 }
 
+const typedRecoveryCode = (code: string) => code.toLowerCase().replace(/[\s-]/g, '');
+
 /** The stored form of a recovery code (case, spaces and dashes do not matter when typed). */
-export const recoveryCodeHash = (code: string) => sha256Hex(`recovery:${code.toLowerCase().replace(/[\s-]/g, '')}`);
+export async function recoveryCodeHash(secret: string, code: string): Promise<string> {
+  const key = await hmacKey(secret, 'recovery-code');
+  return toHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, utf8(typedRecoveryCode(code)))));
+}
+
+/** How older codes were stored, so they keep working until used or replaced. */
+export const legacyRecoveryCodeHash = (code: string) => sha256Hex(`recovery:${typedRecoveryCode(code)}`);
 
 export const looksLikeRecoveryCode = (code: string) => /^[a-z0-9]{12}$/.test(code.toLowerCase().replace(/[\s-]/g, ''));
 

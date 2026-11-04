@@ -10,7 +10,7 @@ read-when: before git push, when the owner asks how changes go live, when the Pr
   Migrate (pending `prisma/migrations` on the live Site Database; a failure keeps the old version
   live; destructive SQL waits for approval) → Deploy → Live. Redeploy of an earlier deployment is
   the rollback (database migrations stay applied: they must be backward-compatible, `database.md`).
-- **A publish failed on a migration, or you're about to write one:** read `/opt/ezy/live-migrations.json` first (`database.md`
+- **A publish failed on a migration, or you're about to write one:** read `{{LIVE_MIGRATIONS_FILE}}` first (`database.md`
   "What the live database has").
 - The site answers on its free address (`{{SITE_ORIGIN_PATTERN}}`) and on any custom domain the
   owner connects in the site's Domains tab. `{{API_PREFIX}}/*` on every one of those hosts is the

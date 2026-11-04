@@ -25,6 +25,9 @@ function memoryStore() {
       row.usedAt = at;
       return true;
     },
+    async familyRevoked(familyId) {
+      return rows.some(row => row.familyId === familyId && row.revokedAt !== null);
+    },
     async insert(row: NewRefreshRow) {
       rows.push({...row, id: next++, usedAt: null, revokedAt: null, revokedReason: null});
     },

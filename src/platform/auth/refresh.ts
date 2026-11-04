@@ -49,6 +49,8 @@ export interface RefreshStore {
   /** Marks the row used IF it is still unused and unrevoked. True when THIS call did it. */
   markUsed(id: bigint, at: Date): Promise<boolean>;
   insert(row: NewRefreshRow): Promise<void>;
+  /** Whether any token of the family has been revoked. */
+  familyRevoked(familyId: string): Promise<boolean>;
   revokeFamily(familyId: string, at: Date, reason: RevokeReason): Promise<void>;
   revokeAllForUser(userId: number, at: Date, reason: RevokeReason): Promise<void>;
 }
@@ -138,6 +140,11 @@ export async function rotate(
     userAgent: device.userAgent?.slice(0, 255) ?? null,
     ipHash: device.ipHash,
   });
+  // A "sign out everywhere" between the two writes above would miss the new token: check after it.
+  if (await store.familyRevoked(row.familyId)) {
+    await store.revokeFamily(row.familyId, now, 'password');
+    return {kind: 'invalid'};
+  }
   return {kind: 'ok', token: next, userId: row.userId, familyId: row.familyId, expiresAt};
 }
 

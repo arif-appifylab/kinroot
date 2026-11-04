@@ -295,7 +295,7 @@ Add an integration test for every new route that guards data (who may, who may n
 
 ## What the live database has
 You can't reach the live database, and never ask for its address. The platform writes what it has applied to
-`/opt/ezy/live-migrations.json` in the editor: names and statuses, never rows. It's refreshed each time the editor opens and after
+`{{LIVE_MIGRATIONS_FILE}}` in the editor: names and statuses, never rows. It's refreshed each time the editor opens and after
 each publish, and `readAt` says when. Read it before you write a migration, and first thing when a publish fails on one.
 
 | Field | Meaning |

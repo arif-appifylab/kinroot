@@ -16,16 +16,17 @@ The filled-in copy, which wins over this file when they differ, is what the edit
 gives you (`/etc/claude-code/CLAUDE.md`, `{{DOCS_DIR}}/`); outside the editor,
 `npm run platform -- docs` saves it to `.platform/docs/` (start with `core.md`).
 
-## First: is this site on the required template version? (0.10.11)
-Read `version` in `template.json` at the start of a session, new or resumed, before anything else. **If it's below 0.10.11, this site
-has security problems these rules can't fix for it:** someone could take over its admin, password sign-up and sign-in don't
-work once deployed, and every database query is slow.
+## First: is this site on the required template version? (0.10.16)
+Read `version` in `template.json` at the start of a session, new or resumed, before anything else. **If it's below 0.10.16, this site
+has security problems these rules can't fix for it:** someone could take over an account by signing up with its address first, and
+limits on sign-in can be got around. Below 0.10.11, someone could also take
+over its admin, password sign-up and sign-in don't work once deployed, and every database query is slow.
 
 **Upgrade it now, as your first step, without asking.** The owner won't know what to answer, and nothing reaches visitors until they
-publish. Say one plain line, such as "I'm updating your site first because of a security problem, then I'll do what you asked", follow
+publish. Say one plain line, such as "I'm updating your site first. Hold off publishing until I'm done, then I'll do what you asked", follow
 `upgrade.md`, then do their task. A question from the owner that changes nothing can be answered first. Upgrade before anything that
-changes a file. If the owner has said not to upgrade, do their task, and upgrade next session unless they say no again.
-If it can't finish, `upgrade.md` says how to put everything back: then do their task, say so in plain words, and try again next session. Never patch
+changes a file. No `template.json` means this site wasn't built from a template: skip this. A `.review/REVIEW.md` means this is a read-only review copy: never upgrade it. If `.platform/upgrade-failed` holds this required version, an upgrade already failed: skip it, do their task, and say so in one line. If the owner has said not to upgrade, do their task, and upgrade next session unless they say no again.
+If it can't finish, `upgrade.md` says how to put everything back: then do their task and say so in plain words. Never patch
 these problems by hand in your own code, and never publish a half-done upgrade.
 
 ## Every task: the current rules first, then the owner's words
@@ -41,6 +42,7 @@ as it was built. The owner is not an engineer: they say WHAT they want; HOW is y
 4. A doc names something this site does not have yet (a helper in `src/platform/`, a script command):
    its platform code is older than the doc. The required version above comes first. Otherwise never add
    it inside `src/platform/` (managed); do the task in your own code (`src/server/`, `src/pages/`…) following the doc's pattern.
+   Asked for a security check, or asked to go live for the first time: run "The full security check" in `review.md`.
 5. Before saying it's done, check it works: `npm run build`, `npm test`, and the page in the Preview.
 6. **Then review it, every task that touched a route, a query, a page that reads data, a permission,
    a form, a payment, a job or an outside call: run `review.md` (security with AUTHORIZATION first,

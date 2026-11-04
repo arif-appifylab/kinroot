@@ -81,6 +81,26 @@ describe.skipIf(!DATABASE_URL)('Kinroot team (integration, real Postgres)', () =
     expect((await maya.get('/site-api/crm/contacts')).status).toBe(200);
   });
 
+  it('an invited address joins only once its inbox is proven (template 0.10.15 sign-up)', async () => {
+    const site = await owner();
+    await site.get('/site-api/crm/auth/state');
+    const invite = await site.post('/site-api/crm/team/invite', {name: 'Lia', email: 'lia@example.com', role: 'MEMBER'});
+    expect(invite.status).toBe(200);
+    const token = String(invite.json.inviteUrl).split('/invite/')[1]!;
+
+    // A stranger signs up with Lia's address: no account exists without the emailed code, so no join.
+    const stranger = new Browser(app, '203.0.113.90');
+    expect((await stranger.post('/site-api/auth/register', {email: 'lia@example.com', name: 'Not Lia', password: 'a long test passphrase'})).status).toBe(202);
+    expect(await db.user.count({where: {email: 'lia@example.com'}})).toBe(0);
+    expect((await stranger.post(`/site-api/crm/auth/invite/${token}`)).status).toBe(401);
+
+    // Lia, with the code from her own inbox, in her own browser: the account, then the team.
+    const lia = await signedIn(app, 'lia@example.com');
+    expect((await lia.post(`/site-api/crm/auth/invite/${token}`)).status).toBe(200);
+    expect((await db.member.findFirstOrThrow({where: {user: {email: 'lia@example.com'}}})).inviteEmail).toBeNull();
+    expect((await stranger.get('/site-api/crm/auth/state')).json.user).toBeNull();
+  });
+
   it("shows teammates' addresses only to their owner and the site's owner", async () => {
     const ownerBrowser = await owner();
     await ownerBrowser.get('/site-api/crm/auth/state');

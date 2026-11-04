@@ -4,12 +4,50 @@ Template releases. `npm run platform -- check` says when a newer one is out;
 `npm run platform -- upgrade` applies it (see `scripts/platform.mjs`).
 Managed by the template: replaced on upgrade.
 
+## 0.10.16
+
+- **Required upgrade.** The platform now puts the template in the editor for every site, so upgrading downloads nothing. `upgrade.md` tells the AI never to ask the owner to find a file.
+
+## 0.10.15
+
+Security release, required. New migrations: `pending_sign_ups`, `sign_up_by_address`, `no_email_change_undo`. Steps for an existing site: `docs/agent/upgrade.md`.
+
+- **No account exists until the inbox is proven.** Sign-up keeps a pending row for that browser and emails a 6-digit code and a
+  link; either one, in that browser, creates the account. A stranger signing up with someone's address can't get in.
+  `requireEmailVerification` no longer does anything: confirming is always on.
+- **Limits a stranger can spend are gone where they can be.** An address gets one email with a way in per 15 minutes, whoever
+  asks, and it stays good for longer than that, so a stranger asking still leaves a working code or link in the inbox. Wrong
+  guesses no longer spend a code. **What remains:** typing a 6-digit code has a total per address (10 in 15 minutes, 50 a day),
+  because it can be guessed, and a stranger can use that up. So can 20 wrong passwords. The person then uses a link, which has
+  no such limit: the sign-up email's, in the same browser, or a reset link, which clears those failures. Every sign-in code email
+  carries a reset link, so a stranger's requests can't leave the inbox without one. A browser that has
+  signed in to the address has its own budget.
+- **Accounts never confirmed:** the first proof of the inbox (a code or an old link) drops the password, sessions, two-step
+  sign-in and open links, unless that same browser knows the password and has the code.
+- **Every security event ends every way back in** (`end-access.ts`): password reset and change, new email, sign out
+  everywhere, suspension. A waiting email change, an old reset link, or a sign-in running at that moment can't outlive them.
+- **Email changes:** need the password and the new inbox, and stand once confirmed. One waiting link per account; the old address
+  hears at once and can cancel while it waits (`/account/cancel-email/`), then gets a plain notice.
+- **Rate limits** are counted by the database, so logging in to your own account can't hide failed guesses. A whole IPv6 /56
+  counts as one address. Fewer locks and at most 4 tries each.
+- **Notices:** two-step on or off, new recovery codes. Password sign-ins and failed ones are in the audit log.
+- **A site changing hands:** a former owner's admin ends within 10 minutes (the platform is asked at each refresh). Admins they
+  made stay until the new owner clicks in or the next Deploy.
+- `AGENTS.md`, `review.md`: a full security check, run when the owner asks or first goes live. `auth.md`: how to build an admin changing a user's email; `endAccess` and `sendSiteEmail` are exported for it.
+- Recovery codes are unbiased and stored keyed (older ones keep working). Common passwords are refused behind numbers, swapped
+  letters or repeats. A session can't survive a password change in a refresh race.
+
+## 0.10.14
+
+- **Required upgrade.** The required version is now this one, so a site below it upgrades first, without asking. `upgrade.md` has a step for
+  the list page files an upgrade leaves alone (`Base.astro`, `global.css`, `/jobs/`).
+
 ## 0.10.13
 
 - **List pages: a static shell, with rows as JSON.** New `src/lib/list-page.ts`: skeleton, filters in the URL, load more,
   empty, no match and error. A filter, a search or "load more" fetches only the data. `/jobs/` is built this way.
 - `AGENTS.md`, `performance.md`, `seo.md`: which kind of page to build, including when a short list stays server-rendered.
-- **The AI can see what the live database has applied.** `/opt/ezy/live-migrations.json`, written by the platform on each editor
+- **The AI can see what the live database has applied.** A file in the editor, written by the platform on each editor
   Open and after each publish: names and statuses, no rows and no credentials. `database.md` says how to fix a failed migration with it.
 - `data-ability` on a prerendered page shows an element to people with that ability, once the browser knows who they are.
 

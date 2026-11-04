@@ -11,6 +11,5 @@ import {type AuthSettings, DEFAULT_AUTH_SETTINGS} from '../platform/auth';
 export const authSettings: AuthSettings = {
   ...DEFAULT_AUTH_SETTINGS,
   // registration: 'open',
-  // requireEmailVerification: true,
   // afterSignInPath: '/dashboard',
 };

@@ -147,9 +147,34 @@ export function passwordProblem(password: string, email?: string): string | null
   const lower = password.toLowerCase();
   const name = email?.toLowerCase().split('@')[0] ?? '';
   if (name.length >= 4 && lower.includes(name)) return 'Do not use your email address in your password.';
-  if (COMMON.has(lower)) return 'That password is too common. Choose another.';
+  if (COMMON.has(lower) || looksCommon(lower)) return 'That password is too common. Choose another.';
   return null;
 }
+
+/** Common words behind swapped letters, repeats or numbers (`P@ssw0rd12345`, `adminadmin12`, `aaaaaaaaaaaa`). */
+function looksCommon(lower: string): boolean {
+  if (new Set(lower).size <= 2) return true;
+  const trim = (value: string) => value.replace(/[^a-z]+$/, '').replace(/^[^a-z]+/, '');
+  // Numbers around a word first, so only those inside it read as swapped letters.
+  const plain = trim(trim(lower).replace(/@/g, 'a').replace(/\$/g, 's').replace(/0/g, 'o').replace(/3/g, 'e').replace(/[1!]/g, 'i'));
+  const word = plain.match(/^(.+?)\1+$/)?.[1] ?? plain;
+  return [trim(lower), plain, word].some(candidate => COMMON_WORDS.has(candidate));
+}
+
+/**
+ * The most-used words in passwords: on their own, or with only numbers or symbols around them
+ * (`password12345`, `!!welcome2024`), they are the first things anyone guesses.
+ */
+const COMMON_WORDS = new Set(
+  (
+    'password passw0rd passwort motdepasse contrasena qwerty qwertyuiop qwertyui asdfgh asdfghjkl zxcvbn zxcvbnm ' +
+    'letmein welcome welcomeback iloveyou admin administrator root login master secret changeme default test testing ' +
+    'football baseball basketball soccer hockey dragon monkey shadow sunshine princess superman batman michael ' +
+    'trustno abc abcd abcde abcdef abcdefg abcdefgh abcdefghij access computer internet whatever freedom starwars ' +
+    'pokemon liverpool chelsea arsenal manchester google facebook samsung apple summer winter spring autumn ' +
+    'bangladesh dhaka india pakistan america'
+  ).split(' ')
+);
 
 /**
  * A short list of the most-used passwords that pass the length rule, checked

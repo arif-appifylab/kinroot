@@ -2,51 +2,58 @@ import {Hono} from 'hono';
 
 import {requireAuth, withAuthCore, withViewer, problem} from '../guards';
 import {audit} from './audit';
-import {emailAccepted, EMAIL_NOT_REAL} from './email-check';
 import {sha256Hex} from './encoding';
 import {signAccessToken} from './jwt';
+import {claimUnconfirmed, endAccess} from './end-access';
 import {hashPassword, DUMMY_PASSWORD_HASH, PASSWORD_LIMITS, passwordProblem, verifyPassword} from './password';
 import {rotate, revokeByToken} from './refresh';
+import {pendingFromLogin, resendPending, SIGN_UP_CODE_PATH, signUpRoutes} from './sign-up';
 import {normalizeEmail, safeNext} from './input';
 import {
-  allowed,
   attempt,
   background,
   body,
   clearSession,
   type Ctx,
+  deviceTrusted,
   type Env,
+  forgiveAddress,
   type FieldErrors,
   invalid,
   keysFor,
+  mailDue,
   maybeSweep,
   newLinkToken,
-  NO_PASSWORD,
+  newResetPath,
+  RESET_TTL_MINUTES,
   notForOwnerAccount,
   publicUser,
   raw,
   refreshCookieOf,
+  rememberDevice,
   sendEmail,
   setSession,
+  settledSessionVersion,
   settle,
   startSession,
   text,
 } from './kit';
 import {codeRoutes} from './code-routes';
-import {ownerRoutes} from './owner';
+import {ownerRoutes, stillOwner} from './owner';
 import {securityRoutes} from './security-routes';
 import {signChallenge} from './two-factor';
 import {getAccess} from './session';
 import {type AuthSettings} from './settings';
-import {attemptStore, refreshStore, sweep} from './store';
+import {refreshStore} from './store';
 
 /**
  * `/site-api/auth/*`: this site's own sign-in (docs/agent/auth.md).
  *
  *   GET   /csrf                 the CSRF token (also set as a cookie)
- *   POST  /register             {email, password, name}
- *   POST  /verify-email         {token}
- *   POST  /resend-verification  {email}                  always the same answer
+ *   POST  /register             {email, password, name}  a pending sign-up + an emailed code (sign-up.ts)
+ *   POST  /register/verify      {email, code}            the code → the account, signed in
+ *   POST  /resend-verification  {email}                  a new code or link; always the same answer
+ *   POST  /verify-email         {token}                  a link emailed before sign-up took a code
  *   POST  /login                {email, password}
  *   POST  /refresh              rotates the refresh cookie, new access cookie
  *   POST  /logout               this device
@@ -70,14 +77,12 @@ import {attemptStore, refreshStore, sweep} from './store';
  */
 
 
-const RESET_TTL_MINUTES = 30;
 const VERIFY_TTL_HOURS = 24;
 
 const GENERIC = {
   login: 'Email or password is incorrect.',
   forgot: `If an account exists for that email, we sent a link to reset its password. The link works for ${RESET_TTL_MINUTES} minutes.`,
-  registered: 'Check your inbox: we sent a link to confirm your email address.',
-  resend: 'If that email has an account waiting for confirmation, we sent a new link.',
+  resend: 'If that email is waiting for confirmation, we sent a new code.',
   badLink: 'This link has expired or was already used. Ask for a new one.',
 };
 
@@ -102,30 +107,14 @@ async function createVerification(c: Ctx, user: {id: number; email: string}) {
 }
 
 /**
- * Emails a single-use reset link (30 minutes); older unused links stop working.
- * Used by Forgot password and to let an owner address choose its own password.
+ * Emails a single-use reset link (30 minutes). Older ones stay good: a stranger asking must not end
+ * the link a person is about to open. A security event ends them all (`endAccess`).
+ * Used by Forgot password and to let an inbox choose a password after one was dropped.
  */
 async function issuePasswordReset(c: Ctx, user: {id: number; email: string}, ipHash: string) {
-  const db = c.var.db;
-  const now = new Date();
-  await db.passwordReset.updateMany({where: {userId: user.id, usedAt: null}, data: {usedAt: now}});
-  const token = newLinkToken();
-  await db.passwordReset.create({
-    data: {
-      userId: user.id,
-      tokenHash: await sha256Hex(token),
-      expiresAt: new Date(now.getTime() + RESET_TTL_MINUTES * 60 * 1000),
-      ipHash,
-    },
-    select: {id: true},
-  });
-  await audit(db, {actorUserId: null, action: 'password_reset_requested', target: ['user', user.id], ipHash});
-  sendEmail(c, {
-    kind: 'password_reset',
-    to: user.email,
-    path: `/account/reset/?token=${token}`,
-    expiresInMinutes: RESET_TTL_MINUTES,
-  });
+  const path = await newResetPath(c, user.id, ipHash);
+  await audit(c.var.db, {actorUserId: null, action: 'password_reset_requested', target: ['user', user.id], ipHash});
+  sendEmail(c, {kind: 'password_reset', to: user.email, path, expiresInMinutes: RESET_TTL_MINUTES});
 }
 
 
@@ -136,6 +125,7 @@ export function authRoutes(settings: AuthSettings) {
     new Hono<Env>()
       .route('/', ownerRoutes(settings))
       .route('/', codeRoutes(settings))
+      .route('/', signUpRoutes(settings))
       .route('/', securityRoutes(settings))
       .get('/csrf', c => {
         // `csrf` (app-wide) has already set the cookie when it was missing;
@@ -143,109 +133,6 @@ export function authRoutes(settings: AuthSettings) {
         c.header('Cache-Control', 'no-store');
         return c.json({ok: true});
       })
-
-      .post(
-        '/register',
-        body((v, c) => {
-          const fields: FieldErrors = {};
-          const email = normalizeEmail(v.email);
-          const name = text(v.name, 80);
-          const password = raw(v.password);
-          if (!email) fields.email = 'Enter a valid email address, like name@example.com.';
-          if (!name) fields.name = 'Enter your name.';
-          else if (name.length > 80) fields.name = 'Use at most 80 characters.';
-          const weak = passwordProblem(password, email ?? undefined);
-          if (weak) fields.password = weak;
-          return Object.keys(fields).length ? invalid(c, fields) : {email: email!, name, password};
-        }),
-        withAuthCore,
-        async c => {
-          if (settings.registration !== 'open') {
-            return c.json(problem('registration_closed', 'Sign-up is closed on this site.'), 403);
-          }
-          const {email, name, password} = c.req.valid('json');
-          const keys = await keysFor(c, email);
-          const {stop} = await attempt(c, 'register', keys);
-          if (stop) return stop;
-          // After the rate limit, so the form can't be used to test addresses in bulk.
-          if (!(await emailAccepted(c.req.url, email))) return invalid(c, {email: EMAIL_NOT_REAL});
-
-          // Hash first, always: the taken-email path then costs the same.
-          const passwordHash = await hashPassword(password);
-          const db = c.var.db;
-          const findTaken = () =>
-            db.user.findUnique({
-              where: {email},
-              select: {id: true, email: true, status: true, emailVerifiedAt: true},
-            });
-          // The address already has an account (found first, or a concurrent sign-up won the
-          // unique index: both take this path, so a race can't keep the first password).
-          const answerTaken = async (taken: NonNullable<Awaited<ReturnType<typeof findTaken>>>) => {
-            if (!settings.requireEmailVerification) {
-              return c.json(
-                problem('email_taken', 'An account with this email already exists. Sign in instead.'),
-                409
-              );
-            }
-            if (taken.status === 'active' && !taken.emailVerifiedAt) {
-              // Two sign-ups for one unconfirmed address: nobody can tell which one owns
-              // the inbox, so NEITHER password is kept (taking the second would let a
-              // late attacker replace the real person's; keeping the first would let an
-              // early squatter keep theirs). Older links stop working; whoever opens the
-              // new one confirms the address and then chooses the password by email.
-              const now = new Date();
-              await db.user.updateMany({
-                where: {id: taken.id, emailVerifiedAt: null},
-                data: {passwordHash: NO_PASSWORD, sessionVersion: {increment: 1}},
-              });
-              await db.emailVerification.updateMany({where: {userId: taken.id, usedAt: null}, data: {usedAt: now}});
-              if (await allowed(c, 'verify', keys)) background(c, createVerification(c, taken));
-            } else if (await allowed(c, 'verify', keys)) {
-              // Tell the address's owner, not the visitor (rate-limited like a resend).
-              sendEmail(c, {kind: 'account_exists', to: email, path: '/account/login/'});
-            }
-            return c.json({ok: true, message: GENERIC.registered}, 202);
-          };
-          const taken = await findTaken();
-          if (taken) return answerTaken(taken);
-
-          let user: {id: number; email: string; name: string; emailVerifiedAt: Date | null; sessionVersion: number};
-          try {
-            user = await db.user.create({
-              data: {
-                email,
-                name,
-                passwordHash,
-                roles: {create: {role: {connect: {slug: settings.defaultRole}}}},
-              },
-              select: {id: true, email: true, name: true, emailVerifiedAt: true, sessionVersion: true},
-            });
-          } catch (err) {
-            // A concurrent sign-up with the same email won the unique index: answer as if it was
-            // found first (second review: the loser used to return here, keeping the winner's password).
-            if ((err as {code?: string}).code === 'P2002') {
-              const winner = await findTaken();
-              return winner ? answerTaken(winner) : c.json({ok: true, message: GENERIC.registered}, 202);
-            }
-            throw err;
-          }
-          const registered = audit(db, {
-            actorUserId: user.id,
-            action: 'user_registered',
-            target: ['user', user.id],
-            ipHash: keys.ipHash,
-          });
-
-          if (settings.requireEmailVerification) {
-            // After the answer, so a new email and a taken one answer alike.
-            background(c, registered.then(() => createVerification(c, user)));
-            return c.json({ok: true, message: GENERIC.registered}, 202);
-          }
-          await registered;
-          await startSession(c, user, keys.ipHash);
-          return c.json({ok: true, user: publicUser(user), next: settings.afterSignInPath}, 201);
-        }
-      )
 
       .post(
         '/verify-email',
@@ -264,7 +151,7 @@ export function authRoutes(settings: AuthSettings) {
               email: true,
               expiresAt: true,
               usedAt: true,
-              user: {select: {email: true, status: true, passwordHash: true}},
+              user: {select: {email: true, status: true, emailVerifiedAt: true}},
             },
           });
           const now = new Date();
@@ -279,22 +166,12 @@ export function authRoutes(settings: AuthSettings) {
           }
           const {count} = await db.emailVerification.updateMany({where: {id: row.id, usedAt: null}, data: {usedAt: now}});
           if (count !== 1) return c.json(problem('invalid_token', GENERIC.badLink), 400);
-          await db.user.updateMany({where: {id: row.userId, emailVerifiedAt: null}, data: {emailVerifiedAt: now}});
           const {ipHash} = await keysFor(c, null);
           await audit(db, {actorUserId: row.userId, action: 'email_verified', target: ['user', row.userId], ipHash});
-          const user = {id: row.userId, email: row.email};
-          // Contested (signed up twice, see /register): whoever registered chose the password,
-          // and that may not be the person who owns the inbox. The password is dropped (every
-          // session ends) and the inbox gets a link to choose one.
-          const contested = row.user.passwordHash === NO_PASSWORD;
-          if (contested) {
-            await db.user.update({
-              where: {id: user.id},
-              data: {passwordHash: NO_PASSWORD, sessionVersion: {increment: 1}},
-              select: {id: true},
-            });
-            await refreshStore(db).revokeAllForUser(user.id, now, 'password');
-            await issuePasswordReset(c, user, ipHash);
+          // A link proves the inbox and nothing else: whoever registered chose the password, and that
+          // may not be this person. It goes, and the inbox gets a link to choose one.
+          if (!row.user.emailVerifiedAt && (await claimUnconfirmed(db, row.userId, {now}))) {
+            await issuePasswordReset(c, {id: row.userId, email: row.email}, ipHash);
             return c.json({
               ok: true,
               setPassword: true,
@@ -322,11 +199,12 @@ export function authRoutes(settings: AuthSettings) {
           background(
             c,
             (async () => {
+              if (await resendPending(c, email, keys)) return;
               const user = await db.user.findUnique({
                 where: {email},
                 select: {id: true, email: true, status: true, emailVerifiedAt: true},
               });
-              if (user && user.status === 'active' && !user.emailVerifiedAt) await createVerification(c, user);
+              if (user && user.status === 'active' && !user.emailVerifiedAt && (await mailDue(c, keys))) await createVerification(c, user);
             })()
           );
           return c.json({ok: true, message: GENERIC.resend}, 202);
@@ -350,7 +228,10 @@ export function authRoutes(settings: AuthSettings) {
           const {email, password, next} = c.req.valid('json');
           const db = c.var.db;
           const keys = await keysFor(c, email);
-          const {stop, id: attemptId} = await attempt(c, 'login', keys);
+          const {stop, id: attemptId} = await attempt(c, 'login', keys, {
+            trusted: await deviceTrusted(c, email),
+            subjectHint: 'Too many wrong passwords for this email from different places. Check your inbox for a link from us, or use Forgot password. It works from any browser.',
+          });
           if (stop) return stop;
 
           const user = await db.user.findUnique({
@@ -369,7 +250,8 @@ export function authRoutes(settings: AuthSettings) {
           // Unknown email: verify against a dummy hash, so it takes as long as a wrong password.
           const check = await verifyPassword(password, user?.passwordHash ?? DUMMY_PASSWORD_HASH);
           if (!user || !check.ok) {
-            // The attempt's row already counts as a failure.
+            // The attempt's row already counts as a failure. Worth a record only when it names an account.
+            if (user) background(c, audit(db, {actorUserId: null, action: 'sign_in_failed', target: ['user', user.id], ipHash: keys.ipHash}));
             maybeSweep(c);
             return c.json(problem('invalid_credentials', GENERIC.login), 401);
           }
@@ -379,10 +261,15 @@ export function authRoutes(settings: AuthSettings) {
           if (user.status !== 'active') {
             return c.json(problem('account_suspended', 'This account is suspended. Contact the site owner.'), 403);
           }
-          if (settings.requireEmailVerification && !user.emailVerifiedAt) {
-            if (await allowed(c, 'verify', keys)) await createVerification(c, user);
+          if (!user.emailVerifiedAt) {
+            // This browser knows the password; a code from the inbox makes the second half of the proof.
+            await pendingFromLogin(c, user, keys);
             return c.json(
-              problem('email_unverified', 'Confirm your email address first. We sent you a new link.'),
+              {
+                ...problem('email_unverified', 'Confirm your email address first. We sent you a 6-digit code.'),
+                needsCode: true,
+                next: SIGN_UP_CODE_PATH,
+              },
               403
             );
           }
@@ -395,6 +282,7 @@ export function authRoutes(settings: AuthSettings) {
             },
             select: {id: true},
           });
+          await audit(db, {actorUserId: user.id, action: 'signed_in_with_password', target: ['user', user.id], ipHash: keys.ipHash});
           if (user.totpEnabledAt) {
             // Two-step sign-in: no session until the code (POST /login/two-factor).
             maybeSweep(c);
@@ -438,11 +326,18 @@ export function authRoutes(settings: AuthSettings) {
           clearSession(c);
           return c.json(problem('signed_out', 'Sign in again.'), 401);
         }
+        // An `endAccess` may have been running while the new token went in: wait for it, then look again.
+        await settledSessionVersion(db, result.userId);
+        if (await refreshStore(db).familyRevoked(result.familyId)) {
+          await refreshStore(db).revokeFamily(result.familyId, new Date(), 'password');
+          clearSession(c);
+          return c.json(problem('signed_out', 'Sign in again.'), 401);
+        }
         const user = await db.user.findUnique({
           where: {id: result.userId},
-          select: {id: true, status: true, sessionVersion: true},
+          select: {id: true, status: true, sessionVersion: true, platformOwnerId: true},
         });
-        if (!user || user.status !== 'active') {
+        if (!user || user.status !== 'active' || (user.platformOwnerId && !(await stillOwner(c, user.id, user.platformOwnerId)))) {
           await refreshStore(db).revokeFamily(result.familyId, new Date(), 'suspended');
           clearSession(c);
           return c.json(problem('signed_out', 'Sign in again.'), 401);
@@ -466,8 +361,7 @@ export function authRoutes(settings: AuthSettings) {
       .post('/logout-all', withViewer, requireAuth, withAuthCore, async c => {
         const id = c.var.viewer.id!;
         const db = c.var.db;
-        await db.user.update({where: {id}, data: {sessionVersion: {increment: 1}}, select: {id: true}});
-        await refreshStore(db).revokeAllForUser(id, new Date(), 'logout_all');
+        await endAccess(db, id, 'logout_all');
         const {ipHash} = await keysFor(c, null);
         await audit(db, {actorUserId: id, action: 'logout_all', target: ['user', id], ipHash});
         clearSession(c);
@@ -518,8 +412,15 @@ export function authRoutes(settings: AuthSettings) {
           background(
             c,
             (async () => {
-              const user = await db.user.findUnique({where: {email}, select: {id: true, email: true, status: true}});
-              if (user && user.status === 'active') await issuePasswordReset(c, user, keys.ipHash);
+              const user = await db.user.findUnique({where: {email}, select: {id: true, email: true, status: true, emailVerifiedAt: true}});
+              if (!user || user.status !== 'active') {
+                await mailDue(c, keys);
+                return;
+              }
+              // Never confirmed: the last email may be a sign-up code that only works in a stranger's browser.
+              if (await mailDue(c, user.emailVerifiedAt ? keys : await keysFor(c, `unconfirmed:${email}`))) {
+                await issuePasswordReset(c, user, keys.ipHash);
+              }
             })()
           );
           return c.json({ok: true, message: GENERIC.forgot}, 202);
@@ -541,7 +442,7 @@ export function authRoutes(settings: AuthSettings) {
           const db = c.var.db;
           const row = await db.passwordReset.findUnique({
             where: {tokenHash: await sha256Hex(token)},
-            select: {id: true, userId: true, expiresAt: true, usedAt: true, user: {select: {email: true, status: true}}},
+            select: {id: true, userId: true, expiresAt: true, usedAt: true, user: {select: {email: true, status: true, emailVerifiedAt: true}}},
           });
           const now = new Date();
           if (!row || row.usedAt || row.expiresAt <= now || row.user.status !== 'active') {
@@ -553,21 +454,19 @@ export function authRoutes(settings: AuthSettings) {
           const {count} = await db.passwordReset.updateMany({where: {id: row.id, usedAt: null}, data: {usedAt: now}});
           if (count !== 1) return c.json(problem('invalid_token', GENERIC.badLink), 400);
 
-          await db.user.update({
-            where: {id: row.userId},
-            data: {
-              passwordHash: await hashPassword(password),
-              sessionVersion: {increment: 1},
-            },
-            select: {id: true},
-          });
-          // Following the link proves the inbox: confirm the email if it was not yet.
-          await db.user.updateMany({where: {id: row.userId, emailVerifiedAt: null}, data: {emailVerifiedAt: now}});
-          await refreshStore(db).revokeAllForUser(row.userId, now, 'password');
-          const {ipHash} = await keysFor(c, null);
+          const passwordHash = await hashPassword(password);
+          // Following the link proves the inbox: on an account never confirmed, nothing set before this stays.
+          if (!row.user.emailVerifiedAt) await claimUnconfirmed(db, row.userId, {now, set: {passwordHash}});
+          else await endAccess(db, row.userId, 'password', {now, set: {passwordHash}});
+          const {ipHash, emailHash} = await keysFor(c, row.user.email);
+          // The link proved the inbox: strangers' failed attempts no longer stand in this person's way.
+          await forgiveAddress(db, emailHash);
           await audit(db, {actorUserId: row.userId, action: 'password_reset', target: ['user', row.userId], ipHash});
           sendEmail(c, {kind: 'password_changed', to: row.user.email});
           clearSession(c);
+          // This browser just proved the inbox, so strangers still guessing can't lock it out of the new password.
+          const version = await settledSessionVersion(db, row.userId);
+          if (version !== null) await rememberDevice(c, row.user.email, version);
           return c.json({ok: true, message: 'Your password is changed. Sign in with the new one.'});
         }
       )
@@ -606,13 +505,9 @@ export function authRoutes(settings: AuthSettings) {
           const weak = passwordProblem(newPassword, user.email);
           if (weak) return invalid(c, {newPassword: weak});
 
-          const updated = await db.user.update({
-            where: {id},
-            data: {passwordHash: await hashPassword(newPassword), sessionVersion: {increment: 1}},
-            select: {id: true, sessionVersion: true},
-          });
-          // Every other device signs in again; this one gets a fresh session.
-          await refreshStore(db).revokeAllForUser(id, new Date(), 'password');
+          // Every other device signs in again, and open links and codes end; this one gets a fresh session.
+          await endAccess(db, id, 'password', {set: {passwordHash: await hashPassword(newPassword)}});
+          const updated = (await db.user.findUnique({where: {id}, select: {id: true, email: true, sessionVersion: true}}))!;
           await startSession(c, updated, keys.ipHash);
           await audit(db, {actorUserId: id, action: 'password_changed', target: ['user', id], ipHash: keys.ipHash});
           sendEmail(c, {kind: 'password_changed', to: user.email});

@@ -3,7 +3,7 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it} from '
 import {PREVIEW_COOKIE_HEADER, PREVIEW_SET_COOKIE_HEADER} from '../../src/platform/auth/preview-cookies';
 import {app} from '../../src/server/app';
 import {env} from './support/cloudflare-workers';
-import {Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, tokenFrom, userId} from './support/harness';
+import {Browser, signUpCodeFrom, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, tokenFrom, userId} from './support/harness';
 
 /**
  * Sign-in behind the editor Preview's gateway, which drops `Cookie` and
@@ -31,14 +31,14 @@ describe.skipIf(!DATABASE_URL)('the editor Preview (integration, real Postgres)'
       const reg = await browser.post('/site-api/auth/register', {email: 'maker@example.test', name: 'Maker', password: PASSWORD});
       expect(reg.status).toBe(202);
       expect(browser.cookie('site_csrf')).toBeTruthy();
-      expect((await browser.post('/site-api/auth/verify-email', {token: tokenFrom('verify_email', 'maker@example.test')})).status).toBe(200);
+      expect((await browser.post('/site-api/auth/register/verify', {email: 'maker@example.test', code: signUpCodeFrom('maker@example.test')})).status).toBe(201);
 
       const login = await browser.post('/site-api/auth/login', {email: 'maker@example.test', password: PASSWORD});
       expect(login.status).toBe(200);
       // The real cookies are still set (a gateway that passes them loses nothing) and mirrored.
       expect(login.headers.getSetCookie().join('\n')).toMatch(/__Host-site_at=.*HttpOnly/);
       const mirrored = JSON.parse(login.headers.get(PREVIEW_SET_COOKIE_HEADER) ?? '[]') as [string, string, number][];
-      expect(mirrored.map(([name]) => name).sort()).toEqual(['__Host-site_at', '__Host-site_rt']);
+      expect(mirrored.map(([name]) => name).sort()).toEqual(['__Host-site_at', '__Host-site_device', '__Host-site_rt']);
 
       const me = await browser.get('/site-api/auth/me');
       expect(me.status).toBe(200);

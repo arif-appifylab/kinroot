@@ -6,6 +6,8 @@
  *   __Host-site_at    access JWT, 10 min          HttpOnly
  *   __Host-site_rt    refresh token, 30 days      HttpOnly
  *   __Host-site_csrf  CSRF double-submit token    readable by the page's JS
+ *   __Host-site_signup  a browser partway through sign-up, 1 day   HttpOnly
+ *   __Host-site_device  this browser signed in to this address, 180 days   HttpOnly
  *
  * All `SameSite=Lax`. On your own machine (`localhost`) the prefix and
  * `Secure` are dropped, because some browsers refuse Secure cookies on
@@ -14,6 +16,10 @@
 export const ACCESS_COOKIE = 'site_at';
 export const REFRESH_COOKIE = 'site_rt';
 export const CSRF_COOKIE = 'site_csrf';
+/** A random id for a browser partway through sign-up (`sign-up.ts`). */
+export const SIGN_UP_COOKIE = 'site_signup';
+/** Proof this browser has signed in to an address, so a limit on that address doesn't block it (`kit.ts`). */
+export const DEVICE_COOKIE = 'site_device';
 export const CSRF_HEADER = 'x-csrf-token';
 
 export function isLocalHost(hostname: string): boolean {

@@ -62,7 +62,7 @@ describe.skipIf(!DATABASE_URL)('email check (integration, real Postgres)', () =>
   it('an accepted address signs up as before', async () => {
     const res = await new Browser(app).post('/site-api/auth/register', {email: 'ann@example.test', name: 'Ann', password: PASSWORD});
     expect(res.status).toBe(202);
-    expect(await db.user.count({where: {email: 'ann@example.test'}})).toBe(1);
+    expect(await db.pendingSignUp.count({where: {email: 'ann@example.test'}})).toBe(1);
     expect(asked.map(a => a.email)).toEqual(['ann@example.test']);
   });
 
@@ -74,7 +74,7 @@ describe.skipIf(!DATABASE_URL)('email check (integration, real Postgres)', () =>
       password: PASSWORD,
     });
     expect(res.status).toBe(202);
-    expect(await db.user.count({where: {email: 'late@throwaway.test'}})).toBe(1);
+    expect(await db.pendingSignUp.count({where: {email: 'late@throwaway.test'}})).toBe(1);
   });
 
   it('a new email address is checked too: refused → nothing sent', async () => {

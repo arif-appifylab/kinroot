@@ -8,9 +8,21 @@ import {configureEnv, DATABASE_URL, db, resetDatabase} from './support/harness';
 /**
  * PIPE-12 follow-up (second review): a busy rate-limit lock is tried, not waited on with a
  * connection held. While another transaction holds the scope's lock, an attempt gives up after
- * ATTEMPT_LOCK_WAIT_MS and is refused like a rate-limited one; before, it sat on its own database
+ * ATTEMPT_LOCK_TRIES tries and is refused like a rate-limited one; before, it sat on its own database
  * connection until the holder finished, so a burst on one IP parked one connection per waiter.
  */
+describe('a database slow to start a transaction', () => {
+  const slow = {$transaction: () => Promise.reject(Object.assign(new Error('Unable to start a transaction in the given time.'), {code: 'P2028'}))};
+  it('is refused like a busy lock, not a 500', async () => {
+    const out = await takeAttempt(attemptStore(slow as never), 'register', {emailHash: null, ipHash: 'c'.repeat(64)});
+    expect(out).toMatchObject({wait: 1, id: null});
+  });
+  it('any other error still surfaces', async () => {
+    const broken = {$transaction: () => Promise.reject(new Error('broken'))};
+    await expect(takeAttempt(attemptStore(broken as never), 'register', {emailHash: null, ipHash: 'c'.repeat(64)})).rejects.toThrow('broken');
+  });
+});
+
 describe.skipIf(!DATABASE_URL)('rate-limit lock busy (integration, real Postgres)', () => {
   // Another request: its own client (one connection each, like a Worker request).
   const other = createDb(DATABASE_URL || 'postgresql://unused@localhost/unused');
@@ -36,8 +48,9 @@ describe.skipIf(!DATABASE_URL)('rate-limit lock busy (integration, real Postgres
     const result = await takeAttempt(attemptStore(db), 'register', keys);
     const took = Date.now() - started;
     await holder;
-    expect(result).toEqual({wait: 1, id: null});
-    expect(took).toBeLessThan(4_000);
+    expect(result).toMatchObject({wait: 1, id: null});
+    // A few tries, each a billed transaction: not 2 seconds of them.
+    expect(took).toBeLessThan(1_000);
     expect(await db.loginAttempt.count()).toBe(0);
 
     // Free again: the next attempt goes through.

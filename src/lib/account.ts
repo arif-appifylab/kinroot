@@ -63,3 +63,22 @@ export function replaceWithMessage(form: HTMLFormElement, message: string, link?
   box.tabIndex = -1;
   box.focus();
 }
+
+const SIGN_UP_EMAIL = 'site-sign-up-email';
+
+/** Carries the address to the code page for this tab, so it never goes in a URL. */
+export function rememberSignUpEmail(email: string): void {
+  try {
+    sessionStorage.setItem(SIGN_UP_EMAIL, email);
+  } catch {
+    // Storage blocked: the code page asks for the address instead.
+  }
+}
+
+export function signUpEmail(): string {
+  try {
+    return sessionStorage.getItem(SIGN_UP_EMAIL) ?? '';
+  } catch {
+    return '';
+  }
+}

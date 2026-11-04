@@ -25,7 +25,12 @@ export type SiteEmailKind =
   | 'account_exists'
   | 'confirm_email_change'
   | 'email_changed'
-  | 'sign_in_code';
+  | 'sign_in_code'
+  | 'sign_up_code'
+  | 'email_change_requested'
+  | 'two_factor_on'
+  | 'two_factor_off'
+  | 'recovery_codes_new';
 
 export interface SiteEmail {
   kind: SiteEmailKind;
@@ -33,7 +38,7 @@ export interface SiteEmail {
   /** Site-relative link (`/account/…`), or omitted for a notice. */
   path?: string;
   expiresInMinutes?: number;
-  /** `sign_in_code` only: the 6 digits the email shows (never a link). */
+  /** `sign_in_code` and `sign_up_code`: the 6 digits the email shows. */
   code?: string;
 }
 

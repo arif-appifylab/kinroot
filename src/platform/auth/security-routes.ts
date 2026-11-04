@@ -6,9 +6,11 @@ import {problem, requireAuth, withAuthCore, withViewer} from '../guards';
 import {audit} from './audit';
 import {ACCESS_COOKIE, cookieName, readCookie} from './cookies';
 import {emailAccepted, EMAIL_NOT_REAL} from './email-check';
-import {sha256Hex} from './encoding';
+import {sha256Hex, toHex, utf8} from './encoding';
+import {endAccess} from './end-access';
 import {normalizeEmail, safeNext} from './input';
 import {verifyAccessToken} from './jwt';
+import {hmacKey} from './keys';
 import {
   attempt,
   body,
@@ -28,9 +30,9 @@ import {
   startSession,
   text, notForOwnerAccount} from './kit';
 import {PASSWORD_LIMITS, verifyPassword} from './password';
-import {refreshStore} from './store';
 import {type AuthSettings} from './settings';
 import {
+  legacyRecoveryCodeHash,
   looksLikeRecoveryCode,
   matchTotp,
   newRecoveryCodes,
@@ -55,6 +57,8 @@ import {
  *   POST   /email                   {email, password}   mails a link to the NEW address
  *   POST   /email/confirm           {token}             (no session needed) moves the account, signs
  *                                                      every device out, tells the OLD address
+ *   POST   /email/cancel            {token}             (no session needed) from the notice to the OLD
+ *                                                      address: stops a change that is still waiting
  *   GET    /sessions                the devices signed in (this one marked)
  *   DELETE /sessions/:id            signs one device out
  *   POST   /delete-account          {password, confirm: "DELETE"}
@@ -65,8 +69,11 @@ import {
  */
 
 const EMAIL_CHANGE_TTL_HOURS = 24;
-
 const isPasswordless = (hash: string) => hash === NO_PASSWORD;
+
+/** The cancel link's proof for one email change: keyed, so nobody can make one up. */
+const cancelProof = async (secret: string, changeId: number) =>
+  toHex(new Uint8Array(await crypto.subtle.sign('HMAC', await hmacKey(secret, 'email-change-cancel'), utf8(String(changeId)))));
 
 /** Re-checks the current password (rate-limited per account). Null = fine; otherwise the answer. */
 async function confirmPassword(c: Ctx, userId: number, password: string, kind: 'password' | 'delete') {
@@ -95,7 +102,7 @@ async function currentFamily(c: Ctx): Promise<string | null> {
 
 async function freshRecoveryCodes(c: Ctx, userId: number): Promise<string[]> {
   const codes = newRecoveryCodes();
-  const hashes = await Promise.all(codes.map(recoveryCodeHash));
+  const hashes = await Promise.all(codes.map(code => recoveryCodeHash(c.var.secret, code)));
   await c.var.db.$transaction([
     c.var.db.recoveryCode.deleteMany({where: {userId}}),
     c.var.db.recoveryCode.createMany({data: hashes.map(codeHash => ({userId, codeHash}))}),
@@ -184,7 +191,8 @@ export function securityRoutes(settings: AuthSettings) {
             }
           } else if (looksLikeRecoveryCode(code)) {
             const {count} = await db.recoveryCode.updateMany({
-              where: {userId: user.id, codeHash: await recoveryCodeHash(code), usedAt: null},
+              // Older codes were stored unkeyed, and keep working until they are used or replaced.
+              where: {userId: user.id, codeHash: {in: [await recoveryCodeHash(c.var.secret, code), await legacyRecoveryCodeHash(code)]}, usedAt: null},
               data: {usedAt: new Date()},
             });
             ok = count === 1;
@@ -265,6 +273,7 @@ export function securityRoutes(settings: AuthSettings) {
           });
           const recoveryCodes = await freshRecoveryCodes(c, id);
           await audit(db, {actorUserId: id, action: 'two_factor_enabled', target: ['user', id], ipHash: keys.ipHash});
+          if (c.var.viewer.email) sendEmail(c, {kind: 'two_factor_on', to: c.var.viewer.email});
           return c.json({ok: true, recoveryCodes});
         }
       )
@@ -282,6 +291,7 @@ export function securityRoutes(settings: AuthSettings) {
         await db.recoveryCode.deleteMany({where: {userId: id}});
         const {ipHash} = await keysFor(c, null);
         await audit(db, {actorUserId: id, action: 'two_factor_disabled', target: ['user', id], ipHash});
+        if (c.var.viewer.email) sendEmail(c, {kind: 'two_factor_off', to: c.var.viewer.email});
         return c.json({ok: true});
       })
 
@@ -294,6 +304,7 @@ export function securityRoutes(settings: AuthSettings) {
         const recoveryCodes = await freshRecoveryCodes(c, id);
         const {ipHash} = await keysFor(c, null);
         await audit(c.var.db, {actorUserId: id, action: 'recovery_codes_renewed', target: ['user', id], ipHash});
+        if (c.var.viewer.email) sendEmail(c, {kind: 'recovery_codes_new', to: c.var.viewer.email});
         return c.json({ok: true, recoveryCodes});
       })
 
@@ -321,20 +332,30 @@ export function securityRoutes(settings: AuthSettings) {
           if (stop) return stop;
           if (!(await emailAccepted(c.req.url, email))) return invalid(c, {email: EMAIL_NOT_REAL});
 
-          // The same answer whether or not the address has an account here (no enumeration):
-          // a taken address simply never gets the link.
+          // The same answer and the same notice whether or not the address has an account here (no
+          // enumeration): a taken address simply never gets the link. One waiting change per account.
           const taken = await db.user.findUnique({where: {email}, select: {id: true}});
-          if (!taken) {
-            const token = newLinkToken();
-            await db.emailChange.create({
-              data: {
-                userId: id,
-                newEmail: email,
-                tokenHash: await sha256Hex(token),
-                expiresAt: new Date(Date.now() + EMAIL_CHANGE_TTL_HOURS * 3600 * 1000),
-              },
-              select: {id: true},
+          await db.emailChange.updateMany({where: {userId: id, usedAt: null}, data: {usedAt: new Date()}});
+          const token = newLinkToken();
+          const change = await db.emailChange.create({
+            data: {
+              userId: id,
+              newEmail: email,
+              tokenHash: await sha256Hex(token),
+              expiresAt: new Date(Date.now() + EMAIL_CHANGE_TTL_HOURS * 3600 * 1000),
+            },
+            select: {id: true},
+          });
+          // The address it is moving away from hears now, while it can still say no.
+          if (c.var.viewer.email) {
+            sendEmail(c, {
+              kind: 'email_change_requested',
+              to: c.var.viewer.email,
+              path: `/account/cancel-email/?token=${change.id}.${await cancelProof(c.var.secret, change.id)}`,
+              expiresInMinutes: EMAIL_CHANGE_TTL_HOURS * 60,
             });
+          }
+          if (!taken) {
             sendEmail(c, {
               kind: 'confirm_email_change',
               to: email,
@@ -373,18 +394,40 @@ export function securityRoutes(settings: AuthSettings) {
           if (await db.user.findUnique({where: {email: row.newEmail}, select: {id: true}})) {
             return c.json(problem('email_taken', 'That address belongs to another account now. Ask for a new link.'), 409);
           }
-          await db.user.update({
-            where: {id: row.userId},
-            data: {email: row.newEmail, emailVerifiedAt: now, sessionVersion: {increment: 1}},
-            select: {id: true},
-          });
-          // Every device signs in again, with the new address.
-          await refreshStore(db).revokeAllForUser(row.userId, now, 'email');
+          // Every device signs in again, with the new address, and links sent to the old one end.
+          await endAccess(db, row.userId, 'email', {now, set: {email: row.newEmail, emailVerifiedAt: now}});
           const {ipHash} = await keysFor(c, null);
           await audit(db, {actorUserId: row.userId, action: 'email_changed', target: ['user', row.userId], ipHash});
           sendEmail(c, {kind: 'email_changed', to: row.user.email});
           clearSession(c);
           return c.json({ok: true, message: 'Your email address is changed. Sign in with the new one.'});
+        }
+      )
+
+      .post(
+        '/email/cancel',
+        body((v, c) => {
+          const token = text(v.token, 90);
+          return /^\d{1,12}\.[0-9a-f]{64}$/.test(token) ? {token} : c.json(problem('invalid_token', 'This link has expired or was already used.'), 400);
+        }),
+        withAuthCore,
+        async c => {
+          const db = c.var.db;
+          const [rawId = '', proof = ''] = c.req.valid('json').token.split('.');
+          const changeId = Number(rawId);
+          const expected = await cancelProof(c.var.secret, changeId);
+          let diff = expected.length ^ proof.length;
+          for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ proof.charCodeAt(i);
+          const bad = () => c.json(problem('invalid_token', 'This link has expired or was already used.'), 400);
+          if (diff !== 0) return bad();
+          const row = await db.emailChange.findUnique({where: {id: changeId}, select: {userId: true}});
+          if (!row) return bad();
+          // Only while it's waiting: once the new inbox confirms it, the change stands.
+          const {count} = await db.emailChange.updateMany({where: {id: changeId, usedAt: null, expiresAt: {gt: new Date()}}, data: {usedAt: new Date()}});
+          if (count !== 1) return bad();
+          const {ipHash} = await keysFor(c, null);
+          await audit(db, {actorUserId: null, action: 'email_change_cancelled', target: ['user', row.userId], ipHash});
+          return c.json({ok: true, message: 'The change is cancelled, and your address stays the same. If you did not ask for it, someone may know your password: reset it now.'});
         }
       )
 

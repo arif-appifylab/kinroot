@@ -116,3 +116,14 @@ Left open: <anything you could not fix, and why> (or "nothing").
 ```
 If you found a problem outside this task's code, fix it when it is about security, lost or wrong
 data, or a broken or slow page (AGENTS.md › Every task, rule 3); otherwise list it under "Left open".
+
+## The full security check
+Not part of every task. Run it when the owner asks for a security check, and when they first ask to go live. Follow the machine
+limits in `AGENTS.md`. Only ever against the Preview and its database, never the live site.
+1. List every route, form, permission, payment and file this site's own code adds.
+2. Test each by running it: a real request as another user, as a signed-out visitor, and with bad input, plus many requests at once
+   where something is limited. Reading the code isn't enough.
+3. Fix holes in the site's own code in the same task, with a test for each.
+4. A hole in `src/platform/**`: never patch it. Check for a newer template and upgrade, once. If there is none, give the owner a
+   short description in plain words to send to support: what goes wrong, not how to do it.
+5. End with a short report: what was tested, what was fixed, what is left. Remind the owner that fixes reach visitors only when they publish.

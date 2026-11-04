@@ -9,19 +9,43 @@ write your own login, token, cookie or password code.
 
 ## What exists (use it, don't rebuild it)
 - Pages (prerendered): `/account/login` (password, then the two-step code when it is on),
-  `/account/register`, `/account/forgot`, `/account/reset/?token=`, `/account/verify/?token=`,
-  `/account/confirm-email/?token=` (a new address). `?next=<path>` = where to go after sign-in.
+  `/account/register`, `/account/verify/` (the emailed code after sign-up), `/account/forgot`,
+  `/account/reset/?token=`, `/account/confirm-email/?token=` (a new address), `/account/cancel-email/?token=`. `?next=<path>` = where to go after sign-in.
 - Signed-in screens: the portal's `/dashboard/account`: name, email address, password, two-step
   sign-in (authenticator app + recovery codes), signed-in devices (sign one out, or all), delete
   the account. Admins: Users can switch two-step sign-in off for someone who lost their phone.
-- API `/site-api/auth/*`: `register`, `verify-email`, `resend-verification`, `login`,
+- API `/site-api/auth/*`: `register` + `register/verify` (a pending sign-up + an emailed code), `resend-verification`,
+  `verify-email` (links from older sign-ups), `login`,
   `login/two-factor`, `code` + `code/verify` (a 6-digit code by email, no password), `refresh`,
   `logout`, `logout-all`, `me` (GET/PATCH), `forgot-password`, `reset-password`, `change-password`,
   `owner` (one click from the dashboard: GET live, POST in the Preview), `two-factor` (GET, `setup`,
-  `enable`, `disable`, `recovery-codes`), `email`, `email/confirm`, `sessions` (GET, DELETE `:id`),
-  `delete-account`. Files: `routes.ts`, `code-routes.ts`, `owner.ts`, `security-routes.ts`, `two-factor.ts`.
-- Settings (yours): `src/server/auth-settings.ts` → `registration`, `requireEmailVerification`,
-  `defaultRole`, `afterSignInPath`. None of them makes an owner.
+  `enable`, `disable`, `recovery-codes`), `email`, `email/confirm`, `email/cancel`, `sessions` (GET, DELETE `:id`),
+  `delete-account`. Files: `routes.ts`, `sign-up.ts`, `code-routes.ts`, `owner.ts`, `security-routes.ts`, `two-factor.ts`, `end-access.ts`.
+- Settings (yours): `src/server/auth-settings.ts` → `registration`, `defaultRole`, `afterSignInPath`.
+  None of them makes an owner. Confirming the email can't be turned off.
+
+## Rules that keep accounts safe (never work around them)
+- **No account exists until the inbox is proven.** `/register` keeps a pending sign-up for that browser and emails a
+  code and a link; `/register/verify` in the same browser creates the account. Never create a `users` row from a form yourself.
+- **Every security event ends every way back in:** call `endAccess()` (`end-access.ts`), never your own update of
+  `sessionVersion` or refresh tokens. It ends sessions, reset and confirmation links, email changes and codes together.
+- **A stranger must not be able to spend what the real person needs.** An email with a way in goes through `mailDue`: one per
+  address per 15 minutes, whoever asks, always answering the same, and what it carries outlasts that gap. A 6-digit code keeps a
+  total per address because it can be guessed; a person it blocks uses a link, which has no such limit.
+
+- **An email change stands once confirmed.** It needs the password and the new inbox, and that person is treated as valid. The old
+  address hears when it's asked for and can cancel while it waits; afterwards it gets a plain notice, with no way back.
+- **Every sign-in code email also carries a reset link,** so a stranger asking for codes can't leave a person with no link.
+
+## An admin changing a user's email (build it when an owner asks)
+It's the site's own feature, not part of the template. It's the owner's app, so the change is direct, with no link to confirm. Build:
+- A route guarded by `requirePermission(CORE.USER_UPDATE)`, checked on the server. Refuse an account with `platformOwnerId` (the
+  owner's comes from the dashboard) and one that `canDelegate` says the caller may not manage, as Users does for its other actions.
+- `normalizeEmail`, then `emailAccepted(c.req.url, email)`. If another account has the address, say so, and handle the database's unique error (`P2002`) too: two can arrive at once.
+- `await endAccess(db, id, 'admin', {set: {email, emailVerifiedAt: new Date()}})`, from `src/platform/auth`. Never copy what it does: every session, link and code ends.
+- End waiting sign-ups for the new address: `db.pendingSignUp.updateMany({where: {email, usedAt: null}, data: {usedAt: new Date()}})`.
+- `sendSiteEmail(c.req.url, {kind: 'email_changed', to})` to both the old and the new address, and an `audit` row.
+- A test that someone without the permission is refused.
 
 ## How a request knows the visitor
 `getViewer(request)` (once per request, memoized): access JWT cookie → HMAC verify → ONE primary-key

@@ -1,4 +1,4 @@
-import {ACCESS_COOKIE, CSRF_COOKIE, REFRESH_COOKIE} from './cookies';
+import {ACCESS_COOKIE, CSRF_COOKIE, DEVICE_COOKIE, REFRESH_COOKIE, SIGN_UP_COOKIE} from './cookies';
 
 /**
  * THE EDITOR PREVIEW ONLY: the auth cookies, carried in headers.
@@ -23,7 +23,7 @@ export const PREVIEW_COOKIE_HEADER = 'x-ezs-preview-cookie';
 export const PREVIEW_SET_COOKIE_HEADER = 'x-ezs-preview-set-cookie';
 
 const BRIDGED = new Set(
-  [ACCESS_COOKIE, REFRESH_COOKIE, CSRF_COOKIE].flatMap(base => [base, `__Host-${base}`])
+  [ACCESS_COOKIE, REFRESH_COOKIE, CSRF_COOKIE, SIGN_UP_COOKIE, DEVICE_COOKIE].flatMap(base => [base, `__Host-${base}`])
 );
 
 /** A request header longer than this is ignored (three cookies fit in far less). */
