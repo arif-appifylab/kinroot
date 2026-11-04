@@ -1,6 +1,6 @@
 import {type FormEvent, useEffect, useRef, useState} from 'react';
 
-import {ApiError} from '@/lib/api';
+import {ApiError, shownInPlace} from '@/lib/api';
 
 /**
  * Kinroot's form rules (AGENTS.md "Buttons and forms") for forms whose state the screen already
@@ -135,6 +135,7 @@ export function useFormState<V extends Record<string, unknown>>(values: V, rules
       for (const [name, message] of Object.entries(e.fields)) errors[name.split('.')[0]!] ??= message;
       setServer({errors, at: values});
       setFocusTick((t) => t + 1);
+      shownInPlace.set(e, 'fields');
       return true;
     },
     reset: () => {

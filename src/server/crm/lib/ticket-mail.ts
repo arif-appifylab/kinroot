@@ -86,10 +86,15 @@ export async function routeTicketEmail(db: Db, account: EmailAccount | null, m: 
     ...(await teamAddresses(db)),
     ...(await db.emailAccount.findMany({select: {fromEmail: true}})).map((a) => a.fromEmail.toLowerCase()),
   ]);
-  const fromTeam = teamEmails.has(from);
+  // Who the sender is counts only when the mail service authenticated the From: domain (AUDIT-2
+  // M-8, email/sender-auth.ts). Unverified mail is never a team reply, and joins a ticket only by
+  // answering a Message-ID we sent (step 1), never by a guessable `[#1042]` subject.
+  const verified = m.senderVerified === true;
+  const teamAddress = teamEmails.has(from);
+  const fromTeam = verified && teamAddress;
 
-  // 2. Subject token, trusted only from the ticket's own contact or the team.
-  if (!ticket) {
+  // 2. Subject token, trusted only from the ticket's own contact or the team, authenticated.
+  if (!ticket && verified) {
     const n = m.subject.match(SUBJECT_TOKEN)?.[1];
     const byNumber = n ? await db.ticket.findUnique({where: {number: Number(n)}, include: {contact: {select: {email: true}}}}) : null;
     if (byNumber && (fromTeam || byNumber.contact?.email?.toLowerCase() === from)) ticket = byNumber;
@@ -97,7 +102,7 @@ export async function routeTicketEmail(db: Db, account: EmailAccount | null, m: 
 
   if (!ticket && !toSupport) return null;
   if (automated(m) && !fromTeam) return null;
-  if (!ticket && fromTeam) return null; // the team writing to the support address isn't a request
+  if (!ticket && teamAddress) return null; // the team writing to the support address isn't a request
 
   const text = (m.text ?? (m.html ? htmlToText(m.html) : '')).trim();
   const body = stripQuoted(text);

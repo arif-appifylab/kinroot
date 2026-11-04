@@ -119,7 +119,7 @@ function Column({stage, deals, pipelineId, currency}: {stage: Pipeline['stages']
       </div>
       <div ref={setNodeRef} className={cn('flex min-h-40 flex-1 flex-col gap-2.5 rounded-2xl p-2 transition-colors', isOver ? 'bg-accent ring-2 ring-primary/20' : 'bg-slate-100/70')}>
         {canEdit && (
-          <button type="button" aria-label={`Add a deal in ${stage.name}`} onClick={() => create.open({kind: 'deal', defaults: {stageId: stage.id, pipelineId}})} className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 py-2 text-xs font-semibold text-slate-400 transition-colors outline-none hover:border-primary hover:bg-card hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30">
+          <button type="button" aria-label={`Add a deal in ${stage.name}`} onClick={() => create.open({kind: 'deal', defaults: {stageId: stage.id, pipelineId}})} className="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 py-2 text-xs font-semibold text-muted-foreground transition-colors outline-none hover:border-primary hover:bg-card hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30">
             <Plus className="size-3.5" /> Deal
           </button>
         )}

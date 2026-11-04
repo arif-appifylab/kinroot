@@ -14,7 +14,7 @@ function RangeRow({range, onChange, onRemove}: {range: TimeRange; onChange: (r: 
   return (
     <div className="flex items-center gap-2">
       <Input type="time" aria-label="From" className="h-9 w-32" value={range.start} onChange={(e) => onChange({...range, start: e.target.value})} />
-      <span className="text-slate-400">–</span>
+      <span className="text-muted-foreground">–</span>
       <Input type="time" aria-label="To" className="h-9 w-32" value={range.end === '24:00' ? '23:59' : range.end} onChange={(e) => onChange({...range, end: e.target.value === '23:59' ? '24:00' : e.target.value})} />
       <Button type="button" variant="ghost" size="icon-sm" onClick={onRemove} aria-label="Remove hours"><X /></Button>
     </div>

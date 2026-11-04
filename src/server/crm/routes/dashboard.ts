@@ -3,7 +3,7 @@ import {z} from 'zod';
 
 import {Prisma} from '../../../generated/prisma/client';
 import {currentUser, type AppEnv} from '../kit/guards';
-import {intParam, ownerScope, valid} from '../lib/http';
+import {intParam, ownerScope, shownLink, valid} from '../lib/http';
 import {userSelect} from '../lib/users';
 import {scopedDeal} from './deals';
 
@@ -77,7 +77,7 @@ export const dashboard = new Hono<AppEnv>().get(
         where: {assigneeId: me.id, done: false, dueAt: {lt: new Date(Date.now() + 86400_000)}},
         orderBy: {dueAt: 'asc'},
         take: 8,
-        include: {contact: {select: {id: true, firstName: true, lastName: true}}, deal: {select: {id: true, title: true}}},
+        include: {contact: {select: {id: true, firstName: true, lastName: true, ownerId: true}}, deal: {select: {id: true, title: true, ownerId: true}}},
       }),
     ]);
 
@@ -130,7 +130,8 @@ export const dashboard = new Hono<AppEnv>().get(
       months,
       lostReasons: lostReasons.map((r) => ({reason: r.lostReason ?? 'Unspecified', count: r._count._all, value: r._sum.value ?? 0})),
       closingSoon: closingSoon.map((d) => scopedDeal(d, visible)),
-      myTasks,
+      // A task of mine can sit on someone else's record: that record shows as none (AUDIT-2 L-2).
+      myTasks: myTasks.map((t) => ({...t, contact: shownLink(t.contact, visible), deal: shownLink(t.deal, visible)})),
     });
   },
 );

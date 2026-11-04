@@ -136,7 +136,7 @@ export function ScoreBreakdownDialog({contactId, onClose}: {contactId: string; o
                             {STATUS[h.status] && <> · <span className="font-medium text-amber-700">{STATUS[h.status]}</span></>}
                           </p>
                         </div>
-                        <span className={cn('shrink-0 text-sm font-bold tabular-nums', off ? 'text-slate-400' : h.points < 0 ? 'text-rose-700' : 'text-green-700')}>
+                        <span className={cn('shrink-0 text-sm font-bold tabular-nums', off ? 'text-muted-foreground' : h.points < 0 ? 'text-rose-700' : 'text-green-700')}>
                           {h.status === 'decayed' ? `${signed(h.effective)} of ${signed(h.points)}` : signed(h.points)}
                         </span>
                       </li>

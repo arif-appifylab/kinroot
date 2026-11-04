@@ -799,6 +799,7 @@ model Activity {
   @@index([companyId, createdAt])
   @@index([dealId, createdAt])
   @@index([createdAt])
+  @@index([refId]) // edits and deletes of the note / interaction / file / chat behind an entry (AUDIT-2 M-9)
 }
 
 model ActivityComment {
@@ -851,6 +852,7 @@ model Interaction {
   @@index([companyId, occurredAt])
   @@index([dealId, occurredAt])
   @@index([kind, occurredAt])
+  @@index([attendeeIds(ops: JsonbPathOps)], type: Gin) // a contact's meetings (`array_contains`, @>) (AUDIT-2 M-9)
 }
 
 // ─── Email ──────────────────────────────────────────────────────────────────
@@ -955,6 +957,7 @@ model EmailThread {
   @@index([trashedAt])
   @@index([spamAt]) // Spam folder count and list (P2-24)
   @@index([identityId])
+  @@index([companyId]) // company delete and merge (AUDIT-2 M-9)
 }
 
 enum ConversationStatus {
@@ -1026,6 +1029,7 @@ model EmailMessage {
   @@index([accountId, externalId])
   @@index([messageId])
   @@index([accountId, sentAt])
+  @@index([contactId]) // contact delete and merge (AUDIT-2 M-9)
 }
 
 // ─── Non-email inbox channels (website chat; future channels reuse the same model) ───
@@ -1244,6 +1248,7 @@ model WebhookDelivery {
   createdAt      DateTime       @default(now())
 
   @@index([webhookId, createdAt])
+  @@index([eventId]) // delivery lookups and the prune's event cascade (AUDIT-2 H-2)
 }
 
 // Incoming webhooks (Settings → Webhooks → Incoming): other tools POST to
@@ -1477,6 +1482,7 @@ model FormSubmission {
   @@index([formId, createdAt])
   @@index([contactId])
   @@index([formId, email])
+  @@index([dealId]) // deal delete and merge (AUDIT-2 M-9)
 }
 
 // ─── Lists & segments ───────────────────────────────────────────────────────
@@ -2250,10 +2256,14 @@ model JobBacklog {
   lastError String?
   /// Set when the platform refused it for good (bad list, too large…): out of the drain, shown to admins.
   failedAt  DateTime?
+  /// 0 = someone waits for it (booking and form emails, SLA, CSAT, replies, reports), 1 = normal,
+  /// 2 = bulk (scoring, duplicate checks, webhook deliveries): the drain sends lower first (AUDIT-2 M-11).
+  priority  Int       @default(1)
   createdAt DateTime  @default(now())
 
   @@index([runAt])
   @@index([failedAt, runAt])
+  @@index([failedAt, priority, runAt])
 }
 
 /// An export's CSV while background jobs write it (src/server/crm/lib/export-chunks.ts): text in

@@ -352,7 +352,7 @@ export function BroadcastHistory({listId, title = 'Emails to this list'}: {listI
                     {b.status === 'SENDING' && <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">{b.stats.sent + b.stats.failed + b.stats.skipped} of {b.total}</p>}
                   </td>
                   <td className="px-4 py-3 text-right font-semibold tabular-nums">{b.stats.sent.toLocaleString()}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{b.stats.failed ? b.stats.failed.toLocaleString() : <span className="text-slate-400">0</span>}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">{b.stats.failed ? b.stats.failed.toLocaleString() : <span className="text-muted-foreground">0</span>}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{b.stats.opened.toLocaleString()} <span className="text-xs text-muted-foreground">{pct(b.stats.opened, b.stats.sent)}</span></td>
                   <td className="px-4 py-3 text-right tabular-nums">{b.stats.clicked.toLocaleString()} <span className="text-xs text-muted-foreground">{pct(b.stats.clicked, b.stats.sent)}</span></td>
                   <td className="px-4 py-3 text-right tabular-nums">{b.stats.unsubscribed.toLocaleString()}</td>

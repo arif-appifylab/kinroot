@@ -59,9 +59,14 @@ export function DataTable<T extends {id: string}>({
               </th>
             )}
             {columns.map((col) => (
-              <th key={col.key} className={cn('px-4 py-3 text-xs font-bold tracking-wide whitespace-nowrap text-slate-500 uppercase', col.hideBelow && hide[col.hideBelow], col.className)}>
+              <th
+                key={col.key}
+                scope="col"
+                aria-sort={col.sortable && onSort ? (sort === col.key ? (dir === 'asc' ? 'ascending' : 'descending') : 'none') : undefined}
+                className={cn('px-4 py-3 text-xs font-bold tracking-wide whitespace-nowrap text-slate-500 uppercase', col.hideBelow && hide[col.hideBelow], col.className)}
+              >
                 {col.sortable && onSort ? (
-                  <button className="inline-flex cursor-pointer items-center gap-1 uppercase hover:text-slate-900" onClick={() => onSort(col.key)}>
+                  <button type="button" className="inline-flex cursor-pointer items-center gap-1 rounded uppercase outline-none hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-primary/30" onClick={() => onSort(col.key)}>
                     {col.header}
                     {sort === col.key && (dir === 'asc' ? <ArrowUp className="size-3" /> : <ArrowDown className="size-3" />)}
                   </button>
@@ -163,7 +168,7 @@ export function SearchInput({value, onChange, placeholder, size = 'default', cla
         aria-label={placeholder}
       />
       {value && (
-        <button type="button" className={cn('absolute top-1/2 -translate-y-1/2 cursor-pointer rounded text-slate-400 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none', sm ? 'right-1.5 p-0.5' : 'right-2 p-1')} onClick={() => onChange('')} aria-label="Clear search">
+        <button type="button" className={cn('absolute top-1/2 -translate-y-1/2 cursor-pointer rounded text-muted-foreground hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none', sm ? 'right-1.5 p-0.5' : 'right-2 p-1')} onClick={() => onChange('')} aria-label="Clear search">
           <X className="size-3.5" />
         </button>
       )}
@@ -179,7 +184,7 @@ export function BulkBar({count, onClear, children}: {count: number; onClear: () 
       <div className="flex items-center gap-2 rounded-2xl bg-sidebar px-3 py-2 text-white ring-1 ring-white/10 shadow-lift animate-in slide-in-from-bottom-4 fade-in-0">
         <span className="px-2 text-sm font-semibold">{count} selected</span>
         {children}
-        <button className="cursor-pointer rounded-lg p-1.5 text-slate-400 hover:bg-white/10 hover:text-white" onClick={onClear} aria-label="Clear selection"><X className="size-4" /></button>
+        <button className="cursor-pointer rounded-lg p-1.5 text-muted-foreground hover:bg-white/10 hover:text-white" onClick={onClear} aria-label="Clear selection"><X className="size-4" /></button>
       </div>
     </div>
   );

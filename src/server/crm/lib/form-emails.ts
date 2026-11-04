@@ -5,6 +5,7 @@ import type {Db} from '../kit/db';
 import {sendEmail, sendSystemEmail} from '../email/service';
 import {getSettings} from './settings';
 import {formSettings} from './form-submit';
+import {unconfirmedMailAllowed} from './rate-limit';
 
 type Meta = Record<string, unknown> & {origin?: string; teamEmailedAt?: string; autoresponderAt?: string; autoresponderError?: string};
 
@@ -42,6 +43,12 @@ export async function formAfterSubmit(db: Db, submissionId: string) {
       (sub.form.createdById && (await db.member.findFirst({where: {id: sub.form.createdById, active: true}}))) ||
       (await db.member.findFirst({where: {role: 'OWNER', active: true}, orderBy: {createdAt: 'asc'}}));
     if (!sender) return;
+    // Anyone can type any address into a public form: a few autoresponders an hour per address at
+    // most, and the respondent's own words never become links in it (AUDIT-2 M-6).
+    if (!(await unconfirmedMailAllowed(db, sub.contact.email))) {
+      await save({autoresponderAt: 'skipped', autoresponderError: 'Hourly limit for this address reached'});
+      return;
+    }
     try {
       await sendEmail(db, sender, origin, {
         to: [sub.contact.email],
@@ -50,12 +57,13 @@ export async function formAfterSubmit(db: Db, submissionId: string) {
         layout: 'branded', // a reply from the company: header, footer and unsubscribe link
         contactId: sub.contact.id,
         dealId: sub.dealId,
+        strangerValues: true,
       });
       await save({autoresponderAt: new Date().toISOString()});
     } catch (e) {
       // No connected mailbox is not worth retrying for hours; note it and stop.
       const message = (e as Error).message;
-      if (/Connect an email account|opted out|Daily limit/.test(message)) await save({autoresponderAt: 'skipped', autoresponderError: message});
+      if (/Connect an email account|opted out|Daily limit|personal account on an email service/.test(message)) await save({autoresponderAt: 'skipped', autoresponderError: message});
       else throw e;
     }
   }

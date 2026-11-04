@@ -47,7 +47,7 @@ function MyRequests() {
               <li key={r.number}>
                 <a href={`/support/tickets/${r.number}`} className="flex items-center gap-3 px-6 py-4 transition-colors hover:bg-slate-50">
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-slate-900"><span className="text-slate-400">#{r.number}</span> {r.subject}</p>
+                    <p className="truncate text-sm font-semibold text-slate-900"><span className="text-muted-foreground">#{r.number}</span> {r.subject}</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">Updated {ago(r.lastMessageAt)}</p>
                   </div>
                   <CustomerStatus status={r.status} />

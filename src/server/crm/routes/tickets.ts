@@ -5,11 +5,12 @@ import {z} from 'zod';
 import type {Prisma, Ticket} from '../../../generated/prisma/client';
 import {OPEN_STATUSES} from '@/lib/tickets';
 import {publicOrigin} from '../kit/config';
-import {currentUser, isAdmin, requireRole, type AppEnv} from '../kit/guards';
+import {currentUser, isAdmin, requireRole, type AppContext, type AppEnv} from '../kit/guards';
 import {diff} from '../lib/activity';
 import {audit} from '../lib/audit';
 import {emit} from '../lib/events';
-import {fieldError, intParam, MAX_PAGE, notFound, optStr, tags, valid} from '../lib/http';
+import {contactIdByEmail} from '../lib/contact-email';
+import {assertVisible, fieldError, intParam, MAX_PAGE, notFound, optStr, ownerScope, tags, valid} from '../lib/http';
 import {moveToBin} from '../lib/recycle-bin';
 import {companyIdsNamed, contactIdsByNameOrEmail} from '../lib/search-match';
 import {richBody, richHtml} from '../lib/rich-text';
@@ -63,12 +64,27 @@ const listQuery = z.object({
   pageSize: intParam(1, 300).default(50),
 });
 
+/** A ticket this person may open: the visibility rule is in the query's where (AUDIT-2 L-5); else 404. */
 async function loadTicket(c: Parameters<typeof ticketScope>[0], ref: string) {
-  const ticket = await c.var.db.ticket.findUnique({where: ticketRefWhere(ref)});
+  const ticket = await c.var.db.ticket.findFirst({where: {AND: [ticketRefWhere(ref) as Prisma.TicketWhereInput, await ticketScope(c)]}});
   if (!ticket) throw notFound('Ticket');
-  const scope = await ticketScope(c);
-  if (scope.OR && ticket.assigneeId && ticket.assigneeId !== c.var.user!.id) throw notFound('Ticket');
   return ticket;
+}
+
+/**
+ * The requester for a new ticket typed by email (AUDIT-2 M-4): an existing contact only when this
+ * person may see it (else 409, as creating a contact with that email answers: never its details); a
+ * new one is theirs under owner-only visibility.
+ */
+async function requesterFor(c: AppContext, scope: {ownerId?: string}, email: string, name: string | null | undefined) {
+  const db = c.var.db;
+  if (scope.ownerId) {
+    const existingId = await contactIdByEmail(db, email);
+    if (existingId && !(await db.contact.count({where: {id: existingId, ...scope}}))) {
+      throw fieldError('email', 'A contact with that email already exists and belongs to someone else. Ask them or an admin to open the ticket.', 409);
+    }
+  }
+  return (await contactForEmail(db, email, name, {ownerId: scope.ownerId})).id;
 }
 
 const settingsSchema = z.object({
@@ -236,8 +252,11 @@ export const tickets = new Hono<AppEnv>()
       const me = currentUser(c);
       const db = c.var.db;
       const body = c.req.valid('json');
+      // Only records this person may open can be linked (AUDIT-2 M-4).
+      const scope = await ownerScope(c);
+      await assertVisible(c, {contactId: body.contactId, companyId: body.companyId, dealId: body.dealId}, scope);
       let contactId = body.contactId ?? null;
-      if (!contactId && body.email) contactId = (await contactForEmail(db, body.email, body.name)).id;
+      if (!contactId && body.email) contactId = await requesterFor(c, scope, body.email, body.name);
       const desc = richBody({html: body.descriptionHtml, text: body.description});
       const ticket = await createTicket(db, {
         subject: body.subject,
@@ -303,6 +322,9 @@ export const tickets = new Hono<AppEnv>()
         Object.assign(rest, {description: desc.text || null, descriptionHtml: desc.html});
       }
       let ticket = await loadTicket(c, c.req.param('ref'));
+      // A new link only to a record this person may open (AUDIT-2 M-4); clearing one is always allowed.
+      const changed = <K extends 'contactId' | 'companyId' | 'dealId'>(k: K) => (rest[k] && rest[k] !== ticket[k] ? rest[k] : null);
+      await assertVisible(c, {contactId: changed('contactId'), companyId: changed('companyId'), dealId: changed('dealId')});
       const before = ticket;
       const plain = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
       if (Object.keys(plain).length) ticket = await db.ticket.update({where: {id: ticket.id}, data: plain});

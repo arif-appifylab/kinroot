@@ -120,7 +120,7 @@ function TicketsPage() {
   });
 
   const columns: Column<TicketRow>[] = [
-    {key: 'number', header: '#', className: 'w-16', cell: (t) => <span className="font-semibold text-slate-400">#{t.number}</span>},
+    {key: 'number', header: '#', className: 'w-16', cell: (t) => <span className="font-semibold text-muted-foreground">#{t.number}</span>},
     {
       key: 'subject',
       header: 'Subject',
@@ -136,12 +136,12 @@ function TicketsPage() {
     {key: 'status', header: 'Status', cell: (t) => <StatusBadge status={t.status} />},
     {key: 'priority', header: 'Priority', hideBelow: 'md', cell: (t) => <PriorityLabel priority={t.priority} />},
     {key: 'sla', header: 'SLA', hideBelow: 'md', cell: (t) => <SlaBadge ticket={t} compact />},
-    {key: 'category', header: 'Category', hideBelow: 'xl', cell: (t) => t.category ?? <span className="text-slate-400">—</span>},
+    {key: 'category', header: 'Category', hideBelow: 'xl', cell: (t) => t.category ?? <span className="text-muted-foreground">—</span>},
     {
       key: 'assignee',
       header: 'Assignee',
       hideBelow: 'lg',
-      cell: (t) => (t.assignee ? <span className="inline-flex items-center gap-2"><Avatar name={t.assignee.name} color={t.assignee.color} src={t.assignee.avatarUrl} size="xs" />{t.assignee.name.split(' ')[0]}</span> : <span className="text-slate-400">Unassigned</span>),
+      cell: (t) => (t.assignee ? <span className="inline-flex items-center gap-2"><Avatar name={t.assignee.name} color={t.assignee.color} src={t.assignee.avatarUrl} size="xs" />{t.assignee.name.split(' ')[0]}</span> : <span className="text-muted-foreground">Unassigned</span>),
     },
     {key: 'updated', header: 'Updated', hideBelow: 'sm', cell: (t) => <span className="whitespace-nowrap text-slate-500">{ago(t.lastMessageAt)}</span>},
   ];

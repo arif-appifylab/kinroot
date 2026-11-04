@@ -217,9 +217,7 @@ export function FormSettingsPanel({fields, settings: s, onChange, slug, onSlug, 
             </div>
             <p className="mt-1.5 text-xs text-muted-foreground">The contact's owner is always notified.</p>
           </div>
-          <Field label="Also email these addresses" hint="Comma separated. Sent from a shared team mailbox (Settings → Email).">
-            <EmailList value={s.notifyEmails ?? []} onChange={(notifyEmails) => set({notifyEmails})} />
-          </Field>
+          <EmailList value={s.notifyEmails ?? []} onChange={(notifyEmails) => set({notifyEmails})} />
           <div className="grid gap-3 border-t border-slate-100 pt-5">
             <Toggle label="Send an autoresponder" hint="A thank-you email to the respondent, from the form creator's mailbox. Logged on their timeline." checked={auto.enabled} onChange={(v) => set({autoresponder: {...auto, enabled: v}})} />
             {auto.enabled && (
@@ -261,10 +259,36 @@ export function FormSettingsPanel({fields, settings: s, onChange, slug, onSlug, 
   );
 }
 
+/** The server's limits on `notifyEmails` (forms.ts: up to 20 valid addresses). */
+const MAX_NOTIFY_EMAILS = 20;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/**
+ * Comma-separated addresses (AUDIT-2 L-16): saved on blur only when every one is an address and
+ * there are at most 20; otherwise what was typed stays, with the words that say what to fix.
+ */
 function EmailList({value, onChange}: {value: string[]; onChange: (v: string[]) => void}) {
   const [draft, setDraft] = useState(value.join(', '));
-  const parse = (v: string) => [...new Set(v.split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter((x) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x)))];
-  return <Input value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={() => (onChange(parse(draft)), setDraft(parse(draft).join(', ')))} placeholder="sales@company.com, founder@company.com" />;
+  const [error, setError] = useState<string | null>(null);
+  const check = (text: string) => {
+    const parts = [...new Set(text.split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean))];
+    const wrong = parts.filter((x) => !EMAIL_RE.test(x));
+    if (wrong.length) return {parts, error: `${wrong.length === 1 ? `“${wrong[0]}” is not an email address` : `These are not email addresses: ${wrong.join(', ')}`}. Fix or remove ${wrong.length === 1 ? 'it' : 'them'}, like name@company.com.`};
+    if (parts.length > MAX_NOTIFY_EMAILS) return {parts, error: `Use at most ${MAX_NOTIFY_EMAILS} addresses.`};
+    return {parts, error: null};
+  };
+  const commit = () => {
+    const result = check(draft);
+    setError(result.error);
+    if (result.error) return;
+    setDraft(result.parts.join(', '));
+    if (result.parts.join(',') !== value.join(',')) onChange(result.parts);
+  };
+  return (
+    <Field label="Also email these addresses" hint="Comma separated, up to 20. Sent from a shared team mailbox (Settings → Email)." error={error}>
+      <Input value={draft} onChange={(e) => (setDraft(e.target.value), error && setError(check(e.target.value).error))} onBlur={commit} placeholder="sales@company.com, founder@company.com" />
+    </Field>
+  );
 }
 
 function EndingsSection({fields, endings, onChange}: {fields: FormField[]; endings: Ending[]; onChange: (e: Ending[]) => void}) {
@@ -285,7 +309,7 @@ function EndingsSection({fields, endings, onChange}: {fields: FormField[]; endin
             <div className="flex items-center gap-2">
               {i === 0 ? <Badge tone="neutral">Default</Badge> : <Badge tone="violet"><GitBranch /> Shown when rules match</Badge>}
               {i > 0 && (
-                <Button variant="ghost" size="icon-sm" className="ml-auto text-slate-400 hover:text-destructive" onClick={() => onChange(endings.filter((_, j) => j !== i))} aria-label="Remove screen"><Trash2 /></Button>
+                <Button variant="ghost" size="icon-sm" className="ml-auto text-muted-foreground hover:text-destructive" onClick={() => onChange(endings.filter((_, j) => j !== i))} aria-label="Remove screen"><Trash2 /></Button>
               )}
             </div>
             <Field label="Title"><Input value={e.title} onChange={(ev) => update(i, {title: ev.target.value})} /></Field>

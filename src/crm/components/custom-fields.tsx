@@ -61,7 +61,7 @@ export function CustomFieldInput({field, value, onChange}: {field: CustomField; 
 }
 
 export function CustomFieldValue({field, value, currency = 'USD'}: {field: CustomField; value: unknown; currency?: string}) {
-  if (value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length)) return <span className="text-slate-400">—</span>;
+  if (value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length)) return <span className="text-muted-foreground">—</span>;
   switch (field.type) {
     case 'CURRENCY':
       return <>{money(Number(value), currency)}</>;

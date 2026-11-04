@@ -145,7 +145,7 @@ export function SlotPicker({
           </div>
         </div>
         <div className="grid grid-cols-7 gap-1 text-center" role="grid" aria-label={monthLabel}>
-          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <span key={i} className="pb-1 text-[11px] font-semibold text-slate-400">{d}</span>)}
+          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <span key={i} className="pb-1 text-[11px] font-semibold text-muted-foreground">{d}</span>)}
           {cells.map((d, i) => {
             if (!d) return <span key={`e${i}`} />;
             const open = byDay.has(d);
@@ -176,7 +176,7 @@ export function SlotPicker({
           {day ? new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US', {weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC'}) : 'Pick a day'}
         </p>
         {slots.isLoading ? (
-          <div className="flex justify-center py-8 text-slate-400"><Loader2 className="size-5 animate-spin" /></div>
+          <div className="flex justify-center py-8 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>
         ) : slots.isError ? (
           <p role="alert" className="text-sm text-destructive">
             {(slots.error as Error).message}{' '}

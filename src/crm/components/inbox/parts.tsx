@@ -18,7 +18,7 @@ export function ChannelIcon({channel, personal, className}: {channel: string; pe
   const [Icon, label] = channel === 'form' ? [ClipboardList, 'Form response'] : channel === 'chat' ? [MessageCircle, 'Website chat'] : personal ? [Lock, 'Your mailbox (private)'] : [Mail, 'Team email'];
   return (
     <Tooltip content={label}>
-      <span className={cn('inline-flex shrink-0 text-slate-400', className)} aria-label={label}>
+      <span className={cn('inline-flex shrink-0 text-muted-foreground', className)} aria-label={label}>
         <Icon className="size-3.5" />
       </span>
     </Tooltip>

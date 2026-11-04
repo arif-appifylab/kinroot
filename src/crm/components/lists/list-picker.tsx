@@ -89,7 +89,7 @@ export function ListMenu({trigger, label, onPick, onCreate, exclude = [], align 
         {onCreate && (
           <>
             {shown.length > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuItem onSelect={async () => onCreate(draft.trim() || (await prompt({title: 'Name the new list', label: 'List name', confirmLabel: 'Create list'})) || '')} className="font-semibold text-primary">
+            <DropdownMenuItem onSelect={async () => onCreate(draft.trim() || (await prompt({title: 'Name the new list', label: 'List name', confirmLabel: 'Create list', required: 'Give the list a name.', maxLength: 120})) || '')} className="font-semibold text-primary">
               <Plus /> {draft.trim() ? `New list “${draft.trim()}”` : 'New list…'}
             </DropdownMenuItem>
           </>

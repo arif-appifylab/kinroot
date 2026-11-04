@@ -67,23 +67,40 @@ export function FieldControl({
       return null;
     case 'name': {
       const v = (value as {first?: string; last?: string} | null) ?? {};
+      // Each part has its own visible label (AUDIT-2 L-16); the question's label names the first part.
+      const wire = {'aria-invalid': !!error, 'aria-describedby': error ? `${id}_error` : undefined};
       return (
         <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
-          <Input id={id} autoFocus={autoFocus} className={inputCls} placeholder="First name" autoComplete="given-name" value={v.first ?? ''} onChange={(e) => onChange({...v, first: e.target.value} as AnswerValue)} onKeyDown={enter} aria-invalid={!!error} aria-describedby={error ? `${id}_error` : undefined} />
-          <Input className={inputCls} placeholder="Last name" autoComplete="family-name" value={v.last ?? ''} onChange={(e) => onChange({...v, last: e.target.value} as AnswerValue)} onKeyDown={enter} aria-label="Last name" />
+          <SubField label="First name" htmlFor={id} labelId={`${id}_first`}>
+            <Input id={id} autoFocus={autoFocus} className={inputCls} autoComplete="given-name" value={v.first ?? ''} onChange={(e) => onChange({...v, first: e.target.value} as AnswerValue)} onKeyDown={enter} aria-labelledby={`${id}_label ${id}_first`} {...wire} />
+          </SubField>
+          <SubField label="Last name" htmlFor={`${id}_last`}>
+            <Input id={`${id}_last`} className={inputCls} autoComplete="family-name" value={v.last ?? ''} onChange={(e) => onChange({...v, last: e.target.value} as AnswerValue)} onKeyDown={enter} {...wire} />
+          </SubField>
         </div>
       );
     }
     case 'address': {
       const v = (value as Record<string, string> | null) ?? {};
       const set = (k: string, x: string) => onChange({...v, [k]: x});
+      const wire = {'aria-invalid': !!error, 'aria-describedby': error ? `${id}_error` : undefined};
       return (
         <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
-          <Input id={id} autoFocus={autoFocus} className={cn(inputCls, '@md:col-span-2')} placeholder="Street address" autoComplete="street-address" value={v.street ?? ''} onChange={(e) => set('street', e.target.value)} />
-          <Input className={inputCls} placeholder="City" autoComplete="address-level2" value={v.city ?? ''} onChange={(e) => set('city', e.target.value)} aria-label="City" />
-          <Input className={inputCls} placeholder="State / region" autoComplete="address-level1" value={v.state ?? ''} onChange={(e) => set('state', e.target.value)} aria-label="State" />
-          <Input className={inputCls} placeholder="Postal code" autoComplete="postal-code" value={v.postalCode ?? ''} onChange={(e) => set('postalCode', e.target.value)} aria-label="Postal code" />
-          <Input className={inputCls} placeholder="Country" autoComplete="country-name" value={v.country ?? ''} onChange={(e) => set('country', e.target.value)} onKeyDown={enter} aria-label="Country" />
+          <SubField label="Street address" htmlFor={id} labelId={`${id}_street`} className="@md:col-span-2">
+            <Input id={id} autoFocus={autoFocus} className={inputCls} autoComplete="street-address" value={v.street ?? ''} onChange={(e) => set('street', e.target.value)} aria-labelledby={`${id}_label ${id}_street`} {...wire} />
+          </SubField>
+          <SubField label="City" htmlFor={`${id}_city`}>
+            <Input id={`${id}_city`} className={inputCls} autoComplete="address-level2" value={v.city ?? ''} onChange={(e) => set('city', e.target.value)} {...wire} />
+          </SubField>
+          <SubField label="State / region" htmlFor={`${id}_state`}>
+            <Input id={`${id}_state`} className={inputCls} autoComplete="address-level1" value={v.state ?? ''} onChange={(e) => set('state', e.target.value)} {...wire} />
+          </SubField>
+          <SubField label="Postal code" htmlFor={`${id}_postalCode`}>
+            <Input id={`${id}_postalCode`} className={inputCls} autoComplete="postal-code" value={v.postalCode ?? ''} onChange={(e) => set('postalCode', e.target.value)} {...wire} />
+          </SubField>
+          <SubField label="Country" htmlFor={`${id}_country`}>
+            <Input id={`${id}_country`} className={inputCls} autoComplete="country-name" value={v.country ?? ''} onChange={(e) => set('country', e.target.value)} onKeyDown={enter} {...wire} />
+          </SubField>
         </div>
       );
     }
@@ -255,12 +272,24 @@ function FileField({field, value, onChange, upload}: {field: FormField; value: U
         <div key={f.id} className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
           <Paperclip className="size-4 text-slate-400" />
           <span className="min-w-0 flex-1 truncate">{f.name}</span>
-          <button type="button" aria-label={`Remove ${f.name}`} className="cursor-pointer rounded p-0.5 text-slate-400 hover:text-destructive" onClick={() => onChange(value.filter((x) => x.id !== f.id) as AnswerValue)}>
+          <button type="button" aria-label={`Remove ${f.name}`} className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-destructive" onClick={() => onChange(value.filter((x) => x.id !== f.id) as AnswerValue)}>
             <X className="size-4" />
           </button>
         </div>
       ))}
       {error && <p role="alert" className="text-xs font-medium text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+/** A visible label for one part of a name or address question. */
+function SubField({label, htmlFor, labelId, className, children}: {label: string; htmlFor: string; labelId?: string; className?: string; children: ReactNode}) {
+  return (
+    <div className={cn('grid gap-1', className)}>
+      <label htmlFor={htmlFor} id={labelId} className="text-xs font-medium text-muted-foreground">
+        {label}
+      </label>
+      {children}
     </div>
   );
 }
@@ -499,7 +528,7 @@ export function FormRenderer({
         </span>
         <h2 className="mt-4 text-2xl font-extrabold tracking-tight text-slate-900">{ending.title}</h2>
         <p className="mt-2 max-w-md whitespace-pre-line text-muted-foreground">{ending.message}</p>
-        {ending.redirectUrl && live && <p className="mt-4 text-xs text-slate-400">Redirecting…</p>}
+        {ending.redirectUrl && live && <p className="mt-4 text-xs text-muted-foreground">Redirecting…</p>}
         {!live && (
           <Button variant="secondary" size="sm" className="mt-6" onClick={() => (setStatus('idle'), setEnding(null), setIndex(0), setAnswers(initialAnswers(form.fields, params)))}>
             Restart preview
@@ -568,7 +597,7 @@ export function FormRenderer({
             <Button size="lg" onClick={next} pending={status === 'submitting'} pendingLabel="Sending…">
               {last ? s.submitLabel || 'Submit' : f.type === 'heading' ? 'Continue' : 'OK'} {!last && <Check />}
             </Button>
-            {!last && f.type !== 'long_text' && <span className="hidden text-xs text-slate-400 sm:inline">press Enter ↵</span>}
+            {!last && f.type !== 'long_text' && <span className="hidden text-xs text-muted-foreground sm:inline">press Enter ↵</span>}
             <div className="ml-auto flex gap-1">
               <Button variant="secondary" size="icon" onClick={back} disabled={current === 0} aria-label="Previous question"><ChevronUp /></Button>
               <Button variant="secondary" size="icon" onClick={next} disabled={last} aria-label="Next question"><ChevronDown /></Button>

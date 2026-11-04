@@ -20,7 +20,7 @@ function ChartTooltip({active, payload, label, currency}: TooltipProps<number, s
       <p className="mt-0.5 flex items-center gap-1.5 text-slate-600">
         <span className="size-2 rounded-sm" style={{background: SERIES}} />
         {money(p.value, currency)}
-        {count !== undefined && <span className="text-slate-400">· {count} deal{count === 1 ? '' : 's'}</span>}
+        {count !== undefined && <span className="text-muted-foreground">· {count} deal{count === 1 ? '' : 's'}</span>}
       </p>
     </div>
   );

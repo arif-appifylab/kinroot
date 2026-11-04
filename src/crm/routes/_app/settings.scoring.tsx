@@ -527,7 +527,7 @@ function TestSection() {
                       {r.kind === 'property' ? (r.matches ? 'matches' : 'no match') : `${r.awards ?? 0}×`}
                       {!r.enabled && ' · off'}
                     </span>
-                    <span className={cn('w-14 shrink-0 text-right font-bold tabular-nums', r.points < 0 ? 'text-rose-700' : r.points > 0 ? 'text-green-700' : 'text-slate-400')}>{r.points === 0 ? '0' : points(Math.round(r.points * 10) / 10)}</span>
+                    <span className={cn('w-14 shrink-0 text-right font-bold tabular-nums', r.points < 0 ? 'text-rose-700' : r.points > 0 ? 'text-green-700' : 'text-muted-foreground')}>{r.points === 0 ? '0' : points(Math.round(r.points * 10) / 10)}</span>
                   </li>
                 ))}
               </ul>

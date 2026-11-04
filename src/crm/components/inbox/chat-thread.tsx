@@ -16,7 +16,7 @@ import {Card} from '../ui/card';
 import {Field, Textarea} from '../ui/form';
 import {useFormState} from '../ui/form-state';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger, Tooltip} from '../ui/menu';
-import {Avatar} from '../ui/misc';
+import {Avatar, CUSTOMER_COLOR} from '../ui/misc';
 import type {ComposerMode} from './reply-composer';
 import {uploadFile} from '@/lib/upload';
 
@@ -49,7 +49,7 @@ function Bubble({m, visitor}: {m: ChatMessage; visitor: string}) {
   const inbound = m.direction === 'INBOUND';
   return (
     <li className={cn('flex max-w-[85%] items-end gap-2', inbound ? 'self-start' : 'flex-row-reverse self-end')}>
-      <Avatar name={inbound ? visitor : (m.sender?.name ?? 'Team')} color={inbound ? '#0d9488' : m.sender?.color} src={inbound ? null : m.sender?.avatarUrl} size="xs" className="mb-5 ring-0" />
+      <Avatar name={inbound ? visitor : (m.sender?.name ?? 'Team')} color={inbound ? CUSTOMER_COLOR : m.sender?.color} src={inbound ? null : m.sender?.avatarUrl} size="xs" className="mb-5 ring-0" />
       <div className={cn('min-w-0', !inbound && 'text-right')}>
         <div className={cn('inline-block max-w-full rounded-2xl px-3.5 py-2 text-left', inbound ? 'rounded-bl-md border border-slate-100 bg-card text-slate-800 shadow-soft' : 'rounded-br-md bg-primary text-white')}>
           {m.text && <MessageText text={m.text} linkClassName={inbound ? 'text-primary' : 'text-white'} />}
@@ -71,7 +71,7 @@ function EmailItem({m, visitor}: {m: EmailMessage; visitor: string}) {
   if (m.direction === 'INBOUND') {
     return (
       <li className="flex max-w-[85%] items-end gap-2 self-start">
-        <Avatar name={visitor} color="#0d9488" size="xs" className="mb-5 ring-0" />
+        <Avatar name={visitor} color={CUSTOMER_COLOR} size="xs" className="mb-5 ring-0" />
         <div className="min-w-0">
           <div className="rounded-2xl rounded-bl-md border border-slate-100 bg-card px-3.5 py-2 text-slate-800 shadow-soft"><MessageText text={firstPart(m.text ?? '') || '(empty email)'} linkClassName="text-primary" /></div>
           <p className="mt-0.5 flex items-center gap-1 px-1 text-[11px] text-muted-foreground"><Mail className="size-3" /> {visitor} · by email · {ago(m.sentAt)}</p>
@@ -287,7 +287,7 @@ export function ChatComposer({detail, mode, onMode, focusKey}: {detail: Conversa
                 {files.map((f) => (
                   <li key={f.id} className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 py-1 pr-1 pl-2.5 text-xs font-medium text-slate-700">
                     <Paperclip className="size-3" /> <span className="max-w-40 truncate">{f.name}</span> <span className="text-muted-foreground">{fileSize(f.size)}</span>
-                    <button type="button" className="cursor-pointer rounded p-0.5 text-slate-400 hover:text-destructive" aria-label={`Remove ${f.name}`} onClick={() => setFiles((x) => x.filter((y) => y.id !== f.id))}><X className="size-3" /></button>
+                    <button type="button" className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-destructive" aria-label={`Remove ${f.name}`} onClick={() => setFiles((x) => x.filter((y) => y.id !== f.id))}><X className="size-3" /></button>
                   </li>
                 ))}
               </ul>

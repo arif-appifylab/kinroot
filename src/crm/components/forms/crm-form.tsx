@@ -24,7 +24,7 @@ export function CrmForm({slug, className, onSubmitted}: {slug: string; className
     staleTime: 60_000,
     retry: 1,
   });
-  if (q.isLoading) return <div className="flex justify-center py-10 text-slate-400"><Loader2 className="size-5 animate-spin" /></div>;
+  if (q.isLoading) return <div className="flex justify-center py-10 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>;
   if (!q.data) return <p className="py-6 text-center text-sm text-muted-foreground">{(q.error as Error | null)?.message ?? 'Form unavailable'}</p>;
   return <FormRenderer form={q.data} className={className} onSubmitted={onSubmitted} />;
 }

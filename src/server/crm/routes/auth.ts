@@ -39,7 +39,8 @@ const view = async (c: AppContext) => ({meId: c.var.user?.id ?? null, owner: awa
 async function inviteByToken(c: AppContext, token: string) {
   if (!/^[\w-]{20,100}$/.test(token)) return null;
   const member = await c.var.db.member.findUnique({where: {inviteTokenHash: await sha256Hex(token)}});
-  if (!member || member.userId !== null || !member.inviteEmail) return null;
+  // A deactivated (cancelled) invite never works, even with a link sent before (AUDIT-2 M-1).
+  if (!member || member.userId !== null || !member.inviteEmail || !member.active) return null;
   if (member.inviteExpiresAt && member.inviteExpiresAt < new Date()) return null;
   return member;
 }
@@ -101,8 +102,9 @@ export const auth = new Hono<AppEnv>()
     if (await db.member.findUnique({where: {userId: viewer.id}, select: {id: true}})) throw new HTTPException(409, {message: 'You are already on this team'});
     // Conditional: only a still-pending invite is taken (two tabs, one join).
     const taken = await db.member.updateMany({
-      where: {id: invited.id, userId: null, inviteTokenHash: invited.inviteTokenHash},
-      data: {userId: viewer.id, name: viewer.name?.trim() || invited.name, inviteEmail: null, inviteTokenHash: null, inviteExpiresAt: null, active: true},
+      // Only an active invite; joining never re-activates a row an admin switched off.
+      where: {id: invited.id, userId: null, active: true, inviteTokenHash: invited.inviteTokenHash},
+      data: {userId: viewer.id, name: viewer.name?.trim() || invited.name, inviteEmail: null, inviteTokenHash: null, inviteExpiresAt: null},
     });
     if (!taken.count) throw new HTTPException(404, {message: 'This invite link is invalid, expired or was already used'});
     const user = await db.member.findUniqueOrThrow({where: {id: invited.id}});

@@ -48,7 +48,7 @@ const SAMPLE: VisitorConversation = {
   teamTyping: true,
   messages: [
     {id: 'p1', from: 'visitor', author: null, text: 'Hi! Do you offer a free trial?', files: [], at: new Date(Date.now() - 120_000).toISOString(), seen: true, via: null},
-    {id: 'p2', from: 'team', author: {name: 'Sam', color: '#0d9488'}, text: 'Hi there! Yes, 14 days, no card needed. Details: https://example.com/pricing', files: [], at: new Date(Date.now() - 60_000).toISOString(), seen: false, via: null},
+    {id: 'p2', from: 'team', author: {name: 'Sam', color: 'var(--primary)'}, text: 'Hi there! Yes, 14 days, no card needed. Details: https://example.com/pricing', files: [], at: new Date(Date.now() - 60_000).toISOString(), seen: false, via: null},
   ],
 };
 
@@ -132,7 +132,6 @@ function Snippet({url}: {url: string}) {
           <li><code className="rounded bg-slate-100 px-1">window.CrmChat.open()</code>, <code className="rounded bg-slate-100 px-1">.close()</code> and <code className="rounded bg-slate-100 px-1">.toggle()</code> control it from your own buttons.</li>
           <li>The bubble opens the chat in a small window: <code className="rounded bg-slate-100 px-1">/chat/</code> on this site (it can't sit inside another website's page). Visitors are remembered there, so they see their conversation when they come back.</li>
           <li>The settings (on / off, colour, side, allowed websites) are read when a page loads the script: changes show within a minute.</li>
-          <li>Pages built in this app use <code className="rounded bg-slate-100 px-1">&lt;ChatWidget /&gt;</code> from <code className="rounded bg-slate-100 px-1">src/crm/components/chat/chat-widget.tsx</code> instead of the snippet.</li>
         </ul>
       </details>
     </div>

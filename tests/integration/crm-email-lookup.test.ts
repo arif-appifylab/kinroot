@@ -4,6 +4,7 @@ import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../src/server/app';
 import {contactIdByEmail, contactsByEmail, optedOutEmails} from '../../src/server/crm/lib/contact-email';
+import {continueToken} from '../../src/server/crm/inbox/chat';
 import {crmOwner} from './ported/support';
 import {resetCrm} from './support/crm';
 import {Browser, configureEnv, DATABASE_URL, db} from './support/harness';
@@ -91,6 +92,12 @@ describe.skipIf(!DATABASE_URL)('Kinroot: contacts found by email whatever its ca
     expect((await own.request('PUT', '/site-api/crm/inbox/chat/settings', {...current, enabled: true, preChat: 'off', allowedDomains: [], hours: {...current.hours, enabled: false}})).status).toBe(200);
     const chat = await send('/site-api/crm/public/chat/start', {text: 'Hello', email: typed, name: 'Mia', meta: {page: 'https://shop.example.com/'}, startedAt: Date.now() - 5000});
     expect(chat.status, JSON.stringify(chat.json)).toBe(201);
+    // A chat's typed address joins that contact only once the visitor opens the link we mail to it
+    // (AUDIT-2 L-4); it never makes a second contact for the address either.
+    const row = await db.emailThread.findFirstOrThrow({where: {channel: 'chat'}});
+    expect(row.contactId).toBeNull();
+    const token = await continueToken(row.id, row.identityId!, 30, typed);
+    expect((await send('/site-api/crm/public/chat/continue', {token})).status).toBe(200);
     expect((await db.emailThread.findFirstOrThrow({where: {channel: 'chat'}})).contactId).toBe(mia);
 
     expect(await sameAddress(), 'never a second contact for the same address').toHaveLength(1);

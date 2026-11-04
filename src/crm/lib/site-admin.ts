@@ -1,5 +1,5 @@
 // The site's own admin API (`/site-api/admin/*`, `src/platform/auth/admin.ts`) for Kinroot's
-// Settings → Accounts, Roles and the "Sign-in & security" part of the Audit log.
+// Settings → Team (account actions, the Customers tab), Roles and the "Sign-in & security" part of the Audit log.
 //
 // Not Kinroot's `api` helper: that one targets `/site-api/crm` and sends a 401 to the sign-in page.
 // These calls go through `siteFetch` (CSRF header on writes, ONE shared refresh on an expired

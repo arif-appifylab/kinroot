@@ -52,7 +52,7 @@ export function ConditionsEditor({value, onChange, object, emptyText}: {value: C
             <NativeSelect className="h-8 min-w-0 flex-1 py-0 text-xs font-semibold" value={block.target} onChange={(e) => set(i, newBlock(e.target.value as Target))} aria-label="Record">
               {targets.map((t) => <option key={t} value={t}>{targetLabel(object, t)}</option>)}
             </NativeSelect>
-            <Button type="button" variant="ghost" size="icon-sm" className="text-slate-400 hover:text-destructive" onClick={() => onChange({...c, blocks: c.blocks.filter((_, j) => j !== i)})} aria-label="Remove condition block"><Trash2 /></Button>
+            <Button type="button" variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={() => onChange({...c, blocks: c.blocks.filter((_, j) => j !== i)})} aria-label="Remove condition block"><Trash2 /></Button>
           </div>
           <BlockRules target={block.target} rules={block.rules} onChange={(rules) => set(i, {...block, rules})} />
         </div>

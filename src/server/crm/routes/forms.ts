@@ -8,7 +8,7 @@ import {copyName, cut, FORM_LIMITS} from '@/lib/record-limits';
 import {currentUser, isAdmin, requireRole, type AppEnv, type User} from '../kit/guards';
 import {audit} from '../lib/audit';
 import {formFields, formSettings} from '../lib/form-submit';
-import {fieldError, httpUrl, notFound, valid} from '../lib/http';
+import {fieldError, httpUrl, notFound, ownerScope, valid} from '../lib/http';
 import {moveToBin} from '../lib/recycle-bin';
 import {userSelect} from '../lib/users';
 import {csv} from './import-export';
@@ -68,6 +68,14 @@ const settings = z.object({
 });
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Responses a member may read under "members see only their own records": those whose contact is
+ * theirs, the rule of the submissions report (lib/reports.ts `submissions`). Admins see all.
+ */
+function responsesWhere(scope: {ownerId?: string}): Prisma.FormSubmissionWhereInput {
+  return scope.ownerId ? {contact: {ownerId: scope.ownerId}} : {};
+}
 
 /** The form's creator or an admin may publish, close, delete it and delete its responses. */
 function canManage(me: Pick<User, 'id' | 'role'>, form: {createdById: string | null}) {
@@ -134,8 +142,10 @@ export const forms = new Hono<AppEnv>()
   .patch('/:id', valid('json', z.object({name: z.string().trim().min(1).max(FORM_LIMITS.name).optional(), slug: z.string().trim().max(FORM_LIMITS.slug).optional(), fields: z.array(field).max(200).optional(), settings: settings.optional()})), async (c) => {
     const db = c.var.db;
     const body = c.req.valid('json');
-    const found = await db.form.findUnique({where: {id: c.req.param('id')}, select: {id: true, settings: true}});
+    const found = await db.form.findUnique({where: {id: c.req.param('id')}, select: {id: true, settings: true, createdById: true}});
     if (!found) throw notFound('Form');
+    // Its emails, lead owner, redirect and inbox are the creator's or an admin's to set (AUDIT-2 M-2).
+    if (!canManage(currentUser(c), found)) throw new HTTPException(403, {message: 'Only the creator or an admin can edit this form'});
     if (body.slug !== undefined) {
       if (!SLUG.test(body.slug)) throw fieldError('slug', 'The link can only use lowercase letters, numbers and dashes');
       if (await db.form.findFirst({where: {slug: body.slug, id: {not: found.id}}, select: {id: true}})) throw fieldError('slug', 'Another form already uses that link', 409);
@@ -206,20 +216,24 @@ export const forms = new Hono<AppEnv>()
   .get('/:id/submissions', valid('query', z.object({page: z.string().regex(/^\d{1,4}$/, 'must be a page number').transform(Number).pipe(z.number().int().min(1).max(1000)).default(1), q: z.string().trim().max(200).optional()})), async (c) => {
     const {page, q} = c.req.valid('query');
     const pageSize = 25;
+    const scope = await ownerScope(c);
     const where: Prisma.FormSubmissionWhereInput = {
       formId: c.req.param('id'),
+      ...responsesWhere(scope),
       ...(q ? {OR: [{email: {contains: q, mode: 'insensitive'}}, {contact: {OR: [{firstName: {contains: q, mode: 'insensitive'}}, {lastName: {contains: q, mode: 'insensitive'}}]}}]} : {}),
     };
-    const [rows, total] = await Promise.all([
+    const [found, total] = await Promise.all([
       c.var.db.formSubmission.findMany({
         where,
         orderBy: {createdAt: 'desc'},
         skip: (page - 1) * pageSize,
         take: pageSize,
-        include: {contact: {select: {id: true, firstName: true, lastName: true, email: true}}, deal: {select: {id: true, title: true}}},
+        include: {contact: {select: {id: true, firstName: true, lastName: true, email: true}}, deal: {select: {id: true, title: true, ownerId: true}}},
       }),
       c.var.db.formSubmission.count({where}),
     ]);
+    // A deal the member may not open shows as no deal (as the deal pages hide it).
+    const rows = found.map(({deal, ...r}) => ({...r, deal: deal && (!scope.ownerId || deal.ownerId === scope.ownerId) ? {id: deal.id, title: deal.title} : null}));
     return c.json({rows, total, page, pageSize});
   })
 
@@ -240,7 +254,7 @@ export const forms = new Hono<AppEnv>()
   .get('/:id/export', async (c) => {
     const form = await c.var.db.form.findUnique({where: {id: c.req.param('id')}});
     if (!form) throw notFound('Form');
-    const subs = await c.var.db.formSubmission.findMany({where: {formId: form.id}, orderBy: {createdAt: 'asc'}, include: {contact: {select: {firstName: true, lastName: true}}}});
+    const subs = await c.var.db.formSubmission.findMany({where: {formId: form.id, ...responsesWhere(await ownerScope(c))}, orderBy: {createdAt: 'asc'}, include: {contact: {select: {firstName: true, lastName: true}}}});
     // Current fields first, then answers to fields that were removed since.
     const columns = formFields(form).filter((f) => f.type !== 'heading' && f.type !== 'page_break').map((f) => ({id: f.id, label: f.label}));
     for (const s of subs) for (const a of s.answers as unknown as StoredAnswer[]) if (!columns.some((col) => col.id === a.fieldId)) columns.push({id: a.fieldId, label: a.label});

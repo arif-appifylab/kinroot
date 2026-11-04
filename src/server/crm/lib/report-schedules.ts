@@ -8,7 +8,7 @@ import {reportConfigSchema, type DateRange, type ReportOverrides} from '@/lib/re
 import {addDays, isTimeZone, localDate, weekdayOf, zonedTime} from '@/lib/scheduling';
 import type {DashboardFilters} from '@/lib/types';
 import {config, CRM_APP} from '../kit/config';
-import {fromB64, sign, toB64Url, verifySignature} from '../kit/crypto';
+import {fromB64, sign, verifySignature} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {emailBrand, getEmailDesign} from '../email/design';
 import type {Attachment} from '../email/mime';
@@ -105,12 +105,26 @@ function previousPeriod(t: Timing, slot: number): DateRange & {fromAt: number; t
 // ─── Unsubscribe ───
 
 /** `<base64url(scheduleId:email)>.<signature>`: one recipient leaves one schedule without signing in. */
+/** A recipient as the link names them: a keyed hash of the schedule and the address, never the address (AUDIT-2 L-10). */
+const recipientKey = (scheduleId: string, email: string) => sign(`report-recip:${scheduleId}:${email.trim().toLowerCase()}`);
+
 async function scheduleUnsubscribeToken(scheduleId: string, email: string) {
-  const payload = toB64Url(new TextEncoder().encode(`${scheduleId}:${email.toLowerCase()}`));
-  return `${payload}.${await sign(`report-unsub:${payload}`)}`;
+  return `r.${scheduleId}.${await recipientKey(scheduleId, email)}`;
 }
 
-export async function readUnsubscribeToken(token: string) {
+/**
+ * The schedule and recipient an unsubscribe link names. The address is found among the schedule's
+ * recipients by its key (null when it is no longer one). Links sent before carry it signed: still read.
+ */
+export async function readUnsubscribeToken(db: Db, token: string): Promise<{scheduleId: string; email: string | null} | null> {
+  const opaque = /^r\.([a-z0-9]{1,40})\.([\w-]{22})$/i.exec(token);
+  if (opaque) {
+    const [, scheduleId, key] = opaque as unknown as [string, string, string];
+    const s = await db.reportSchedule.findUnique({where: {id: scheduleId}, select: {userIds: true, emails: true}});
+    if (!s) return null;
+    for (const email of await recipientsOf(db, s)) if (await verifySignature(`report-recip:${scheduleId}:${email}`, key)) return {scheduleId, email};
+    return {scheduleId, email: null};
+  }
   const [payload, signature] = token.split('.');
   if (!payload || !signature || !(await verifySignature(`report-unsub:${payload}`, signature))) return null;
   let decoded: string;

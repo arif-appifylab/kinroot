@@ -4,7 +4,7 @@ import type {ComponentProps, ReactNode} from 'react';
 import {Button} from '@/components/ui/button';
 
 /**
- * Pieces shared by Settings → Accounts, Roles and the Audit log's "Sign-in & security" tab
+ * Pieces shared by Settings → Team (its account actions), Roles and the Audit log's "Sign-in & security" tab
  * (the site's own admin, `src/crm/lib/site-admin.ts`).
  */
 

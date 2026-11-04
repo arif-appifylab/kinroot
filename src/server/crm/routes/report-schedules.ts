@@ -229,15 +229,16 @@ const mask = (email: string) => {
 /** Public: the unsubscribe link in every scheduled report email (signed token, no sign-in). */
 export const reportSchedulesPublic = new Hono<AppEnv>()
   .get('/report-unsubscribe/:token', async (c) => {
-    const t = await readUnsubscribeToken(c.req.param('token'));
+    const t = await readUnsubscribeToken(c.var.db, c.req.param('token').slice(0, 400));
     const s = t ? await c.var.db.reportSchedule.findUnique({where: {id: t.scheduleId}, include: {report: {select: {name: true}}, dashboard: {select: {name: true}}}}) : null;
     if (!t || !s) throw notFound('Link');
-    const subscribed = (await recipientsOf(c.var.db, s)).includes(t.email);
-    return c.json({email: mask(t.email), name: s.report?.name ?? s.dashboard?.name ?? 'Report', subscribed});
+    // A link whose address is no longer on the schedule: already unsubscribed.
+    const subscribed = !!t.email && (await recipientsOf(c.var.db, s)).includes(t.email);
+    return c.json({email: t.email ? mask(t.email) : '', name: s.report?.name ?? s.dashboard?.name ?? 'Report', subscribed});
   })
   .post('/report-unsubscribe/:token', async (c) => {
-    const t = await readUnsubscribeToken(c.req.param('token'));
-    const s = t ? await unsubscribeRecipient(c.var.db, t.scheduleId, t.email) : null;
+    const t = await readUnsubscribeToken(c.var.db, c.req.param('token').slice(0, 400));
+    const s = !t ? null : t.email ? await unsubscribeRecipient(c.var.db, t.scheduleId, t.email) : await c.var.db.reportSchedule.findUnique({where: {id: t.scheduleId}, select: {id: true}});
     if (!t || !s) throw notFound('Link');
-    return c.json({ok: true, email: mask(t.email), subscribed: false});
+    return c.json({ok: true, email: t.email ? mask(t.email) : '', subscribed: false});
   });

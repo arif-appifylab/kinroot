@@ -2,6 +2,7 @@ import {Hono} from 'hono';
 
 import {publicOrigin} from '../kit/config';
 import {verifySignature} from '../kit/crypto';
+import type {Db} from '../kit/db';
 import type {AppEnv} from '../kit/guards';
 import {logActivity} from '../lib/activity';
 import {emit} from '../lib/events';
@@ -9,6 +10,7 @@ import {getPrivateSettings, getSettings} from '../lib/settings';
 import {parseAddressList, stripAngle, type Address} from '../email/mime';
 import {firstDelivery, verifyInbound} from '../email/inbound-auth';
 import {receiveInbound, resendIncoming} from '../email/replies';
+import {inboundSenderVerified} from '../email/sender-auth';
 import type {IncomingMessage} from '../email/service';
 
 /** Constant-time comparison of the URL token with the saved one. */
@@ -17,6 +19,17 @@ function sameToken(a: string, b: string) {
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+/** Opens and clicks one message records at most a minute, and in all (AUDIT-2 L-8): past them a hit still gets its pixel or redirect, nothing is written. */
+const TRACK_PER_MINUTE = 10;
+const TRACK_MAX = 1000;
+
+/** Whether one more open / click of this message is recorded (one indexed count of its last minute). */
+async function trackingAllowed(db: Db, m: {id: string; openCount: number; clickCount: number}) {
+  if (m.openCount + m.clickCount >= TRACK_MAX) return false;
+  const recent = await db.trackingEvent.count({where: {messageId: m.id, createdAt: {gte: new Date(Date.now() - 60_000)}}});
+  return recent < TRACK_PER_MINUTE;
 }
 
 // 1×1 transparent GIF
@@ -109,15 +122,14 @@ export const emailPublic = new Hono<AppEnv>()
   .get('/t/o/:file', async (c) => {
     const trackingId = c.req.param('file').replace(/\.gif$/, '');
     const db = c.var.db;
-    const message = await db.emailMessage.findUnique({where: {trackingId}, select: {id: true, openCount: true, sentAt: true, contactId: true, subject: true, thread: {select: {dealId: true}}}});
+    const message = await db.emailMessage.findUnique({where: {trackingId}, select: {id: true, openCount: true, clickCount: true, sentAt: true, contactId: true, subject: true, thread: {select: {dealId: true}}}});
     // Ignore hits in the first few seconds: that's usually the sender's own client or a scanner.
-    if (message && Date.now() - message.sentAt.getTime() > 5_000) {
-      await db.emailMessage.update({
-        where: {id: message.id},
-        data: {openCount: {increment: 1}, ...(message.openCount === 0 ? {firstOpenedAt: new Date()} : {})},
-      });
-      await db.trackingEvent.create({data: {messageId: message.id, type: 'open', userAgent: c.req.header('user-agent')?.slice(0, 300)}});
-      if (message.openCount === 0) {
+    if (message && Date.now() - message.sentAt.getTime() > 5_000 && (await trackingAllowed(db, message))) {
+      // The first open is claimed by one conditional update: two opens at once log and emit it once.
+      const first = message.openCount === 0 ? (await db.emailMessage.updateMany({where: {id: message.id, openCount: 0}, data: {openCount: 1, firstOpenedAt: new Date()}})).count > 0 : false;
+      if (!first) await db.emailMessage.update({where: {id: message.id}, data: {openCount: {increment: 1}}, select: {id: true}});
+      await db.trackingEvent.create({data: {messageId: message.id, type: 'open', userAgent: c.req.header('user-agent')?.slice(0, 300)}, select: {id: true}});
+      if (first) {
         await logActivity(db, {type: 'email_opened', title: `Opened: ${message.subject}`, refId: message.id, contactId: message.contactId, dealId: message.thread.dealId});
         await emit(db, 'email.opened', {entity: 'email', recordId: message.id, data: {messageId: message.id, contactId: message.contactId, dealId: message.thread.dealId, subject: message.subject}});
       }
@@ -131,12 +143,15 @@ export const emailPublic = new Hono<AppEnv>()
     const sig = c.req.query('s') ?? '';
     // Signed links only: the tracker must never become an open redirect.
     if (!/^https?:\/\//.test(url) || !(await verifySignature(`${trackingId}|${url}`, sig))) return c.text('Invalid link', 400);
-    const message = await c.var.db.emailMessage.findUnique({where: {trackingId}, select: {id: true, clickCount: true, contactId: true, subject: true, thread: {select: {dealId: true}}}});
-    if (message) {
-      await c.var.db.emailMessage.update({where: {id: message.id}, data: {clickCount: {increment: 1}}});
-      await c.var.db.trackingEvent.create({data: {messageId: message.id, type: 'click', url: url.slice(0, 1000), userAgent: c.req.header('user-agent')?.slice(0, 300)}});
-      if (message.clickCount === 0) {
-        await emit(c.var.db, 'email.clicked', {entity: 'email', recordId: message.id, data: {messageId: message.id, contactId: message.contactId, dealId: message.thread.dealId, subject: message.subject, url: url.slice(0, 1000)}});
+    const db = c.var.db;
+    const message = await db.emailMessage.findUnique({where: {trackingId}, select: {id: true, openCount: true, clickCount: true, contactId: true, subject: true, thread: {select: {dealId: true}}}});
+    if (message && (await trackingAllowed(db, message))) {
+      // The first click is claimed by one conditional update: two clicks at once emit it once.
+      const first = message.clickCount === 0 ? (await db.emailMessage.updateMany({where: {id: message.id, clickCount: 0}, data: {clickCount: 1}})).count > 0 : false;
+      if (!first) await db.emailMessage.update({where: {id: message.id}, data: {clickCount: {increment: 1}}, select: {id: true}});
+      await db.trackingEvent.create({data: {messageId: message.id, type: 'click', url: url.slice(0, 1000), userAgent: c.req.header('user-agent')?.slice(0, 300)}, select: {id: true}});
+      if (first) {
+        await emit(db, 'email.clicked', {entity: 'email', recordId: message.id, data: {messageId: message.id, contactId: message.contactId, dealId: message.thread.dealId, subject: message.subject, url: url.slice(0, 1000)}});
       }
     }
     return c.redirect(url, 302);
@@ -161,6 +176,8 @@ export const emailPublic = new Hono<AppEnv>()
       const resend = body.type === 'email.received' && body.data ? await resendIncoming(db, body.data as {email_id?: string; to?: string[]}) : null;
       const parsed = resend?.message ?? (body.type === 'email.received' ? null : parseInbound(body));
       if (!parsed?.from?.email) return c.json({ok: false, reason: 'Unrecognised payload'}, 200);
+      // The mail service's SPF / DKIM / DMARC verdict on the From: address (AUDIT-2 M-8); Resend gives none.
+      if (!resend) parsed.senderVerified = inboundSenderVerified(body, parsed.from.email);
       const message = await receiveInbound(db, parsed, {origin: publicOrigin(c.req.raw), account: resend?.account});
       return c.json({ok: true, stored: !!message});
     } catch (e) {

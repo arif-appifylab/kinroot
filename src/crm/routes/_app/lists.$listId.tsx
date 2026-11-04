@@ -95,9 +95,9 @@ function ListPage() {
         </div>
       ),
     },
-    {key: 'company', header: 'Company', hideBelow: 'md', cell: (c) => c.companies[0]?.company.name ?? <span className="text-slate-400">—</span>},
+    {key: 'company', header: 'Company', hideBelow: 'md', cell: (c) => c.companies[0]?.company.name ?? <span className="text-muted-foreground">—</span>},
     {key: 'lifecycleStage', header: 'Stage', sortable: true, cell: (c) => <Badge tone={LIFECYCLE[c.lifecycleStage].tone}>{LIFECYCLE[c.lifecycleStage].label}</Badge>},
-    {key: 'owner', header: 'Owner', hideBelow: 'lg', cell: (c) => c.owner ? <span className="inline-flex items-center gap-2"><Avatar name={c.owner.name} color={c.owner.color} src={c.owner.avatarUrl} size="xs" />{c.owner.name.split(' ')[0]}</span> : <span className="text-slate-400">—</span>},
+    {key: 'owner', header: 'Owner', hideBelow: 'lg', cell: (c) => c.owner ? <span className="inline-flex items-center gap-2"><Avatar name={c.owner.name} color={c.owner.color} src={c.owner.avatarUrl} size="xs" />{c.owner.name.split(' ')[0]}</span> : <span className="text-muted-foreground">—</span>},
     isSegment
       ? {key: 'lastActivityAt', header: 'Last activity', sortable: true, hideBelow: 'sm', cell: (c) => <span className="text-muted-foreground">{ago(c.lastActivityAt)}</span>}
       : {key: 'added', header: 'Added', hideBelow: 'sm', cell: (c) => <span className="text-muted-foreground">{ago(c.listMemberships?.[0]?.createdAt)}{c.listMemberships?.[0]?.source && c.listMemberships[0].source !== 'manual' ? ` · ${c.listMemberships[0].source}` : ''}</span>},

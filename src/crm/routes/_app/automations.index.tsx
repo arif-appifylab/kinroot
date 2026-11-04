@@ -103,7 +103,7 @@ function Row({a, isAdmin, toggling, busy, fieldLabel, onToggle, onDuplicate, onD
         </span>
       </td>
       <td className="px-4 py-3 text-right tabular-nums text-slate-700">{a.stats.runs7d.toLocaleString()}{a.stats.waiting > 0 && <span className="block text-[11px] text-violet-600">{a.stats.waiting} waiting</span>}</td>
-      <td className="px-4 py-3 text-right tabular-nums">{a.stats.failed7d > 0 ? <Link to="/automations/$automationId" params={{automationId: a.id}} search={{tab: 'runs'}} className="font-semibold text-rose-600 hover:underline">{a.stats.failed7d}</Link> : <span className="text-slate-400">0</span>}</td>
+      <td className="px-4 py-3 text-right tabular-nums">{a.stats.failed7d > 0 ? <Link to="/automations/$automationId" params={{automationId: a.id}} search={{tab: 'runs'}} className="font-semibold text-rose-600 hover:underline">{a.stats.failed7d}</Link> : <span className="text-muted-foreground">0</span>}</td>
       <td className="px-4 py-3 whitespace-nowrap text-slate-600">{a.lastRunAt ? <Tooltip content={dateTime(a.lastRunAt)}><span>{ago(a.lastRunAt)}</span></Tooltip> : 'Never'}</td>
       <td className="px-2 py-3">
         {isAdmin && (

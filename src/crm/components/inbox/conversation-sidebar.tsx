@@ -15,7 +15,7 @@ import {Button} from '../ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '../ui/dialog';
 import {Field, Input, NativeSelect} from '../ui/form';
 import {is, useFormState} from '../ui/form-state';
-import {Avatar} from '../ui/misc';
+import {Avatar, CUSTOMER_COLOR} from '../ui/misc';
 
 const invalidate = [keys.inbox, keys.timeline, keys.contacts, keys.deals, keys.tickets];
 
@@ -158,6 +158,19 @@ function VisitorSection({v}: {v: ChatVisitor}) {
           <span className={v.online ? 'text-green-700' : 'text-slate-500'}>{v.online ? 'On the site now' : `Last seen ${ago(v.lastSeenAt)}`}</span>
           {v.blocked && <Badge tone="rose">Blocked</Badge>}
         </p>
+        {v.email && (
+          <p className="flex min-w-0 items-center gap-1.5">
+            <Mail className="size-3.5 shrink-0" />
+            <span className="min-w-0 truncate">{v.email}</span>
+            {v.emailVerified ? (
+              <Badge tone="green">Confirmed</Badge>
+            ) : (
+              <span title="The visitor typed this address; it is not confirmed until they open a link we email to it.">
+                <Badge tone="amber">Unconfirmed</Badge>
+              </span>
+            )}
+          </p>
+        )}
         {v.page && (
           <a href={v.page} target="_blank" rel="noopener noreferrer" className="flex min-w-0 items-start gap-1.5 hover:text-primary">
             <Globe className="mt-0.5 size-3.5 shrink-0" />
@@ -204,7 +217,7 @@ export function ConversationSidebar({detail}: {detail: ConversationDetail}) {
         {c ? (
           <div className="grid gap-2">
             <Link to="/contacts/$contactId" params={{contactId: c.id}} className="flex items-center gap-2.5 font-semibold text-slate-900 hover:text-primary">
-              <Avatar name={fullName(c)} color="#0d9488" size="md" />
+              <Avatar name={fullName(c)} color={CUSTOMER_COLOR} size="md" />
               <span className="min-w-0">
                 <span className="block truncate">{fullName(c)}</span>
                 {c.title && <span className="block truncate text-xs font-normal text-muted-foreground">{c.title}</span>}

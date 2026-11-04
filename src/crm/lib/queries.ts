@@ -1,7 +1,7 @@
 import {useMutation, useQuery, useQueryClient, type QueryKey} from '@tanstack/react-query';
 import {toast} from 'sonner';
 
-import {api, ApiError} from '@/lib/api';
+import {api, shownInPlace} from '@/lib/api';
 import type {CustomField, EmailAccount, EmailDesignResponse, EmailTemplate, EntityType, Me, Pipeline, SettingsResponse} from '@/lib/types';
 
 export const keys = {
@@ -128,13 +128,17 @@ export function useApiMutation<TVars, TResult = unknown>(
       if (opts.success) toast.success(typeof opts.success === 'function' ? opts.success(result) : opts.success);
       opts.onSuccess?.(result, vars);
     },
-    // A 422 with plain field names shows them under the fields (forms pass `f.fail`): the toast only points
-    // there. Nested keys (`stages.0.name`) have no field to land on, so their words stay in the toast. A
-    // hand-written 400 / 409 that names its field (`fieldError()`) keeps its words in the toast too, as
-    // some screens calling that route have no field for it.
+    // Errors a form put under its fields (`f.fail`) toast only "Check the highlighted fields."; errors
+    // already shown next to their control (an inline editor) toast nothing; every other error toasts
+    // its own words (a 422 nobody placed included: nothing is highlighted then). The call's own
+    // `onError` (and a `mutateAsync` catch) run after this hook's, in the same task, so the decision
+    // waits one tick for them to mark the error (`shownInPlace`).
     onError: (e: Error) => {
-      const keys = e instanceof ApiError && e.status === 422 ? Object.keys(e.fields ?? {}) : [];
-      toast.error(keys.length && keys.every((k) => !k.includes('.')) ? 'Check the highlighted fields.' : e.message);
+      setTimeout(() => {
+        const shown = shownInPlace.get(e);
+        if (shown === 'shown') return;
+        toast.error(shown === 'fields' ? 'Check the highlighted fields.' : e.message);
+      }, 0);
     },
   });
 }

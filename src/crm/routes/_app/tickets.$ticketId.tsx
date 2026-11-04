@@ -47,7 +47,7 @@ import {Field, Input, NativeSelect} from '@/components/ui/form';
 import {is, useFormState} from '@/components/ui/form-state';
 import {LoadError} from '@/components/data-table';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip} from '@/components/ui/menu';
-import {Avatar, Skeleton} from '@/components/ui/misc';
+import {Avatar, CUSTOMER_COLOR, Skeleton} from '@/components/ui/misc';
 import {api, ApiError} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
 import {ago, dateTime, fullName} from '@/lib/format';
@@ -79,7 +79,7 @@ function FileChips({files, onRemove}: {files: TicketFile[]; onRemove?: (id: stri
             <Icon className="size-3.5 shrink-0 text-slate-400" />
             <a href={`/site-api/crm/files/${f.id}`} target="_blank" rel="noopener noreferrer" className="min-w-0 truncate font-semibold text-slate-700 hover:text-primary">{f.name}</a>
             <span className="shrink-0 text-muted-foreground">{fileSize(f.size)}</span>
-            {onRemove && <button type="button" aria-label={`Remove ${f.name}`} onClick={() => onRemove(f.id)} className="cursor-pointer text-slate-400 hover:text-destructive"><X className="size-3.5" /></button>}
+            {onRemove && <button type="button" aria-label={`Remove ${f.name}`} onClick={() => onRemove(f.id)} className="cursor-pointer text-muted-foreground hover:text-destructive"><X className="size-3.5" /></button>}
           </span>
         );
       })}
@@ -119,7 +119,7 @@ function EventLine({m, team}: {m: TicketMessage; team: Map<string, string>}) {
     <li className={cn('flex items-center gap-2 px-1 text-xs', tone)}>
       <Icon className="size-3.5 shrink-0" />
       <span className="min-w-0">{text}</span>
-      <span className="ml-auto shrink-0 text-slate-400">{ago(m.createdAt)}</span>
+      <span className="ml-auto shrink-0 text-muted-foreground">{ago(m.createdAt)}</span>
     </li>
   );
 }
@@ -144,7 +144,7 @@ function MessageItem({m, ticket}: {m: TicketMessage; ticket: TicketRow}) {
   return (
     <li className={cn('rounded-xl border p-4 shadow-soft', inbound ? 'border-slate-100 bg-card' : 'border-blue-100 bg-blue-50/40')}>
       <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <Avatar name={name ?? '?'} color={inbound ? '#0d9488' : m.author?.color} src={inbound ? null : m.author?.avatarUrl} size="xs" className="ring-0" />
+        <Avatar name={name ?? '?'} color={inbound ? CUSTOMER_COLOR : m.author?.color} src={inbound ? null : m.author?.avatarUrl} size="xs" className="ring-0" />
         <span className="font-semibold text-slate-800">{name}</span>
         {inbound && m.fromEmail && <span className="truncate">{m.fromEmail}</span>}
         <Tooltip content={dateTime(m.createdAt)}><span>· {ago(m.createdAt)}</span></Tooltip>
@@ -327,7 +327,7 @@ function TicketPage() {
   const s = settings.data?.settings;
   const resolved = t.status === 'RESOLVED' || t.status === 'CLOSED';
   const due = (at: string | null, done: string | null, breached: string | null) =>
-    done ? <span className="inline-flex items-center gap-1 text-green-700"><CheckCircle2 className="size-3.5" /> {dateTime(done)}</span> : at ? <span className={cn(breached || new Date(at).getTime() < Date.now() ? 'font-semibold text-rose-700' : '')}>Due {dateTime(at)}</span> : <span className="text-slate-400">No target</span>;
+    done ? <span className="inline-flex items-center gap-1 text-green-700"><CheckCircle2 className="size-3.5" /> {dateTime(done)}</span> : at ? <span className={cn(breached || new Date(at).getTime() < Date.now() ? 'font-semibold text-rose-700' : '')}>Due {dateTime(at)}</span> : <span className="text-muted-foreground">No target</span>;
 
   return (
     <PropertyHistoryProvider entity="ticket" id={t.id} name={`#${t.number} ${t.subject}`}>
@@ -340,7 +340,7 @@ function TicketPage() {
         <div className="blob -top-24 -right-16 size-64 bg-blue-200/40" />
         <div className="relative flex flex-col gap-4 sm:flex-row sm:items-start">
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold text-slate-400">#{t.number} · {SOURCE_LABELS[t.source]} · opened {ago(t.createdAt)}</p>
+            <p className="text-sm font-bold text-muted-foreground">#{t.number} · {SOURCE_LABELS[t.source]} · opened {ago(t.createdAt)}</p>
             {editingSubject !== null ? (
               <form {...subjectForm.form(saveSubject)} className="mt-1 flex items-start gap-2">
                 <h1 className="sr-only">{t.subject}</h1>
@@ -366,7 +366,7 @@ function TicketPage() {
                     type="button"
                     aria-label="Edit subject"
                     onClick={() => setEditingSubject(t.subject)}
-                    className="mt-1.5 cursor-pointer rounded-md p-1 text-slate-400 opacity-0 transition-opacity outline-none group-hover:opacity-100 hover:text-slate-700 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30"
+                    className="mt-1.5 cursor-pointer rounded-md p-1 text-muted-foreground opacity-0 transition-opacity outline-none group-hover:opacity-100 hover:text-slate-700 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30"
                   >
                     <Pencil className="size-4" />
                   </button>
@@ -412,10 +412,10 @@ function TicketPage() {
         <div className="grid min-w-0 grid-cols-1 content-start gap-4">
           <Card className="p-4">
             <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Avatar name={t.contact ? fullName(t.contact) : '?'} color="#0d9488" size="xs" className="ring-0" />
+              <Avatar name={t.contact ? fullName(t.contact) : '?'} color={CUSTOMER_COLOR} size="xs" className="ring-0" />
               <span className="font-semibold text-slate-800">{t.contact ? fullName(t.contact) : 'Unknown requester'}</span> opened this request · {dateTime(t.createdAt)}
             </p>
-            {t.description ? <RichText html={t.descriptionHtml}>{t.description}</RichText> : <p className="text-sm text-slate-400">No description</p>}
+            {t.description ? <RichText html={t.descriptionHtml}>{t.description}</RichText> : <p className="text-sm text-muted-foreground">No description</p>}
           </Card>
           <ol className="grid gap-3">
             {q.data!.messages.map((m) => (m.kind === 'event' ? <EventLine key={m.id} m={m} team={names} /> : <MessageItem key={m.id} m={m} ticket={t} />))}
@@ -425,23 +425,23 @@ function TicketPage() {
 
         <div className="grid min-w-0 grid-cols-1 content-start gap-6">
           <PropertyCard title="Properties" action={<PropertyHistoryButton compact />}>
-            <SelectProperty label="Status" field="status" value={t.status} options={TICKET_STATUSES.map((x) => ({value: x.value, label: x.label}))} display={<StatusBadge status={t.status} />} onSave={(v) => v && save.mutate({status: v})} />
-            <SelectProperty label="Priority" field="priority" value={t.priority} options={TICKET_PRIORITIES.map((x) => ({value: x.value, label: x.label}))} display={<PriorityLabel priority={t.priority} />} onSave={(v) => v && save.mutate({priority: v})} />
+            <SelectProperty label="Status" field="status" value={t.status} options={TICKET_STATUSES.map((x) => ({value: x.value, label: x.label}))} display={<StatusBadge status={t.status} />} onSave={(v) => v && save.mutateAsync({status: v})} />
+            <SelectProperty label="Priority" field="priority" value={t.priority} options={TICKET_PRIORITIES.map((x) => ({value: x.value, label: x.label}))} display={<PriorityLabel priority={t.priority} />} onSave={(v) => v && save.mutateAsync({priority: v})} />
             <EditableProperty
               label="Assignee" field="assigneeId"
               value={t.assigneeId}
-              display={t.assignee ? <span className="inline-flex items-center gap-1.5"><Avatar name={t.assignee.name} color={t.assignee.color} src={t.assignee.avatarUrl} size="xs" />{t.assignee.name}</span> : <span className="text-slate-400">Unassigned</span>}
+              display={t.assignee ? <span className="inline-flex items-center gap-1.5"><Avatar name={t.assignee.name} color={t.assignee.color} src={t.assignee.avatarUrl} size="xs" />{t.assignee.name}</span> : <span className="text-muted-foreground">Unassigned</span>}
               editor={({value, onChange}) => <UserSelect value={value} onChange={onChange} />}
-              onSave={(v) => save.mutate({assigneeId: v})}
+              onSave={(v) => save.mutateAsync({assigneeId: v})}
             />
-            <ChoiceProperty label="Category" field="category" value={t.category} options={s?.categories ?? []} onSave={(v) => save.mutate({category: v})} />
-            <ChoiceProperty label="Queue" field="queue" value={t.queue} options={s?.queues ?? []} onSave={(v) => save.mutate({queue: v})} />
+            <ChoiceProperty label="Category" field="category" value={t.category} options={s?.categories ?? []} onSave={(v) => save.mutateAsync({category: v})} />
+            <ChoiceProperty label="Queue" field="queue" value={t.queue} options={s?.queues ?? []} onSave={(v) => save.mutateAsync({queue: v})} />
             <EditableProperty
               label="Tags" field="tags"
               value={t.tags}
-              display={t.tags.length ? <span className="flex flex-wrap gap-1">{t.tags.map((x) => <Badge key={x} tone="teal">{x}</Badge>)}</span> : <span className="text-slate-400">—</span>}
+              display={t.tags.length ? <span className="flex flex-wrap gap-1">{t.tags.map((x) => <Badge key={x} tone="teal">{x}</Badge>)}</span> : <span className="text-muted-foreground">—</span>}
               editor={({value, onChange}) => <TagInput entity="TICKET" value={value} onChange={onChange} />}
-              onSave={(v) => save.mutate({tags: v})}
+              onSave={(v) => save.mutateAsync({tags: v})}
             />
             <Property label="First response">{due(t.firstResponseDueAt, t.firstResponseAt, t.firstResponseBreachedAt)}</Property>
             <Property label="Resolution">{due(t.resolutionDueAt, t.resolvedAt, t.resolutionBreachedAt)}</Property>
@@ -451,7 +451,7 @@ function TicketPage() {
               ) : t.csatSentAt ? (
                 <span className="text-slate-500">Survey sent {ago(t.csatSentAt)}</span>
               ) : (
-                <span className="text-slate-400">—</span>
+                <span className="text-muted-foreground">—</span>
               )}
             </Property>
           </PropertyCard>
@@ -460,25 +460,25 @@ function TicketPage() {
             <EditableProperty<ContactLite | null>
               label="Contact" field="contactId"
               value={t.contact}
-              display={t.contact ? <Link to="/contacts/$contactId" params={{contactId: t.contact.id}} onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 text-primary hover:underline"><User className="size-3.5" />{fullName(t.contact)}</Link> : <span className="text-slate-400">—</span>}
+              display={t.contact ? <Link to="/contacts/$contactId" params={{contactId: t.contact.id}} onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 text-primary hover:underline"><User className="size-3.5" />{fullName(t.contact)}</Link> : <span className="text-muted-foreground">—</span>}
               editor={({value, onChange}) => <ContactsPicker value={value ? [value] : []} onChange={(v) => onChange(v.at(-1) ?? null)} />}
-              onSave={(v) => save.mutate({contactId: v?.id ?? null})}
+              onSave={(v) => save.mutateAsync({contactId: v?.id ?? null})}
             />
             {t.contact?.email && <Property label="Email"><a href={`mailto:${t.contact.email}`} className="text-primary hover:underline">{t.contact.email}</a></Property>}
             {t.contact?.phone && <Property label="Phone"><a href={`tel:${t.contact.phone}`} className="text-primary hover:underline">{t.contact.phone}</a></Property>}
             <EditableProperty<CompanyLite | null>
               label="Company" field="companyId"
               value={t.company}
-              display={t.company ? <Link to="/companies/$companyId" params={{companyId: t.company.id}} onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 text-primary hover:underline"><Building2 className="size-3.5" />{t.company.name}</Link> : <span className="text-slate-400">—</span>}
+              display={t.company ? <Link to="/companies/$companyId" params={{companyId: t.company.id}} onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 text-primary hover:underline"><Building2 className="size-3.5" />{t.company.name}</Link> : <span className="text-muted-foreground">—</span>}
               editor={({value, onChange}) => <CompanyPicker value={value} onChange={onChange} />}
-              onSave={(v) => save.mutate({companyId: v?.id ?? null})}
+              onSave={(v) => save.mutateAsync({companyId: v?.id ?? null})}
             />
             <EditableProperty<{id: string; title: string} | null>
               label="Deal" field="dealId"
               value={t.deal}
-              display={t.deal ? <Link to="/deals/$dealId" params={{dealId: t.deal.id}} onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 text-primary hover:underline"><Handshake className="size-3.5" />{t.deal.title}</Link> : <span className="text-slate-400">—</span>}
+              display={t.deal ? <Link to="/deals/$dealId" params={{dealId: t.deal.id}} onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 text-primary hover:underline"><Handshake className="size-3.5" />{t.deal.title}</Link> : <span className="text-muted-foreground">—</span>}
               editor={({value, onChange}) => <DealPicker value={value} onChange={onChange} />}
-              onSave={(v) => save.mutate({dealId: v?.id ?? null})}
+              onSave={(v) => save.mutateAsync({dealId: v?.id ?? null})}
             />
           </PropertyCard>
           <AutomationsCard object="ticket" recordId={t.id} />

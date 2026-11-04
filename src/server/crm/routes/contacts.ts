@@ -16,7 +16,7 @@ import {associateByDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
 import {moveScoreEvents, scoreBandWhere} from '../lib/scoring';
 import {queueRescore} from '../lib/scoring-hook';
-import {moveToBin} from '../lib/recycle-bin';
+import {BIN_BATCH, moveToBin} from '../lib/recycle-bin';
 import {contactIdsAtCompaniesNamed, searchTerms} from '../lib/search-match';
 import {listContactWhere} from '../lib/segments';
 import {rememberOption} from '../lib/settings';
@@ -89,6 +89,9 @@ export async function contactWhere(db: Db, q: Record<string, string | undefined>
   return where;
 }
 
+/** What one contact's JSON export holds at most of each kind (AUDIT-2 L-13). */
+const EXPORT_CAP = {notes: 2000, tasks: 2000, interactions: 2000, emails: 500, activities: 5000};
+
 export const contacts = new Hono<AppEnv>()
   .get('/', valid('query', listQuery.extend({lifecycleStage: lifecycle.optional(), source: z.string().optional(), companyId: z.string().optional(), noActivityDays: intParam(1, 36_500).optional(), listId: z.string().optional(), scoreBand: z.string().max(30).optional()})), async (c) => {
     const q = c.req.valid('query');
@@ -99,7 +102,8 @@ export const contacts = new Hono<AppEnv>()
     const [rows, total] = await Promise.all([
       c.var.db.contact.findMany({
         where,
-        include: {...contactInclude, _count: {select: {deals: true, tasks: {where: {done: false}}}}},
+        // Companies and deals the viewer may open only, as their own pages (AUDIT-2 L-2).
+        include: {...contactInclude, companies: {...contactInclude.companies, where: {company: scope}}, _count: {select: {deals: {where: {deal: scope}}, tasks: {where: {done: false}}}}},
         orderBy: sortBy(q.sort, q.dir, ['firstName', 'lastName', 'email', 'createdAt', 'lastActivityAt', 'lifecycleStage', 'score'], 'createdAt'),
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
@@ -144,7 +148,8 @@ export const contacts = new Hono<AppEnv>()
       where: {id: c.req.param('id'), ...scope},
       include: {
         ...contactInclude,
-        // Only deals the user may see (owner-only visibility).
+        // Only companies and deals the user may see (owner-only visibility; AUDIT-2 L-2).
+        companies: {...contactInclude.companies, where: {company: scope}},
         deals: {where: {deal: scope}, include: {deal: {include: {stage: true, owner: {select: userSelect}}}}},
       },
     });
@@ -201,6 +206,8 @@ export const contacts = new Hono<AppEnv>()
     const scope = await ownerScope(c);
     const where = {id: {in: ids}, ...scope};
     if (action === 'delete') {
+      // Each deleted record is snapshotted for the recycle bin: a bounded number per request (AUDIT-2 M-14).
+      if (ids.length > BIN_BATCH) throw new HTTPException(400, {message: `Delete at most ${BIN_BATCH} contacts at a time: select fewer and repeat`});
       const gone = await db.contact.findMany({where});
       await moveToBin(db, 'contact', gone.map((r) => r.id), me);
       // One batch of events and one of audit rows, not a few queries per record.
@@ -375,23 +382,45 @@ export const contacts = new Hono<AppEnv>()
   .get('/:id/export', async (c) => {
     const db = c.var.db;
     const id = c.req.param('id');
+    const scope = await ownerScope(c);
     const contact = await db.contact.findFirst({
-      where: {id, ...(await ownerScope(c))},
-      include: {owner: {select: userSelect}, companies: {include: {company: true}}, deals: {include: {deal: {include: {stage: true}}}}},
+      where: {id, ...scope},
+      // Only the deals the detail page shows (owner-only visibility, AUDIT-2 L-1).
+      include: {owner: {select: userSelect}, companies: {where: {company: scope}, include: {company: true}}, deals: {where: {deal: scope}, include: {deal: {include: {stage: true}}}}},
     });
     if (!contact) throw notFound('Contact');
+    // Bounded (AUDIT-2 L-13): the most recent EXPORT_CAP of each kind (emails fewer: their text is
+    // the big part), oldest first, and `truncated` names what was cut.
+    const cap = EXPORT_CAP;
     const [notes, tasks, interactions, emails, activities] = await Promise.all([
-      db.note.findMany({where: {contactId: id}, orderBy: {createdAt: 'asc'}}),
-      db.task.findMany({where: {contactId: id}, orderBy: {createdAt: 'asc'}}),
-      db.interaction.findMany({where: {OR: [{contactId: id}, {attendeeIds: {array_contains: [id]}}]}, orderBy: {occurredAt: 'asc'}}),
+      db.note.findMany({where: {contactId: id}, orderBy: {createdAt: 'desc'}, take: cap.notes + 1}),
+      db.task.findMany({where: {contactId: id}, orderBy: {createdAt: 'desc'}, take: cap.tasks + 1}),
+      db.interaction.findMany({where: {OR: [{contactId: id}, {attendeeIds: {array_contains: [id]}}]}, orderBy: {occurredAt: 'desc'}, take: cap.interactions + 1}),
       db.emailMessage.findMany({
         where: {contactId: id},
-        orderBy: {sentAt: 'asc'},
+        orderBy: {sentAt: 'desc'},
+        take: cap.emails + 1,
         select: {direction: true, status: true, fromEmail: true, to: true, cc: true, subject: true, text: true, sentAt: true, openCount: true, clickCount: true},
       }),
-      db.activity.findMany({where: {contactId: id}, orderBy: {createdAt: 'asc'}, select: {type: true, title: true, data: true, createdAt: true}}),
+      db.activity.findMany({where: {contactId: id}, orderBy: {createdAt: 'desc'}, take: cap.activities + 1, select: {type: true, title: true, data: true, createdAt: true}}),
     ]);
-    const body = JSON.stringify({exportedAt: new Date().toISOString(), contact, notes, tasks, interactions, emails, activities}, null, 2);
+    const parts = {notes, tasks, interactions, emails, activities};
+    const truncated = (Object.keys(parts) as (keyof typeof parts)[]).filter((k) => parts[k].length > cap[k]);
+    const keep = <T>(rows: T[], n: number) => rows.slice(0, n).reverse();
+    const body = JSON.stringify(
+      {
+        exportedAt: new Date().toISOString(),
+        contact,
+        notes: keep(notes, cap.notes),
+        tasks: keep(tasks, cap.tasks),
+        interactions: keep(interactions, cap.interactions),
+        emails: keep(emails, cap.emails),
+        activities: keep(activities, cap.activities),
+        ...(truncated.length ? {truncated: Object.fromEntries(truncated.map((k) => [k, `the most recent ${cap[k]} only`]))} : {}),
+      },
+      null,
+      2,
+    );
     const slug = contactName(contact).toLowerCase().replace(/[^a-z0-9]+/g, '-');
     await audit(db, c, {action: 'export.json', entity: 'contact', recordId: id, label: contactName(contact)});
     return new Response(body, {headers: {'content-type': 'application/json; charset=utf-8', 'content-disposition': `attachment; filename="contact-${slug}.json"`}});

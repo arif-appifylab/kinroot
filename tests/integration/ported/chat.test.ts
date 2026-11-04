@@ -1,7 +1,7 @@
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../../src/server/app';
-import {agentCameOnline} from '../../../src/server/crm/inbox/chat';
+import {agentCameOnline, continueToken} from '../../../src/server/crm/inbox/chat';
 import {crmTick} from '../../../src/server/crm/lib/ticks';
 import {env} from '../support/cloudflare-workers';
 import {fakeStorage, owner, ownerAccountId, resetCrm, teammate, userId} from '../support/crm';
@@ -234,12 +234,25 @@ describe.skipIf(!DATABASE_URL)('Ported: website live chat (integration, real Pos
     expect((await ok(pub(visitor(), '/config', {meta: meta()}))).config.preChat).toBe('required');
     expect((await startChat(visitor(), {text: 'no email'})).status).toBe(400);
     const known = (await ok(own.post('/site-api/crm/contacts', {firstName: 'Kira', lastName: 'Known', email: 'kira@client-port.io'}), 201)).contact;
+    // AUDIT-2 L-4: anyone can type a known address, so it is not linked to that contact yet…
     const k = await started({text: 'Known visitor', name: 'Kira K', email: known.email.toUpperCase()});
     const row = (await thread(k.id))!;
-    expect(row.contactId).toBe(known.id);
+    expect(row.contactId).toBeNull();
+    expect((await identity(row.identityId!)).contactId).toBeNull();
+    expect(((await events('chat.started', k.id))[0]!.data as {contactId: string | null}).contactId).not.toBe(known.id);
+    expect((await detail(own, k.id)).chat.visitor.emailVerified).toBe(false);
+    // …until they open the link we emailed to that address: then it is theirs.
+    const token = await continueToken(row.id, row.identityId!, 30, known.email);
+    await ok(pub(visitor(), '/continue', {token}));
     expect((await identity(row.identityId!)).contactId).toBe(known.id);
-    expect(((await events('chat.started', k.id))[0]!.data as {contactId: string}).contactId).toBe(known.id);
+    expect((await thread(k.id))!.contactId).toBe(known.id);
+    expect((await detail(own, k.id)).chat.visitor.emailVerified).toBe(true);
     expect((await chatActivity(k.id))[0]!.contactId).toBe(known.id);
+    // A link mailed to another address proves nothing about this one.
+    const other = await started({text: 'Another', email: 'kira2@client-port.io'});
+    const otherRow = (await thread(other.id))!;
+    await ok(pub(visitor(), '/continue', {token: await continueToken(otherRow.id, otherRow.identityId!, 30, known.email)}));
+    expect((await identity(otherRow.identityId!)).contactId).not.toBe(known.id);
 
     const twin = (await ok(own.post('/site-api/crm/contacts', {firstName: 'Nova', lastName: 'Twin', email: 'nova.twin@novacorp-port.io'}), 201)).contact;
     const n = await started({text: 'New person', name: 'Nova Twin', email: 'nova@novacorp-port.io'});
@@ -254,8 +267,9 @@ describe.skipIf(!DATABASE_URL)('Ported: website live chat (integration, real Pos
     const rule = (await ok(own.post('/site-api/crm/scoring/rules', {kind: 'behavior', name: 'Chat', points: 7, event: 'chat.started'}), 201)).rule;
     const auto = (await ok(own.post('/site-api/crm/automations', {name: 'Chat auto', timezone: 'UTC', object: 'contact', trigger: {kind: 'event', event: 'chat.started', filter: {}}, steps: [{id: 's1', type: 'add_tag', target: 'contact', tag: 'chat-auto'}]}), 201)).automation;
     await ok(own.post(`/site-api/crm/automations/${auto.id}/enable`, {enabled: true}));
-    const scored = (await ok(own.post('/site-api/crm/contacts', {firstName: 'Sco', lastName: 'Red', email: 'sco@client-port.io'}), 201)).contact;
-    await started({text: 'Score me', email: scored.email});
+    // A new address: the chat makes the contact (an existing one is linked only once proved, AUDIT-2 L-4).
+    await started({text: 'Score me', email: 'sco@client-port.io'});
+    const scored = await db.contact.findFirstOrThrow({where: {email: 'sco@client-port.io'}});
     const {tagged, points} = await eventually(
       async () => ({
         tagged: ((await db.contact.findUniqueOrThrow({where: {id: scored.id}})).tags as string[]).includes('chat-auto'),
@@ -413,7 +427,8 @@ describe.skipIf(!DATABASE_URL)('Ported: website live chat (integration, real Pos
     expect((await v.get(path.replace(/sig=[^&]+/, 'sig=forged'))).status).toBe(410);
     expect((await db.file.findUniqueOrThrow({where: {id: up.file!.id}})).purpose).toBe('chat');
     const d = await detail(own, id);
-    expect(d.chat.messages.some((m: {files: {url: string}[]}) => m.files[0]?.url === `/site-api/crm/files/${up.file!.id}`)).toBe(true);
+    // Agents get short signed links too: /files/:id serves chat files to admins only (AUDIT-2 L-3).
+    expect(d.chat.messages.some((m: {files: {url: string}[]}) => m.files[0]?.url.startsWith(`/site-api/crm/public/files/${up.file!.id}?exp=`))).toBe(true);
 
     const agent = await ok(own.post('/site-api/crm/inbox/chat/upload', {name: 'reply.png', contentType: 'image/png', size: PNG.byteLength}), 201);
     expect((await fetch(new URL(agent.upload.url, ORIGIN), {method: 'PUT', headers: agent.upload.headers, body: PNG as Uint8Array<ArrayBuffer>})).status).toBe(200);

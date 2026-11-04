@@ -35,10 +35,12 @@ import {useState, type ReactNode} from 'react';
 
 import {AUTO_MAP, defaultField, FIELD_GROUPS, FIELD_LABEL, hasOptions, isInput, MAP_TARGETS, newId, type FieldType, type FormField, type FormSettings} from '@/lib/forms';
 import {useFields} from '@/lib/queries';
+import {colourName} from '@/lib/colours';
 import {cn} from '@/lib/utils';
 
 import {Button} from '../ui/button';
 import {Card} from '../ui/card';
+import {confirm} from '../ui/confirm';
 import {Dialog, DialogContent, DialogHeader, DialogTitle} from '../ui/dialog';
 import {Field, Input, NativeSelect, Switch, Textarea} from '../ui/form';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger} from '../ui/menu';
@@ -94,7 +96,19 @@ export function FormBuilder({fields, settings, onFields, onSettings}: Props) {
     requestAnimationFrame(() => document.getElementById(`canvas_${field.id}`)?.scrollIntoView({behavior: 'smooth', block: 'nearest'}));
   }
   const update = (id: string, patch: Partial<FormField>) => onFields(fields.map((f) => (f.id === id ? {...f, ...patch} : f)));
-  function remove(id: string) {
+  async function remove(id: string) {
+    // The form autosaves, and a published form changes at once (AUDIT-2 M-18): ask first.
+    const field = fields.find((f) => f.id === id);
+    if (!field) return;
+    const usedBy = fields.filter((f) => f.logic?.rules.some((r) => r.fieldId === id)).length;
+    const name = field.label.trim() || (field.type === 'page_break' ? 'page break' : 'this field');
+    const ok = await confirm({
+      title: field.type === 'page_break' ? 'Delete this page break?' : `Delete “${name}”?`,
+      description: `${usedBy ? `${usedBy} field${usedBy === 1 ? '' : 's'} show${usedBy === 1 ? 's' : ''} or hide${usedBy === 1 ? 's' : ''} by its answer: those rules are removed too. ` : ''}Answers already received keep it; new visitors no longer see it once the form saves.`,
+      confirmLabel: 'Delete field',
+      destructive: true,
+    });
+    if (!ok) return;
     // Rules pointing at a removed field are dropped too.
     onFields(
       fields
@@ -121,7 +135,7 @@ export function FormBuilder({fields, settings, onFields, onSettings}: Props) {
   };
 
   const inspector = current ? (
-    <FieldInspector key={current.id} field={current} earlier={fields.slice(0, fields.indexOf(current))} onChange={(p) => update(current.id, p)} onRemove={() => remove(current.id)} onClose={() => (setSelected(null), setSheet(false))} />
+    <FieldInspector key={current.id} field={current} earlier={fields.slice(0, fields.indexOf(current))} onChange={(p) => update(current.id, p)} onRemove={() => void remove(current.id)} onClose={() => (setSelected(null), setSheet(false))} />
   ) : (
     <FormAppearance settings={settings} onChange={onSettings} />
   );
@@ -167,7 +181,7 @@ export function FormBuilder({fields, settings, onFields, onSettings}: Props) {
                     selected={selected === f.id}
                     onSelect={() => select(f.id)}
                     onDuplicate={() => duplicate(f.id)}
-                    onRemove={() => remove(f.id)}
+                    onRemove={() => void remove(f.id)}
                   />
                 ))}
               </div>
@@ -201,7 +215,7 @@ function Palette({onAdd}: {onAdd: (t: FieldType) => void}) {
     <div className="grid gap-4">
       {FIELD_GROUPS.map((g) => (
         <div key={g.label}>
-          <p className="mb-1.5 px-1 text-[11px] font-bold tracking-wide text-slate-400 uppercase">{g.label}</p>
+          <p className="mb-1.5 px-1 text-[11px] font-bold tracking-wide text-muted-foreground uppercase">{g.label}</p>
           <div className="grid gap-0.5">
             {g.types.map((t) => {
               const Icon = FIELD_ICONS[t.type];
@@ -258,13 +272,13 @@ function CanvasItem({field: f, page, selected, onSelect, onDuplicate, onRemove}:
 
   const toolbar = (
     <div className={cn('absolute -top-3 left-2 z-10 flex items-center gap-0.5 rounded-lg border border-slate-200 bg-card p-0.5 shadow-soft transition-opacity', selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100')}>
-      <button type="button" {...attributes} {...listeners} className="cursor-grab rounded-md p-1 text-slate-400 outline-none hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-primary/30 active:cursor-grabbing" aria-label={`Drag ${f.label || FIELD_LABEL[f.type]} to reorder`}>
+      <button type="button" {...attributes} {...listeners} className="cursor-grab rounded-md p-1 text-muted-foreground outline-none hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-primary/30 active:cursor-grabbing" aria-label={`Drag ${f.label || FIELD_LABEL[f.type]} to reorder`}>
         <GripVertical className="size-3.5" />
       </button>
-      <button type="button" onClick={(e) => (e.stopPropagation(), onDuplicate())} className="cursor-pointer rounded-md p-1 text-slate-400 outline-none hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-primary/30" aria-label={`Duplicate ${f.label || FIELD_LABEL[f.type]}`}>
+      <button type="button" onClick={(e) => (e.stopPropagation(), onDuplicate())} className="cursor-pointer rounded-md p-1 text-muted-foreground outline-none hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-primary/30" aria-label={`Duplicate ${f.label || FIELD_LABEL[f.type]}`}>
         <Copy className="size-3.5" />
       </button>
-      <button type="button" onClick={(e) => (e.stopPropagation(), onRemove())} className="cursor-pointer rounded-md p-1 text-slate-400 outline-none hover:bg-rose-50 hover:text-destructive focus-visible:ring-2 focus-visible:ring-primary/30" aria-label={`Delete ${f.label || FIELD_LABEL[f.type]}`}>
+      <button type="button" onClick={(e) => (e.stopPropagation(), onRemove())} className="cursor-pointer rounded-md p-1 text-muted-foreground outline-none hover:bg-rose-50 hover:text-destructive focus-visible:ring-2 focus-visible:ring-primary/30" aria-label={`Delete ${f.label || FIELD_LABEL[f.type]}`}>
         <Trash2 className="size-3.5" />
       </button>
     </div>
@@ -332,7 +346,7 @@ function CanvasItem({field: f, page, selected, onSelect, onDuplicate, onRemove}:
 function Section({title, children}: {title: string; children: ReactNode}) {
   return (
     <div className="grid gap-3 border-b border-slate-100 px-4 py-4 last:border-0">
-      <p className="text-[11px] font-bold tracking-wide text-slate-400 uppercase">{title}</p>
+      <p className="text-[11px] font-bold tracking-wide text-muted-foreground uppercase">{title}</p>
       {children}
     </div>
   );
@@ -351,7 +365,7 @@ function FieldInspector({field: f, earlier, onChange, onRemove, onClose}: {field
       <div className="flex items-center gap-2 border-b border-slate-100 px-4 py-3">
         <span className="flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary"><Icon className="size-3.5" /></span>
         <p className="min-w-0 flex-1 text-sm font-bold text-slate-900">{FIELD_LABEL[f.type]}</p>
-        <Button variant="ghost" size="icon-sm" onClick={onRemove} aria-label="Delete field" className="text-slate-400 hover:text-destructive"><Trash2 /></Button>
+        <Button variant="ghost" size="icon-sm" onClick={onRemove} aria-label="Delete field" className="text-muted-foreground hover:text-destructive"><Trash2 /></Button>
         <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close" className="hidden xl:inline-flex"><X /></Button>
       </div>
 
@@ -566,16 +580,16 @@ function FormAppearance({settings: s, onChange}: {settings: FormSettings; onChan
               key={c || 'brand'}
               type="button"
               onClick={() => set({accent: c})}
-              title={c || 'Brand colours'}
+              title={colourName(c)}
               aria-pressed={(s.accent ?? '') === c}
               className={cn('size-8 cursor-pointer rounded-full ring-offset-2 ring-offset-card transition-transform outline-none hover:scale-110 focus-visible:ring-2 focus-visible:ring-primary', (s.accent ?? '') === c && 'ring-2 ring-slate-900')}
               style={{background: c || 'linear-gradient(135deg, var(--primary), var(--secondary))'}}
-              aria-label={c || 'Brand colours'}
+              aria-label={colourName(c)}
             />
           ))}
           <label className="relative size-8 cursor-pointer overflow-hidden rounded-full border border-slate-200 focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2" title="Custom colour">
             <input type="color" aria-label="Custom colour" className="absolute inset-0 size-full cursor-pointer opacity-0" value={s.accent || '#2563eb'} onChange={(e) => set({accent: e.target.value})} />
-            <span className="flex size-full items-center justify-center text-slate-400"><Plus className="size-4" /></span>
+            <span className="flex size-full items-center justify-center text-muted-foreground"><Plus className="size-4" /></span>
           </label>
         </div>
       </Section>

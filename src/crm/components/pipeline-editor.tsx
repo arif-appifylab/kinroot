@@ -2,6 +2,7 @@ import {ArrowDown, ArrowUp, Plus, Star, Trash2} from 'lucide-react';
 import {useState} from 'react';
 
 import {api} from '@/lib/api';
+import {colourName} from '@/lib/colours';
 import {keys, useApiMutation, useMe, usePipelines} from '@/lib/queries';
 import type {Pipeline} from '@/lib/types';
 
@@ -60,14 +61,14 @@ export function PipelineEditor({pipeline}: {pipeline: Pipeline}) {
           <Field label="Stale after (days)" error={f.error('rottingDays')}><Input type="number" inputMode="numeric" value={rottingDays} onChange={(e) => setRottingDays(Number(e.target.value))} onBlur={f.blur('rottingDays')} /></Field>
         </div>
         <div className="grid gap-2">
-          <div className="grid grid-cols-[28px_1fr_90px_76px] gap-2 px-1 text-xs font-bold tracking-wide text-slate-400 uppercase">
+          <div className="grid grid-cols-[28px_1fr_90px_76px] gap-2 px-1 text-xs font-bold tracking-wide text-muted-foreground uppercase">
             <span /> <span>Stage</span> <span>Win %</span> <span />
           </div>
           {stages.map((s, i) => (
             <div key={s.id ?? i} className="grid grid-cols-[28px_1fr_90px_76px] items-center gap-2 rounded-xl bg-slate-50 p-1.5">
               <label className="relative size-7 cursor-pointer overflow-hidden rounded-lg focus-within:ring-2 focus-within:ring-primary/40" style={{background: s.color}}>
                 <select aria-label={`Colour for ${s.name || 'this stage'}`} className="absolute inset-0 cursor-pointer opacity-0" value={s.color} onChange={(e) => patch(i, {color: e.target.value})}>
-                  {PALETTE.map((c) => <option key={c} value={c}>{c}</option>)}
+                  {PALETTE.map((c) => <option key={c} value={c}>{colourName(c)}</option>)}
                 </select>
               </label>
               <Input className="h-9 bg-card" value={s.name} onChange={(e) => patch(i, {name: e.target.value})} onBlur={f.blur('stages')} aria-label="Stage name" aria-invalid={stagesError && (!s.name.trim() || s.name.trim().length > 60) ? true : undefined} aria-describedby={stagesError ? `${pipeline.id}-stages-error` : undefined} />

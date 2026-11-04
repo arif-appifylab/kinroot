@@ -4,6 +4,7 @@ import {durationLabel, whenIn} from '@/lib/scheduling';
 import {config, CRM_APP} from '../kit/config';
 import type {Db} from '../kit/db';
 import {sendSystemEmail} from '../email/service';
+import {unconfirmedMailAllowed} from '../lib/rate-limit';
 import {getSettings} from '../lib/settings';
 import {googleCalendarUrl} from '../routes/interactions';
 import {icsUrl, manageUrl} from './bookings';
@@ -11,6 +12,16 @@ import {linkPath} from './links';
 
 type Meta = Record<string, unknown> & {origin?: string; sent?: Record<string, string>};
 type Full = Booking & {link: BookingLink | null; host: User | null};
+
+/**
+ * Where, for the invitee (AUDIT-2 M-6): the address in the email is the one typed into the booking
+ * page, so their own phone number is never written back to it (it could be any text).
+ */
+const inviteeWhere = (b: Full) => (b.locationType === 'PHONE' && !b.link?.location ? 'Phone call: we will call you on the number you gave.' : where(b));
+
+/** Invitee emails go to an address nobody confirmed: a few an hour per address at most (AUDIT-2 M-6). */
+const toInvitee = async (db: Db, b: Full, input: {subject: string; text: string}) =>
+  (await unconfirmedMailAllowed(db, b.email)) && sendSystemEmail(db, {to: [b.email], ...input, replyTo: b.host?.email});
 
 const where = (b: Booking) => {
   if (!b.location) return b.locationType === 'VIDEO' ? 'Video call (the link follows in a calendar invitation)' : null;
@@ -52,17 +63,19 @@ export async function bookingEmail(db: Db, p: {bookingId: string; change: 'booke
   const key = `${p.change}:${p.at ?? ''}`;
 
   const verb = {booked: 'Confirmed', rescheduled: 'Rescheduled', canceled: 'Canceled'}[p.change];
+  // Fixed wording: nothing the person who booked typed (name, notes, a reason) is repeated to the
+  // address they typed (AUDIT-2 M-6); the host's email below has it all.
   const inviteeLines = [
-    `Hi ${b.name.split(' ')[0]},`,
+    'Hello,',
     '',
     p.change === 'canceled'
-      ? `Your ${title} with ${hostName} has been canceled.${b.cancelReason ? `\nReason: ${b.cancelReason}` : ''}`
+      ? `Your ${title} with ${hostName} has been canceled.`
       : p.change === 'rescheduled'
         ? `Your ${title} with ${hostName} has moved to a new time.`
         : `You're booked in for ${title} with ${hostName}.`,
     '',
     `When: ${whenIn(b.startAt, b.timezone)}, ${durationLabel(minutes)}`,
-    p.change !== 'canceled' ? where(b) : null,
+    p.change !== 'canceled' ? inviteeWhere(b) : null,
     '',
     ...(p.change === 'canceled'
       ? [b.link ? `Book a new time: ${origin}/book/${await linkPath(db, b.link)}` : null]
@@ -74,9 +87,7 @@ export async function bookingEmail(db: Db, p: {bookingId: string; change: 'booke
         ]),
   ].filter((l) => l !== null);
 
-  await once(db, b, `${key}:invitee`, () =>
-    sendSystemEmail(db, {to: [b.email], subject: `${verb}: ${title} with ${hostName}`, text: inviteeLines.join('\n'), replyTo: b.host?.email}),
-  );
+  await once(db, b, `${key}:invitee`, () => toInvitee(db, b, {subject: `${verb}: ${title} with ${hostName}`, text: inviteeLines.join('\n')}));
 
   if (b.host?.email) {
     const contactUrl = b.contactId ? `${origin}${CRM_APP}/contacts/${b.contactId}` : `${origin}${CRM_APP}/meetings`;
@@ -109,16 +120,14 @@ export async function bookingReminder(db: Db, p: {bookingId: string; kind: '24h'
   const title = b.link?.name ?? b.title;
   const hostName = b.host?.name ?? (await getSettings(db)).brandName;
   const lines = [
-    `Hi ${b.name.split(' ')[0]},`,
+    'Hello,',
     '',
     `A reminder: ${title} with ${hostName} starts ${p.kind === '1h' ? 'in about an hour' : 'tomorrow'}.`,
     '',
     `When: ${whenIn(b.startAt, b.timezone)}`,
-    where(b),
+    inviteeWhere(b),
     '',
     `Need to reschedule or cancel? ${await manageUrl(origin, b.id)}`,
   ].filter((l) => l !== null);
-  await once(db, b, `reminder:${p.kind}:${p.startAt}`, () =>
-    sendSystemEmail(db, {to: [b.email], subject: `Reminder: ${title} ${p.kind === '1h' ? 'in 1 hour' : 'tomorrow'}`, text: lines.join('\n'), replyTo: b.host?.email}),
-  );
+  await once(db, b, `reminder:${p.kind}:${p.startAt}`, () => toInvitee(db, b, {subject: `Reminder: ${title} ${p.kind === '1h' ? 'in 1 hour' : 'tomorrow'}`, text: lines.join('\n')}));
 }

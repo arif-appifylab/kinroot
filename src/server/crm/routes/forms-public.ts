@@ -8,7 +8,7 @@ import type {Db} from '../kit/db';
 import type {AppEnv} from '../kit/guards';
 import {closedReason, endingOf, fileToken, formFields, formSettings, submitForm} from '../lib/form-submit';
 import {onceOf, orEarlier} from '../lib/once';
-import {ipKey, rateLimit} from '../lib/rate-limit';
+import {clientIp, hit, ipKey, rateLimit} from '../lib/rate-limit';
 import {notFound, valid} from '../lib/http';
 import {checkUpload, completeUpload, startUpload, uploadBody} from '../lib/uploads';
 
@@ -53,6 +53,8 @@ export const formsPublic = new Hono<AppEnv>()
 
   .post('/forms/:slug/event', valid('json', z.object({type: z.enum(['view', 'start'])})), async (c) => {
     const {type} = c.req.valid('json');
+    // A view / start counter, not a guard: past 20 a minute from one connection it just stops counting (AUDIT-2 L-8).
+    if (!(await hit(c.var.db, `form:event:min:${await ipKey(clientIp((n) => c.req.header(n)))}`, 20, 60))) return c.json({ok: true});
     await c.var.db.form
       .update({where: {slug: c.req.param('slug'), status: 'PUBLISHED'}, data: type === 'view' ? {views: {increment: 1}} : {starts: {increment: 1}}})
       .catch(() => null);

@@ -57,6 +57,26 @@ async function openableFile(c: AppContext, id: string) {
   if (!file || file.purpose === 'trash' || !file.ready) return null;
   // Import and export files hold whole tables: only the person who made them, or an admin.
   if (PRIVATE_PURPOSES.has(file.purpose) && file.uploadedById !== me.id && !isAdmin(me)) return null;
+  // AUDIT-2 L-3. A pending upload (a form's or a chat's, not sent yet) is only its uploader's.
+  if (file.purpose.endsWith('_pending') && (!file.uploadedById || file.uploadedById !== me.id)) return null;
+  // Chat files open through the signed links of a conversation the person may read (inbox/chat.ts).
+  if (file.purpose === 'chat' && !isAdmin(me)) return null;
+  // Ticket files follow their ticket: with owner-only visibility, tickets assigned to them or nobody.
+  if (file.purpose === 'ticket' && file.uploadedById !== me.id) {
+    const scope = await ownerScope(c);
+    if (scope.ownerId) {
+      const ticket = await c.var.db.ticket.findFirst({
+        where: {
+          // The file's contact narrows it to that person's tickets (index), then the message holding it.
+          ...(file.contactId ? {contactId: file.contactId} : {}),
+          OR: [{assigneeId: scope.ownerId}, {assigneeId: null}],
+          messages: {some: {fileIds: {array_contains: [file.id]}}},
+        },
+        select: {id: true},
+      });
+      if (!ticket) return null;
+    }
+  }
   return file;
 }
 

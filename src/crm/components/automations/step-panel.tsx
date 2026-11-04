@@ -25,7 +25,7 @@ import {WEBHOOK_SERVICE_NAMES} from '@/lib/webhook-targets';
 type Props = {step: Step; object: AutoObject; onChange: (s: Step) => void};
 
 /** Side panel for one step: its settings, problems and delete. */
-export function StepPanel({step, object, onChange, onDelete, problems, readOnly, automationId, isAdmin}: Props & {onDelete: () => void; problems: Problem[]; readOnly?: boolean; automationId: string; isAdmin: boolean}) {
+export function StepPanel({step, object, onChange, onDelete, problems, readOnly, automationId, isAdmin}: Props & {onDelete: () => unknown; problems: Problem[]; readOnly?: boolean; automationId: string; isAdmin: boolean}) {
   const meta = STEP_TYPES[step.type];
   const {icon: Icon, tone} = STEP_ICONS[step.type];
   return (
@@ -36,7 +36,7 @@ export function StepPanel({step, object, onChange, onDelete, problems, readOnly,
           <h2 className="text-base font-bold text-slate-900">{meta.label}</h2>
           <p className="text-xs text-muted-foreground">{meta.description}</p>
         </div>
-        {!readOnly && <Button variant="ghost" size="icon-sm" className="text-slate-400 hover:text-destructive" onClick={onDelete} aria-label="Delete step"><Trash2 /></Button>}
+        {!readOnly && <Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-destructive" onClick={onDelete} aria-label="Delete step"><Trash2 /></Button>}
       </div>
       {problems.length > 0 && (
         <ul className="grid gap-1 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-medium text-amber-800">

@@ -26,6 +26,7 @@ import {useEffect, useId, useMemo, useRef, useState, type ReactNode} from 'react
 import {toast} from 'sonner';
 
 import {api} from '@/lib/api';
+import {brandName} from '@/lib/brand';
 import {ago, dateTime} from '@/lib/format';
 import {
   ENTITY_LABEL,
@@ -704,7 +705,7 @@ function SecurityEditor(p: {
               </div>
             </Field>
             <div className="grid gap-2 rounded-xl bg-slate-50 p-3 text-xs text-muted-foreground @xl:col-span-2">
-              <p>The sending tool gives you a secret, or make one here. Its value goes in two places: the site secret above (in your dashboard) and the sending tool. Kinroot never stores it.</p>
+              <p>The sending tool gives you a secret, or make one here. Its value goes in two places: the site secret above (in your dashboard) and the sending tool. {brandName()} never stores it.</p>
               <div className="flex flex-wrap items-center gap-2">
                 <Button type="button" variant="secondary" size="sm" onClick={() => setGenerated(randomSecret())}><KeyRound /> Make a secret</Button>
                 {generated && (
@@ -941,7 +942,7 @@ function RequestLogDialog({hook, onClose}: {hook: IncomingWebhookRow; onClose: (
                             {Object.entries(r.headers).map(([k, v]) => (
                               <div key={k} className="flex min-w-0 flex-wrap gap-x-1.5">
                                 <dt className="font-semibold text-slate-700">{k}:</dt>
-                                <dd className={cn('min-w-0 break-all', v === '[redacted]' ? 'text-slate-400 italic' : 'text-slate-500')}>{v}</dd>
+                                <dd className={cn('min-w-0 break-all', v === '[redacted]' ? 'text-muted-foreground italic' : 'text-slate-500')}>{v}</dd>
                               </div>
                             ))}
                           </dl>

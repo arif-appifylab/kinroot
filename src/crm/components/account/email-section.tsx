@@ -16,7 +16,7 @@ export function usePasswordNeeded() {
 }
 
 /**
- * Settings → Profile › Email address: the address you sign in with, whether it is confirmed,
+ * Settings → Your account › Email address: the address you sign in with, whether it is confirmed,
  * and a change that only happens once the link sent to the NEW address is opened
  * (`POST /site-api/auth/email`; the link lands on `/account/confirm-email/`).
  */

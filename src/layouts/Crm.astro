@@ -10,6 +10,7 @@ import '../crm/styles.css';
 import {BRAND, type Brand} from '../crm/lib/brand';
 import {themeBootScript} from '../crm/lib/theme';
 import type {Viewer} from '../lib/types';
+import {SITE} from '../content/site';
 
 interface Props {
   brand: Brand;
@@ -30,7 +31,7 @@ const favicon = `/site-api/crm/public/favicon.svg?v=${`${brand.primary}${brand.s
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang={SITE.lang}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />

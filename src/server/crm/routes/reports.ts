@@ -2,7 +2,7 @@ import {Hono} from 'hono';
 import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
-import type {Prisma, Report} from '../../../generated/prisma/client';
+import {Prisma, type Report} from '../../../generated/prisma/client';
 import type {User} from '../kit/guards';
 import type {Db} from '../kit/db';
 import {currentUser, isAdmin, type AppContext, type AppEnv} from '../kit/guards';
@@ -202,9 +202,13 @@ export const reports = new Hono<AppEnv>()
 
   /** Options for ref filters (companies, forms…). */
   .get('/refs/:ref', async (c) => {
-    const sql = refList(c.req.param('ref'));
+    const ref = c.req.param('ref');
+    const sql = refList(ref);
     if (!sql) throw notFound('List');
-    return c.json({rows: await c.var.db.$queryRaw<{id: string; label: string}[]>(sql)});
+    // Companies: only those this person may open under owner-only visibility (AUDIT-2 L-2).
+    const scope = ref === 'company' ? await ownerScope(c) : {};
+    const query = scope.ownerId ? Prisma.sql`SELECT id, name AS label FROM "Company" WHERE "ownerId" = ${scope.ownerId} ORDER BY name LIMIT 500` : sql;
+    return c.json({rows: await c.var.db.$queryRaw<{id: string; label: string}[]>(query)});
   })
 
   // GET so viewers can run reports too; the definition travels as JSON in `config`.

@@ -130,12 +130,12 @@ function TasksPage() {
               <button
                 type="button"
                 onClick={(e) => (e.stopPropagation(), create.open({kind: 'task', task: t}))}
-                className={cn('min-w-0 cursor-pointer truncate rounded text-left font-semibold text-slate-900 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30', t.done && 'text-slate-400 line-through')}
+                className={cn('min-w-0 cursor-pointer truncate rounded text-left font-semibold text-slate-900 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30', t.done && 'text-muted-foreground line-through')}
               >
                 {t.title}
               </button>
             ) : (
-              <span className={cn('truncate font-semibold text-slate-900', t.done && 'text-slate-400 line-through')}>{t.title}</span>
+              <span className={cn('truncate font-semibold text-slate-900', t.done && 'text-muted-foreground line-through')}>{t.title}</span>
             )}
             {t.repeat && <Repeat className="size-3.5 shrink-0 text-slate-400" aria-label="Repeats" />}
             {t.reminderAt && !t.done && <Bell className="size-3.5 shrink-0 text-slate-400" aria-label="Has reminder" />}
@@ -152,7 +152,7 @@ function TasksPage() {
           {t.contact && <Link to="/contacts/$contactId" params={{contactId: t.contact.id}} className="inline-flex items-center gap-1 text-primary hover:underline"><User className="size-3" />{fullName(t.contact)}</Link>}
           {t.company && <Link to="/companies/$companyId" params={{companyId: t.company.id}} className="inline-flex items-center gap-1 text-primary hover:underline"><Building2 className="size-3" />{t.company.name}</Link>}
           {t.deal && <Link to="/deals/$dealId" params={{dealId: t.deal.id}} className="inline-flex items-center gap-1 text-primary hover:underline"><Handshake className="size-3" />{t.deal.title}</Link>}
-          {!t.contact && !t.company && !t.deal && <span className="text-slate-400">—</span>}
+          {!t.contact && !t.company && !t.deal && <span className="text-muted-foreground">—</span>}
         </div>
       ),
     },
@@ -171,12 +171,12 @@ function TasksPage() {
       hideBelow: 'lg',
       cell: (t) => <span className="inline-flex items-center gap-1.5"><span className={cn('size-2 rounded-full', PRIORITY[t.priority]!.dot)} />{PRIORITY[t.priority]!.label}</span>,
     },
-    {key: 'queue', header: 'Queue', hideBelow: 'xl', cell: (t) => (t.queue ? <Badge tone="neutral">{t.queue}</Badge> : <span className="text-slate-400">—</span>)},
+    {key: 'queue', header: 'Queue', hideBelow: 'xl', cell: (t) => (t.queue ? <Badge tone="neutral">{t.queue}</Badge> : <span className="text-muted-foreground">—</span>)},
     {
       key: 'assignee',
       header: 'Assigned to',
       hideBelow: 'lg',
-      cell: (t) => (t.assignee ? <span className="inline-flex items-center gap-2"><Avatar name={t.assignee.name} color={t.assignee.color} src={t.assignee.avatarUrl} size="xs" />{t.assignee.name.split(' ')[0]}</span> : <span className="text-slate-400">Unassigned</span>),
+      cell: (t) => (t.assignee ? <span className="inline-flex items-center gap-2"><Avatar name={t.assignee.name} color={t.assignee.color} src={t.assignee.avatarUrl} size="xs" />{t.assignee.name.split(' ')[0]}</span> : <span className="text-muted-foreground">Unassigned</span>),
     },
   ];
 
@@ -268,14 +268,14 @@ function TasksPage() {
           <Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={bulk.isPending} pending={bulk.isPending && bulk.variables?.action === 'complete'} pendingLabel="Completing…" onClick={() => bulk.mutate({action: 'complete'})}><CheckCircle2 /> Complete</Button>
         )}
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={bulk.isPending} aria-busy={(bulk.isPending && bulk.variables?.action === 'assign') || undefined}><UserCheck /> Assign</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={bulk.isPending} pending={bulk.isPending && bulk.variables?.action === 'assign'} pendingLabel="Assigning…"><UserCheck /> Assign</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             {team.data?.map((u) => <DropdownMenuItem key={u.id} onSelect={() => bulk.mutate({action: 'assign', value: u.id})}>{u.name}</DropdownMenuItem>)}
           </DropdownMenuContent>
         </DropdownMenu>
         <RescheduleMenu busy={bulk.isPending} onPick={(iso) => bulk.mutate({action: 'reschedule', value: iso})} />
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" disabled={bulk.isPending} aria-busy={(bulk.isPending && bulk.variables?.action === 'delete') || undefined}><Trash2 /> Delete</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" disabled={bulk.isPending} pending={bulk.isPending && bulk.variables?.action === 'delete'} pendingLabel="Deleting…"><Trash2 /> Delete</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             <DropdownMenuLabel>Delete {selected.size} tasks?</DropdownMenuLabel>
             <DropdownMenuItem destructive onSelect={() => bulk.mutate({action: 'delete'})}>Yes, delete</DropdownMenuItem>

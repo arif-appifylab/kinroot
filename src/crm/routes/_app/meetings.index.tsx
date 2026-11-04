@@ -155,7 +155,7 @@ function MeetingItem({m, showHost}: {m: MeetingRow; showHost: boolean}) {
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <p className={cn('truncate text-sm font-semibold text-slate-900', canceled && 'text-slate-400 line-through')}>{m.title || 'Meeting'}</p>
+          <p className={cn('truncate text-sm font-semibold text-slate-900', canceled && 'text-muted-foreground line-through')}>{m.title || 'Meeting'}</p>
           {m.booking && <Badge tone="violet"><Link2 /> {m.booking.linkName ?? 'Booked online'}</Badge>}
           {canceled && <Badge tone="rose">Canceled</Badge>}
           {m.onCalendar && (
@@ -309,7 +309,7 @@ function Snippet({code, label}: {code: string; label: string}) {
   return (
     <div className="relative">
       <pre className="overflow-x-auto rounded-xl bg-slate-950 p-4 pr-12 text-xs leading-relaxed text-slate-200 scrollbar-thin">{code}</pre>
-      <Button size="icon-sm" variant="ghost" className="absolute top-2 right-2 text-slate-400 hover:bg-white/10 hover:text-white" onClick={() => copy(code, `${label} copied`)} aria-label={`Copy ${label}`}>
+      <Button size="icon-sm" variant="ghost" className="absolute top-2 right-2 text-muted-foreground hover:bg-white/10 hover:text-white" onClick={() => copy(code, `${label} copied`)} aria-label={`Copy ${label}`}>
         <Copy />
       </Button>
     </div>
@@ -319,18 +319,16 @@ function Snippet({code, label}: {code: string; label: string}) {
 function EmbedDialog({link, onClose}: {link: BookingLinkRow; onClose: () => void}) {
   // Other websites can't show this site inside their pages (X-Frame-Options: DENY): they link to it.
   const button = `<a href="${link.url}" target="_blank" rel="noopener" style="display:inline-block;padding:12px 20px;border-radius:12px;background:#2563eb;color:#fff;font:600 15px/1.2 system-ui,sans-serif;text-decoration:none">Book a meeting</a>`;
-  const widget = `import {BookingWidget} from '@/components/booking/booking-widget';\n\n<BookingWidget link="${link.path}" />`;
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent size="lg">
         <DialogHeader>
           <DialogTitle>Share “{link.name}”</DialogTitle>
-          <DialogDescription>Send the link, add a booking button to any website, or drop it into a page of this app.</DialogDescription>
+          <DialogDescription>Send the link, or add a booking button to any website.</DialogDescription>
         </DialogHeader>
         <DialogBody className="gap-5">
           <Field label="Direct link" group><Snippet code={link.url} label="Link" /></Field>
           <Field label="Button on a website" group hint="It opens the booking page. Other websites can't show this site inside their own page."><Snippet code={button} label="Button code" /></Field>
-          <Field label="In a page built in this app" group><Snippet code={widget} label="Component" /></Field>
         </DialogBody>
       </DialogContent>
     </Dialog>

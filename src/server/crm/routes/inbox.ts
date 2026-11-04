@@ -12,7 +12,7 @@ import {audit} from '../lib/audit';
 import {associateByDomain} from '../lib/domains';
 import {checkDuplicates} from '../lib/duplicates';
 import {emit} from '../lib/events';
-import {fieldError, intParam, MAX_PAGE, notFound, ownerScope, valid} from '../lib/http';
+import {fieldError, intParam, MAX_PAGE, notFound, ownerScope, shownLink, valid} from '../lib/http';
 import {mentionedUsers, notify, notifyMentions} from '../lib/notify';
 import {stripQuoted} from '../lib/ticket-mail';
 import {createTicket} from '../lib/tickets';
@@ -37,7 +37,7 @@ import {
 import {ONLINE_MS} from '@/lib/chat';
 import {filesFor, identityLabel, lastChannelMessages, linkChannelContact} from '../inbox/channel-messages';
 import {agentCameOnline, getChatSettings} from '../inbox/chat';
-import {agentMessage, chatDetail, markSeenByTeam, visitorPresence} from '../inbox/chat-agent';
+import {agentMessage, chatDetail, markSeenByTeam, visitorPresence, withAgentLinks} from '../inbox/chat-agent';
 import {receivedHtmlReader} from '../inbox/sanitize';
 import {channelWhere, findReadable, inboxScope, viewWhere, withVisibleTickets, type InboxScope} from '../inbox/scope';
 import {getInboxSettings, hasTeamAccess, saveInboxSettings} from '../inbox/settings';
@@ -83,7 +83,8 @@ function searchWhere(q: string): Prisma.EmailThreadWhereInput {
 
 const listInclude = {
   assignee: {select: userSelect},
-  contact: {select: {id: true, firstName: true, lastName: true, email: true}},
+  // `ownerId` only to hide a contact the viewer may not open (`shownLink`); never sent.
+  contact: {select: {id: true, firstName: true, lastName: true, email: true, ownerId: true}},
   account: {select: {id: true, fromEmail: true, label: true, userId: true}},
   identity: {select: {id: true, name: true, email: true, lastSeenAt: true}},
   messages: {orderBy: {sentAt: 'desc' as const}, take: 1, select: {direction: true, fromEmail: true, fromName: true, text: true, sentAt: true}},
@@ -202,7 +203,7 @@ export const inbox = new Hono<AppEnv>()
     const lastChannel = await lastChannelMessages(db, rows.filter((r) => isMessageChannel(r.channel)).map((r) => r.id));
     const preview = (text: string | null) => (text ?? '').replace(/\s+/g, ' ').slice(0, 160);
     return c.json({
-      rows: rows.map(({messages, identity, ...t}) => {
+      rows: rows.map(({messages, identity, contact, ...t}) => {
         const ch = lastChannel.get(t.id);
         const email = messages[0];
         const last =
@@ -210,7 +211,7 @@ export const inbox = new Hono<AppEnv>()
             ? {direction: ch.direction, fromEmail: identity?.email ?? '', fromName: ch.direction === 'INBOUND' && identity ? identityLabel(identity) : null, text: preview(ch.text) || (strings(ch.fileIds).length ? 'Sent a file' : ''), sentAt: ch.createdAt}
             : email ? {...email, text: preview(email.text)} : null;
         const sender = identity ? {email: identity.email ?? '', name: identityLabel(identity)} : byThread.get(t.id) ? {email: byThread.get(t.id)!.fromEmail, name: byThread.get(t.id)!.fromName} : null;
-        return {...t, _count: {...t._count, messages: t._count.messages + t._count.channelMessages}, sender, personal: !!t.account?.userId, last, online: !!identity && Date.now() - identity.lastSeenAt.getTime() < 60_000};
+        return {...t, contact: shownLink(contact, scope.owner), _count: {...t._count, messages: t._count.messages + t._count.channelMessages}, sender, personal: !!t.account?.userId, last, online: !!identity && Date.now() - identity.lastSeenAt.getTime() < 60_000};
       }),
       total,
       page: q.page,
@@ -361,7 +362,7 @@ export const inbox = new Hono<AppEnv>()
     const chat = isMessageChannel(found.channel);
     // The agent is looking at it: the visitor's new messages count as read, and so does the conversation.
     const [files] = await Promise.all([
-      chat ? filesFor(db, channelMessages) : new Map(),
+      chat ? filesFor(db, channelMessages).then(withAgentLinks) : new Map(),
       chat ? markSeenByTeam(db, channelMessages) : null,
       unread ? db.emailThread.update({where: {id: found.id}, data: {unread: false}}) : null,
     ]);

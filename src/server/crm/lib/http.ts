@@ -169,3 +169,14 @@ export function sortBy(sort: string | undefined, dir: 'asc' | 'desc' | undefined
   const field = sort && allowed.includes(sort) ? sort : fallback;
   return {[field]: dir ?? (field === fallback ? 'desc' : 'asc')};
 }
+
+/**
+ * A linked contact / company / deal as this person may see it (read with its `ownerId`): null when
+ * owner-only visibility hides it, and the owner id is never sent. The `shownTask` / `scopedDeal` rule
+ * for any list that shows a linked record's name (AUDIT-2 L-2).
+ */
+export function shownLink<T extends {ownerId: string | null}>(link: T | null | undefined, scope: {ownerId?: string}): Omit<T, 'ownerId'> | null {
+  if (!link || (scope.ownerId && link.ownerId !== scope.ownerId)) return null;
+  const {ownerId: _o, ...rest} = link;
+  return rest;
+}

@@ -115,7 +115,7 @@ export function AttachmentsCard({record}: {record: RecordLink}) {
           >
             <Paperclip className="size-5 text-slate-300" />
             {canEdit ? 'Drop files here or click to upload' : 'No files yet'}
-            {canEdit && <span className="text-xs text-slate-400">Up to 5 MB each</span>}
+            {canEdit && <span className="text-xs text-muted-foreground">Up to 5 MB each</span>}
           </button>
         )}
         {rows.map((f) => {

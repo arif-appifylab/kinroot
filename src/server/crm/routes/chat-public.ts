@@ -29,6 +29,7 @@ import {
   visitorIdFromToken,
   visitorMessage,
   visitorPoll,
+  visitorProvedEmail,
   visitorToken,
   visitorView,
   type VisitorMeta,
@@ -321,7 +322,9 @@ export const chatPublic = new Hono<AppEnv>()
     const identity = await db.channelIdentity.findFirst({where: {id: parsed.identityId, channel: 'chat', blockedAt: null}});
     const thread = identity ? await db.emailThread.findFirst({where: {id: parsed.threadId, identityId: identity.id, trashedAt: null}}) : null;
     if (!identity || !thread) throw new HTTPException(410, {message: 'This conversation is no longer available.'});
-    const touched = await touchVisitor(db, identity, {userAgent: c.req.header('user-agent') ?? null}, {force: true});
+    // A link mailed to their address proves it is theirs (AUDIT-2 L-4).
+    const proved = await visitorProvedEmail(db, identity, parsed.proof);
+    const touched = await touchVisitor(db, proved, {userAgent: c.req.header('user-agent') ?? null}, {force: true});
     return c.json({session: {token: await visitorToken(identity.id), name: touched.name, email: touched.email, conversation: await visitorView(db, thread, publicOrigin(c.req.raw))} satisfies VisitorSession});
   });
 

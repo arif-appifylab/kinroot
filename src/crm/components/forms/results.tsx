@@ -177,7 +177,7 @@ function ResponseDialog({response: r, formId, onClose}: {response: FormSubmissio
           </dl>
           {meta.length > 0 && (
             <div>
-              <p className="mb-1.5 text-xs font-bold tracking-wide text-slate-400 uppercase">Attribution</p>
+              <p className="mb-1.5 text-xs font-bold tracking-wide text-muted-foreground uppercase">Attribution</p>
               <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-xs">
                 {meta.map(([k, v]) => (
                   <div key={k} className="contents">

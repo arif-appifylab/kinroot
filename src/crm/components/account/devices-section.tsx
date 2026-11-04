@@ -15,7 +15,7 @@ import {FormError, PendingButton} from './form';
 const isPhone = (device: string) => /iphone|ipad|ios|android|mobile|phone|tablet/i.test(device);
 
 /**
- * Settings → Security › Signed-in devices (`GET /site-api/auth/sessions`): sign out one
+ * Settings → Your account › Signed-in devices (`GET /site-api/auth/sessions`): sign out one
  * (`DELETE /sessions/:id`), every other one, or every device including this one (`POST /logout-all`).
  */
 export function DevicesSection() {

@@ -20,6 +20,14 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Errors a screen already shows in place: `'fields'` when a form put them under its fields (`f.fail`),
+ * `'shown'` when the words sit next to the control (an inline property editor). `useApiMutation`
+ * reads it to toast "Check the highlighted fields." only when something was highlighted, and nothing
+ * when the words are already on screen.
+ */
+export const shownInPlace = new WeakMap<object, 'fields' | 'shown'>();
+
 type Query = Record<string, string | number | boolean | null | undefined>;
 
 export function qs(params?: Query) {

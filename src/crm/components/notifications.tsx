@@ -139,7 +139,7 @@ export function NotificationBell() {
                 <div className="min-w-0 flex-1">
                   <p className={cn('text-sm leading-snug', n.readAt ? 'text-slate-600' : 'font-semibold text-slate-900')}>{n.title}</p>
                   {n.body && <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{n.body}</p>}
-                  <p className="mt-1 text-[11px] text-slate-400">{ago(n.createdAt)}</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">{ago(n.createdAt)}</p>
                 </div>
                 {!n.readAt && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
               </button>

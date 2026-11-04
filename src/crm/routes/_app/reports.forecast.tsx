@@ -204,7 +204,7 @@ function DealRow({deal, canEdit}: {deal: ForecastDeal; canEdit: boolean}) {
       <td className={cn('px-3 py-2.5 whitespace-nowrap', overdue ? 'font-semibold text-rose-700' : 'text-slate-600')}>{shortDate(deal.expectedCloseDate)}</td>
       <td className="px-3 py-2.5 text-slate-600">
         <span className="inline-flex items-center gap-1.5">
-          <span className="size-2 rounded-full" style={{background: deal.stage.color}} /> {deal.stage.name} <span className="text-slate-400">{deal.stage.probability}%</span>
+          <span className="size-2 rounded-full" style={{background: deal.stage.color}} /> {deal.stage.name} <span className="text-muted-foreground">{deal.stage.probability}%</span>
         </span>
       </td>
       <td className="px-3 py-2.5">{deal.owner && <span className="inline-flex items-center gap-2 text-slate-600"><Avatar name={deal.owner.name} color={deal.owner.color} src={deal.owner.avatarUrl} size="xs" /> {deal.owner.name}</span>}</td>

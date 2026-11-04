@@ -182,7 +182,7 @@ export function ImportDrawer({entity, open, onOpenChange, importId, listId}: {en
               {STEPS.map((s, i) => {
                 const at = STEPS.findIndex((x) => x.key === step);
                 return (
-                  <li key={s.key} className={cn('flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold', i === at ? 'bg-accent text-primary' : i < at ? 'text-slate-600' : 'text-slate-400')} aria-current={i === at ? 'step' : undefined}>
+                  <li key={s.key} className={cn('flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold', i === at ? 'bg-accent text-primary' : i < at ? 'text-slate-600' : 'text-muted-foreground')} aria-current={i === at ? 'step' : undefined}>
                     <span className={cn('flex size-4 items-center justify-center rounded-full text-[10px]', i <= at ? 'bg-primary text-white' : 'bg-slate-200 text-slate-500')}>{i + 1}</span>
                     {s.label}
                   </li>

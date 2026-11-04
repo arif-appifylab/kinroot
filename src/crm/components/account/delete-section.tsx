@@ -11,7 +11,7 @@ import {usePasswordNeeded} from './email-section';
 import {FormError, FormField, PasswordInput, PendingButton, useForm} from './form';
 
 /**
- * Settings → Security › Danger zone: deletes the account (`POST /site-api/auth/delete-account`),
+ * Settings → Your account › Danger zone: deletes the account (`POST /site-api/auth/delete-account`),
  * signs out everywhere and leaves for the website. Typed DELETE, then one more confirmation.
  */
 export function DeleteSection() {

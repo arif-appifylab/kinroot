@@ -40,7 +40,7 @@ import {Field, Input} from '../ui/form';
 import {is, useFormState} from '../ui/form-state';
 import {LoadError} from '../data-table';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip} from '../ui/menu';
-import {Avatar, EmptyState, Skeleton} from '../ui/misc';
+import {Avatar, CUSTOMER_COLOR, EmptyState, Skeleton} from '../ui/misc';
 import {useChimeOn} from './chat-sound';
 import {ChatComposer, ChatTimeline} from './chat-thread';
 import {ConversationSidebar} from './conversation-sidebar';
@@ -125,7 +125,7 @@ function MessageBody({m}: {m: EmailMessage}) {
   const [main, rest] = splitQuoted(m.text ?? '');
   return (
     <div>
-      <p className="text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-slate-800">{main || <span className="text-slate-400">(empty message)</span>}</p>
+      <p className="text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-slate-800">{main || <span className="text-muted-foreground">(empty message)</span>}</p>
       {rest && (
         <>
           <button type="button" onClick={() => setQuoted((v) => !v)} className="mt-2 cursor-pointer rounded bg-slate-100 px-2 text-xs font-bold text-slate-500 hover:bg-slate-200" aria-label={quoted ? 'Hide quoted text' : 'Show quoted text'}>···</button>
@@ -142,7 +142,7 @@ function MessageCard({m}: {m: EmailMessage}) {
   return (
     <li className={cn('min-w-0 rounded-xl border p-4 shadow-soft', inbound ? 'border-slate-100 bg-card' : 'border-blue-100 bg-blue-50/40')}>
       <header className="mb-3 flex items-start gap-3">
-        <Avatar name={name} color={inbound ? '#0d9488' : m.sender?.color} src={inbound ? null : m.sender?.avatarUrl} size="sm" />
+        <Avatar name={name} color={inbound ? CUSTOMER_COLOR : m.sender?.color} src={inbound ? null : m.sender?.avatarUrl} size="sm" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-slate-900">{name} {inbound && m.fromName && <span className="font-normal text-muted-foreground">{m.fromEmail}</span>}</p>
           <p className="truncate text-xs text-muted-foreground">to {m.to.join(', ')}{m.cc.length ? `, cc ${m.cc.join(', ')}` : ''}</p>

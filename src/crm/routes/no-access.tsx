@@ -6,6 +6,7 @@ import {Button} from '@/components/ui/button';
 import {pageTitle} from '@/lib/brand';
 import {signInPath} from '@/lib/api';
 import {useAuth} from '@/lib/queries';
+import {useWebsiteOn} from '@/lib/use-website-on';
 import {logout} from '../../platform/browser';
 
 export const Route = createFileRoute('/no-access')({
@@ -17,6 +18,7 @@ export const Route = createFileRoute('/no-access')({
 function NoAccess() {
   const auth = useAuth();
   const signedIn = auth.data?.signedIn ?? false;
+  const websiteOn = useWebsiteOn();
   return (
     <AuthLayout
       title={signedIn ? 'You are not on' : 'Sign in to'}
@@ -39,9 +41,11 @@ function NoAccess() {
             </a>
           </Button>
         )}
-        <a className="text-center text-sm text-muted-foreground hover:text-foreground" href="/">
-          Back to the website
-        </a>
+        {websiteOn && (
+          <a className="text-center text-sm text-muted-foreground hover:text-foreground" href="/">
+            Back to the website
+          </a>
+        )}
       </div>
     </AuthLayout>
   );

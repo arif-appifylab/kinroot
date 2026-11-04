@@ -3,6 +3,7 @@ import {useState, type ReactNode} from 'react';
 
 import {AuthLayout} from '@/components/auth-layout';
 import type {Brand} from '@/lib/brand';
+import {useWebsiteOn} from '@/lib/use-website-on';
 import {BrandProvider} from '@/lib/use-brand';
 
 import {nextPath, takeToken} from '../../../lib/account';
@@ -14,6 +15,8 @@ import {nextPath, takeToken} from '../../../lib/account';
  * of Enter can never send a password as a plain GET form.
  */
 export function AuthShell({brand, title, highlight, subtitle, footer, children}: {brand: Brand; title: string; highlight: string; subtitle?: ReactNode; footer?: ReactNode; children: ReactNode}) {
+  // With the website off, `/` comes straight back to sign-in: no link that goes round in a circle.
+  const websiteOn = useWebsiteOn();
   return (
     <BrandProvider brand={brand}>
       <AuthLayout
@@ -23,11 +26,13 @@ export function AuthShell({brand, title, highlight, subtitle, footer, children}:
         footer={
           <div className="grid gap-4">
             {footer}
-            <p className="text-center">
-              <a href="/" className="inline-flex items-center gap-1 font-medium text-muted-foreground hover:text-foreground focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
-                <ArrowLeft className="size-3.5" aria-hidden /> Back to the website
-              </a>
-            </p>
+            {websiteOn && (
+              <p className="text-center">
+                <a href="/" className="inline-flex items-center gap-1 font-medium text-muted-foreground hover:text-foreground focus-visible:rounded focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+                  <ArrowLeft className="size-3.5" aria-hidden /> Back to the website
+                </a>
+              </p>
+            )}
           </div>
         }
       >

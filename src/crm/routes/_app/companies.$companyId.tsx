@@ -8,7 +8,7 @@ import {CompanyMergeDialog} from '@/components/record-merge';
 import {useBinToast} from '@/components/recycle-bin-toast';
 import {SingleContactPicker, TagInput, UserSelect} from '@/components/pickers';
 import {PropertyHistoryMenuItem, PropertyHistoryProvider} from '@/components/property-history';
-import {ChoiceProperty, CustomFieldProperties, EditableProperty, NumberProperty, Property, PropertyCard, TextProperty} from '@/components/properties';
+import {ChoiceProperty, CustomFieldProperties, EditableProperty, NumberProperty, Property, PropertyCard, TextProperty, propertyRules} from '@/components/properties';
 import {ActivityButtons, Composer, RecordTasks, Timeline} from '@/components/timeline';
 import {AttachmentsCard} from '@/components/attachments';
 import {AutomationsCard} from '@/components/automations/record-tools';
@@ -135,33 +135,33 @@ function CompanyPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_300px]">
         <div className="grid min-w-0 grid-cols-1 content-start gap-6">
           <PropertyCard title="About">
-            <TextProperty label="Name" field="name" maxLength={COMPANY_LIMITS.name} value={c.name} onSave={(v) => v && save.mutate({name: v})} />
-            <TextProperty label="Domain" field="domain" maxLength={COMPANY_LIMITS.domain} value={c.domain} onSave={(v) => save.mutate({domain: v})} />
-            <TextProperty label="Website" field="website" value={c.website} href={c.website ?? undefined} onSave={(v) => save.mutate({website: v})} />
-            <ChoiceProperty label="Industry" field="industry" noun="industry" creatable value={c.industry} options={settings.data?.settings.industries ?? []} onSave={(v) => save.mutate({industry: v})} />
-            <ChoiceProperty label="Type" field="type" noun="type" creatable value={c.type} options={settings.data?.settings.companyTypes ?? []} onSave={(v) => save.mutate({type: v})} />
-            <NumberProperty label="Employees" field="employees" value={c.employees} onSave={(v) => save.mutate({employees: v})} />
-            <ChoiceProperty label="Size" field="size" value={c.size} options={COMPANY_SIZES} onSave={(v) => save.mutate({size: v})} />
-            <NumberProperty label="Annual revenue" field="annualRevenue" value={c.annualRevenue} format={(n) => money(n, currency)} onSave={(v) => save.mutate({annualRevenue: v})} />
-            <TextProperty label="Phone" field="phone" maxLength={COMPANY_LIMITS.phone} value={c.phone} href={c.phone ? `tel:${c.phone}` : undefined} onSave={(v) => save.mutate({phone: v})} />
-            <TextProperty label="Address" field="address" maxLength={COMPANY_LIMITS.address} value={c.address} onSave={(v) => save.mutate({address: v})} />
-            <TextProperty label="City" field="city" maxLength={COMPANY_LIMITS.city} value={c.city} onSave={(v) => save.mutate({city: v})} />
-            <TextProperty label="State / region" field="state" maxLength={COMPANY_LIMITS.state} value={c.state} onSave={(v) => save.mutate({state: v})} />
-            <TextProperty label="Postal code" field="postalCode" maxLength={COMPANY_LIMITS.postalCode} value={c.postalCode} onSave={(v) => save.mutate({postalCode: v})} />
-            <TextProperty label="Country" field="country" maxLength={COMPANY_LIMITS.country} value={c.country} onSave={(v) => save.mutate({country: v})} />
-            <ChoiceProperty label="Time zone" field="timezone" value={c.timezone} options={zones} onSave={(v) => save.mutate({timezone: v})} />
-            <TextProperty label="LinkedIn" field="linkedin" value={c.linkedin} href={c.linkedin ?? undefined} onSave={(v) => save.mutate({linkedin: v})} />
-            <TextProperty label="Description" field="description" value={c.description} onSave={(v) => save.mutate({description: v})} />
+            <TextProperty label="Name" field="name" maxLength={COMPANY_LIMITS.name} value={c.name} required="Enter the company name." onSave={(v) => save.mutateAsync({name: v})} />
+            <TextProperty label="Domain" field="domain" maxLength={COMPANY_LIMITS.domain} value={c.domain} onSave={(v) => save.mutateAsync({domain: v})} />
+            <TextProperty label="Website" field="website" rules={[propertyRules.webAddress]} value={c.website} href={c.website ?? undefined} onSave={(v) => save.mutateAsync({website: v})} />
+            <ChoiceProperty label="Industry" field="industry" noun="industry" creatable value={c.industry} options={settings.data?.settings.industries ?? []} onSave={(v) => save.mutateAsync({industry: v})} />
+            <ChoiceProperty label="Type" field="type" noun="type" creatable value={c.type} options={settings.data?.settings.companyTypes ?? []} onSave={(v) => save.mutateAsync({type: v})} />
+            <NumberProperty label="Employees" field="employees" rules={[propertyRules.number({min: 0, max: 10_000_000, integer: true})]} value={c.employees} onSave={(v) => save.mutateAsync({employees: v})} />
+            <ChoiceProperty label="Size" field="size" value={c.size} options={COMPANY_SIZES} onSave={(v) => save.mutateAsync({size: v})} />
+            <NumberProperty label="Annual revenue" field="annualRevenue" rules={[propertyRules.number({min: 0, max: 1e13})]} value={c.annualRevenue} format={(n) => money(n, currency)} onSave={(v) => save.mutateAsync({annualRevenue: v})} />
+            <TextProperty label="Phone" field="phone" maxLength={COMPANY_LIMITS.phone} value={c.phone} href={c.phone ? `tel:${c.phone}` : undefined} onSave={(v) => save.mutateAsync({phone: v})} />
+            <TextProperty label="Address" field="address" maxLength={COMPANY_LIMITS.address} value={c.address} onSave={(v) => save.mutateAsync({address: v})} />
+            <TextProperty label="City" field="city" maxLength={COMPANY_LIMITS.city} value={c.city} onSave={(v) => save.mutateAsync({city: v})} />
+            <TextProperty label="State / region" field="state" maxLength={COMPANY_LIMITS.state} value={c.state} onSave={(v) => save.mutateAsync({state: v})} />
+            <TextProperty label="Postal code" field="postalCode" maxLength={COMPANY_LIMITS.postalCode} value={c.postalCode} onSave={(v) => save.mutateAsync({postalCode: v})} />
+            <TextProperty label="Country" field="country" maxLength={COMPANY_LIMITS.country} value={c.country} onSave={(v) => save.mutateAsync({country: v})} />
+            <ChoiceProperty label="Time zone" field="timezone" value={c.timezone} options={zones} onSave={(v) => save.mutateAsync({timezone: v})} />
+            <TextProperty label="LinkedIn" field="linkedin" rules={[propertyRules.webAddress]} value={c.linkedin} href={c.linkedin ?? undefined} onSave={(v) => save.mutateAsync({linkedin: v})} />
+            <TextProperty label="Description" field="description" value={c.description} onSave={(v) => save.mutateAsync({description: v})} />
             <EditableProperty
               label="Owner" field="ownerId"
               value={c.ownerId}
-              display={c.owner ? <span className="inline-flex items-center gap-1.5"><Avatar name={c.owner.name} color={c.owner.color} src={c.owner.avatarUrl} size="xs" />{c.owner.name}</span> : <span className="text-slate-400">Unassigned</span>}
+              display={c.owner ? <span className="inline-flex items-center gap-1.5"><Avatar name={c.owner.name} color={c.owner.color} src={c.owner.avatarUrl} size="xs" />{c.owner.name}</span> : <span className="text-muted-foreground">Unassigned</span>}
               editor={({value, onChange}) => <UserSelect value={value} onChange={onChange} />}
-              onSave={(v) => save.mutate({ownerId: v})}
+              onSave={(v) => save.mutateAsync({ownerId: v})}
             />
-            <EditableProperty label="Tags" field="tags" value={c.tags} display={c.tags.length ? <span className="flex flex-wrap gap-1">{c.tags.map((t) => <Badge key={t} tone="teal">{t}</Badge>)}</span> : <span className="text-slate-400">—</span>} editor={({value, onChange}) => <TagInput entity="COMPANY" value={value} onChange={onChange} />} onSave={(v) => save.mutate({tags: v})} />
+            <EditableProperty label="Tags" field="tags" value={c.tags} display={c.tags.length ? <span className="flex flex-wrap gap-1">{c.tags.map((t) => <Badge key={t} tone="teal">{t}</Badge>)}</span> : <span className="text-muted-foreground">—</span>} editor={({value, onChange}) => <TagInput entity="COMPANY" value={value} onChange={onChange} />} onSave={(v) => save.mutateAsync({tags: v})} />
             <Property label="Created">{shortDate(c.createdAt)}</Property>
-            {fields.data && <CustomFieldProperties fields={fields.data} values={c.custom as Record<string, unknown>} currency={currency} onSave={(key, v) => save.mutate({custom: {[key]: v}})} />}
+            {fields.data && <CustomFieldProperties fields={fields.data} values={c.custom as Record<string, unknown>} currency={currency} onSave={(key, v) => save.mutateAsync({custom: {[key]: v}})} />}
           </PropertyCard>
 
           <CompanyContacts company={c} />

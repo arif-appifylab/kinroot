@@ -38,13 +38,15 @@ const DAY = 86_400_000;
 const PAGE = 5000;
 
 export type Audience = {
-  /** contacts in the list the user may see */
+  /** contacts in the list the user may see (counted in SQL) */
   contacts: number;
   noEmail: number;
   optedOut: number;
   duplicates: number;
-  /** one per address, the first contact (oldest) wins */
+  /** one per address, the first contact (oldest) wins; at most `limit + 1` (then `capped`) */
   recipients: {email: string; contactId: string}[];
+  /** More than `limit` recipients: reading stopped there, so the left-out counts cover what was read. */
+  capped?: boolean;
 };
 
 const usable = (email: string | null): email is string => !!email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
@@ -52,42 +54,60 @@ const usable = (email: string | null): email is string => !!email && /^[^\s@]+@[
 /**
  * Who a broadcast to this list reaches: every visible member with an email
  * address, minus opted-out addresses (any contact with that address opted out,
- * the same rule sendEmail() applies) and duplicate addresses.
+ * the same rule sendEmail() applies) and duplicate addresses. The list size is
+ * counted in SQL and only contacts with an address are read, in pages, stopping
+ * once more than `limit` recipients are found (AUDIT-2 M-13): a 100k-contact list
+ * costs a handful of queries, never the whole list in memory.
  */
-export async function resolveAudience(db: Db, list: Pick<ContactList, 'id' | 'kind' | 'rules'>, scope: {ownerId?: string}): Promise<Audience> {
+export async function resolveAudience(db: Db, list: Pick<ContactList, 'id' | 'kind' | 'rules'>, scope: {ownerId?: string}, limit = MAX_RECIPIENTS): Promise<Audience> {
   const where: Prisma.ContactWhereInput = {AND: [await listContactWhere(db, list)], ...scope};
+  const withEmail: Prisma.ContactWhereInput = {AND: [where, {email: {not: null}}]};
   const out: Audience = {contacts: 0, noEmail: 0, optedOut: 0, duplicates: 0, recipients: []};
   const candidates = new Map<string, string>(); // email → contactId
-  let duplicates = 0;
+  let kept = 0;
+  let read = 0;
   let cursor: string | undefined;
+  const contacts = (out.contacts = await db.contact.count({where}));
   for (;;) {
     const rows = await db.contact.findMany({
-      where,
+      where: withEmail,
       select: {id: true, email: true, emailOptOut: true},
       orderBy: [{createdAt: 'asc'}, {id: 'asc'}],
       take: PAGE,
       ...(cursor ? {cursor: {id: cursor}, skip: 1} : {}),
     });
+    read += rows.length;
+    const page = new Map<string, string>();
     for (const r of rows) {
-      out.contacts++;
       if (!usable(r.email)) out.noEmail++;
       else if (r.emailOptOut) out.optedOut++;
       else {
         const email = r.email.trim().toLowerCase();
-        if (candidates.has(email)) duplicates++;
-        else candidates.set(email, r.id);
+        if (candidates.has(email) || page.has(email)) out.duplicates++;
+        else page.set(email, r.id);
       }
+    }
+    // An address is out when any contact with it opted out (also outside the list): checked a page at a time.
+    const emails = [...page.keys()];
+    const chunks = Array.from({length: Math.ceil(emails.length / 1000)}, (_, i) => emails.slice(i * 1000, i * 1000 + 1000));
+    const blocked = new Set((await Promise.all(chunks.map((ch) => optedOutEmails(db, ch)))).flatMap((x) => [...x]));
+    for (const [email, contactId] of page) {
+      candidates.set(email, contactId);
+      if (blocked.has(email)) out.optedOut++;
+      else if (kept <= limit) {
+        out.recipients.push({email, contactId});
+        kept++;
+      }
+    }
+    if (kept > limit) {
+      out.capped = true;
+      break;
     }
     if (rows.length < PAGE) break;
     cursor = rows[rows.length - 1]!.id;
   }
-  // An address is out when any contact with it opted out (also outside the list).
-  const blocked = await optedOutEmails(db, [...candidates.keys()]);
-  for (const [email, contactId] of candidates) {
-    if (blocked.has(email)) out.optedOut++;
-    else out.recipients.push({email, contactId});
-  }
-  out.duplicates = duplicates;
+  // Contacts without an address were never read: the count tells how many.
+  if (!out.capped) out.noEmail += Math.max(0, contacts - read);
   return out;
 }
 

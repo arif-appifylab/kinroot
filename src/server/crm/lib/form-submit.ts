@@ -16,7 +16,7 @@ import {
 } from '@/lib/forms';
 import {decryptJson, encryptJson, sign, verifySignature} from '../kit/crypto';
 import type {Db} from '../kit/db';
-import {mergeFields} from '../email/render';
+import {defuseMerge, mergeFields} from '../email/render';
 import {defaultPipeline} from '../routes/deals';
 import {customDiff, diff, logActivity} from './activity';
 import {contactIdByEmail} from './contact-email';
@@ -328,7 +328,8 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput, once: O
   if (settings.createTicket?.enabled && contact) {
     const ctx = {contact, company: null, deal: null, me: {name: form.name, email: ''}};
     await createTicket(db, {
-      subject: mergeFields(settings.createTicket.subject || `${form.name}: {{contact.full_name}}`, ctx).trim() || form.name,
+      // A respondent's "{{…}}" in their name stays text when the team replies (AUDIT-2 L-6).
+      subject: defuseMerge(mergeFields(settings.createTicket.subject || `${form.name}: {{contact.full_name}}`, ctx).trim()) || form.name,
       description: stored.filter((a) => a.type !== 'hidden').map((a) => `${a.label}\n${answerText(a.type, a.value)}`).join('\n\n'),
       source: 'FORM',
       priority: settings.createTicket.priority ?? undefined,

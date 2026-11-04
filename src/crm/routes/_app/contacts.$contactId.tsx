@@ -8,7 +8,7 @@ import {ContactMergeDialog} from '@/components/record-merge';
 import {useBinToast} from '@/components/recycle-bin-toast';
 import {CompanyPicker, CreatableSelect, TagInput, UserSelect} from '@/components/pickers';
 import {PropertyHistoryMenuItem, PropertyHistoryProvider} from '@/components/property-history';
-import {ChoiceProperty, CustomFieldProperties, EditableProperty, Property, PropertyCard, SelectProperty, TextProperty} from '@/components/properties';
+import {ChoiceProperty, CustomFieldProperties, EditableProperty, Property, PropertyCard, SelectProperty, TextProperty, propertyRules} from '@/components/properties';
 import {ActivityButtons, Composer, RecordTasks, Timeline} from '@/components/timeline';
 import {AttachmentsCard} from '@/components/attachments';
 import {AutomationsCard} from '@/components/automations/record-tools';
@@ -138,40 +138,40 @@ function ContactPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_300px]">
         <div className="grid min-w-0 grid-cols-1 content-start gap-6">
           <PropertyCard title="About">
-            <TextProperty label="First name" field="firstName" maxLength={CONTACT_LIMITS.firstName} value={c.firstName} onSave={(v) => v && save.mutate({firstName: v})} />
-            <TextProperty label="Last name" field="lastName" maxLength={CONTACT_LIMITS.lastName} value={c.lastName} onSave={(v) => save.mutate({lastName: v})} />
-            <TextProperty label="Email" field="email" maxLength={CONTACT_LIMITS.email} type="email" value={c.email} href={c.email ? `mailto:${c.email}` : undefined} onSave={(v) => save.mutate({email: v ?? ''})} />
-            <TextProperty label="Phone" field="phone" maxLength={CONTACT_LIMITS.phone} type="tel" value={c.phone} href={c.phone ? `tel:${c.phone}` : undefined} onSave={(v) => save.mutate({phone: v})} />
-            <TextProperty label="Job title" field="title" maxLength={CONTACT_LIMITS.title} value={c.title} onSave={(v) => save.mutate({title: v})} />
-            <TextProperty label="LinkedIn" field="linkedin" value={c.linkedin} href={c.linkedin ?? undefined} onSave={(v) => save.mutate({linkedin: v})} />
-            <TextProperty label="City" field="city" maxLength={CONTACT_LIMITS.city} value={c.city} onSave={(v) => save.mutate({city: v})} />
-            <TextProperty label="Country" field="country" maxLength={CONTACT_LIMITS.country} value={c.country} onSave={(v) => save.mutate({country: v})} />
+            <TextProperty label="First name" field="firstName" maxLength={CONTACT_LIMITS.firstName} value={c.firstName} required="Enter a first name." onSave={(v) => save.mutateAsync({firstName: v})} />
+            <TextProperty label="Last name" field="lastName" maxLength={CONTACT_LIMITS.lastName} value={c.lastName} onSave={(v) => save.mutateAsync({lastName: v})} />
+            <TextProperty label="Email" field="email" maxLength={CONTACT_LIMITS.email} type="email" value={c.email} href={c.email ? `mailto:${c.email}` : undefined} onSave={(v) => save.mutateAsync({email: v ?? ''})} />
+            <TextProperty label="Phone" field="phone" maxLength={CONTACT_LIMITS.phone} type="tel" value={c.phone} href={c.phone ? `tel:${c.phone}` : undefined} onSave={(v) => save.mutateAsync({phone: v})} />
+            <TextProperty label="Job title" field="title" maxLength={CONTACT_LIMITS.title} value={c.title} onSave={(v) => save.mutateAsync({title: v})} />
+            <TextProperty label="LinkedIn" field="linkedin" rules={[propertyRules.webAddress]} value={c.linkedin} href={c.linkedin ?? undefined} onSave={(v) => save.mutateAsync({linkedin: v})} />
+            <TextProperty label="City" field="city" maxLength={CONTACT_LIMITS.city} value={c.city} onSave={(v) => save.mutateAsync({city: v})} />
+            <TextProperty label="Country" field="country" maxLength={CONTACT_LIMITS.country} value={c.country} onSave={(v) => save.mutateAsync({country: v})} />
             <SelectProperty
               label="Lifecycle" field="lifecycleStage"
               value={c.lifecycleStage}
               options={Object.entries(LIFECYCLE).map(([value, l]) => ({value, label: l.label}))}
               display={<Badge tone={LIFECYCLE[c.lifecycleStage].tone}>{LIFECYCLE[c.lifecycleStage].label}</Badge>}
-              onSave={(v) => v && save.mutate({lifecycleStage: v})}
+              onSave={(v) => v && save.mutateAsync({lifecycleStage: v})}
             />
-            <ChoiceProperty label="Lead status" field="leadStatus" value={c.leadStatus} options={LEAD_STATUSES} onSave={(v) => save.mutate({leadStatus: v})} />
-            <ChoiceProperty label="Buying role" field="buyingRole" value={c.buyingRole} options={BUYING_ROLES} onSave={(v) => save.mutate({buyingRole: v})} />
+            <ChoiceProperty label="Lead status" field="leadStatus" value={c.leadStatus} options={LEAD_STATUSES} onSave={(v) => save.mutateAsync({leadStatus: v})} />
+            <ChoiceProperty label="Buying role" field="buyingRole" value={c.buyingRole} options={BUYING_ROLES} onSave={(v) => save.mutateAsync({buyingRole: v})} />
             <EditableProperty
               label="Source" field="source"
               value={c.source}
-              display={c.source ?? <span className="text-slate-400">—</span>}
+              display={c.source ?? <span className="text-muted-foreground">—</span>}
               editor={({value, onChange}) => <CreatableSelect noun="source" value={value} options={settings.data?.settings.sources ?? []} onChange={(v) => onChange(v as string | null)} onCreate={() => {}} />}
-              onSave={(v) => save.mutate({source: v})}
+              onSave={(v) => save.mutateAsync({source: v})}
             />
             <EditableProperty
               label="Owner" field="ownerId"
               value={c.ownerId}
-              display={c.owner ? <span className="inline-flex items-center gap-1.5"><Avatar name={c.owner.name} color={c.owner.color} src={c.owner.avatarUrl} size="xs" />{c.owner.name}</span> : <span className="text-slate-400">Unassigned</span>}
+              display={c.owner ? <span className="inline-flex items-center gap-1.5"><Avatar name={c.owner.name} color={c.owner.color} src={c.owner.avatarUrl} size="xs" />{c.owner.name}</span> : <span className="text-muted-foreground">Unassigned</span>}
               editor={({value, onChange}) => <UserSelect value={value} onChange={onChange} />}
-              onSave={(v) => save.mutate({ownerId: v})}
+              onSave={(v) => save.mutateAsync({ownerId: v})}
             />
-            <EditableProperty label="Tags" field="tags" value={c.tags} display={c.tags.length ? <span className="flex flex-wrap gap-1">{c.tags.map((t) => <Badge key={t} tone="teal">{t}</Badge>)}</span> : <span className="text-slate-400">—</span>} editor={({value, onChange}) => <TagInput entity="CONTACT" value={value} onChange={onChange} />} onSave={(v) => save.mutate({tags: v})} />
+            <EditableProperty label="Tags" field="tags" value={c.tags} display={c.tags.length ? <span className="flex flex-wrap gap-1">{c.tags.map((t) => <Badge key={t} tone="teal">{t}</Badge>)}</span> : <span className="text-muted-foreground">—</span>} editor={({value, onChange}) => <TagInput entity="CONTACT" value={value} onChange={onChange} />} onSave={(v) => save.mutateAsync({tags: v})} />
             <Property label="Created">{shortDate(c.createdAt)}</Property>
-            {fields.data && <CustomFieldProperties fields={fields.data} values={c.custom as Record<string, unknown>} currency={currency} onSave={(key, v) => save.mutate({custom: {[key]: v}})} />}
+            {fields.data && <CustomFieldProperties fields={fields.data} values={c.custom as Record<string, unknown>} currency={currency} onSave={(key, v) => save.mutateAsync({custom: {[key]: v}})} />}
           </PropertyCard>
 
           <PropertyCard

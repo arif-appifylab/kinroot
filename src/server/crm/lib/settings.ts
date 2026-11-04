@@ -142,11 +142,19 @@ export async function getPrivateSettings(db: Db): Promise<PrivateSettings> {
   return s;
 }
 
-/** Saves a patch and clears the cached settings and brand right after the write. */
+/**
+ * Saves a patch and clears the cached settings and brand right after the write. One statement
+ * merges the patch into the stored row (`jsonb ||`), so two saves of different fields at the same
+ * moment both land (a read-then-write lost one of them: AUDIT-2 L-12).
+ */
 export async function saveSettings(db: Db, patch: Partial<StoredSettings>) {
-  const row = await db.setting.findUnique({where: {key: KEY}});
-  const value = {...((row?.value ?? {}) as object), ...patch};
-  await db.setting.upsert({where: {key: KEY}, create: {key: KEY, value}, update: {value}});
+  const json = JSON.stringify(patch);
+  const now = new Date();
+  await db.$executeRaw`
+    INSERT INTO "Setting" ("key", "value", "updatedAt") VALUES (${KEY}, ${json}::jsonb, ${now})
+    ON CONFLICT ("key") DO UPDATE
+      SET "value" = (CASE WHEN jsonb_typeof("Setting"."value") = 'object' THEN "Setting"."value" ELSE '{}'::jsonb END) || EXCLUDED."value",
+          "updatedAt" = EXCLUDED."updatedAt"`;
   await Promise.all([cache.del(CACHE_KEY), cache.del(BRAND_CACHE_KEY)]);
 }
 

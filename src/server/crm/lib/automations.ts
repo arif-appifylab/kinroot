@@ -363,92 +363,176 @@ async function ownerZones(db: Db, ownerIds: (string | null)[]) {
   return new Map(rows.filter((r) => isTimeZone(r.timezone)).map((r) => [r.userId, r.timezone]));
 }
 
+/** Rows one page of a trigger scan reads. */
 const LIMIT = 500;
+/** Pages one tick reads per automation at most (the rest waits for the next tick). */
+const MAX_PAGES = 20;
 
-async function dateCandidates(db: Db, a: Automation, t: Extract<Trigger, {kind: 'date'}>, from: Date, to: Date): Promise<Candidate[]> {
+/** What a scan found, and the moment up to which every due record is in it (the safe cursor). */
+type Scan = {found: Candidate[]; safeUntil: number};
+type Key = {v: Date | string; id: string};
+
+const valueMs = (v: Date | string) => (typeof v === 'string' ? new Date(v.length === 10 ? `${v}T00:00:00Z` : v).getTime() : v.getTime());
+
+/**
+ * Reads rows in (value, id) order from the start of the window, each page right after the last row
+ * of the page before (keyset: a burst of rows sharing one value is never cut off), until a short
+ * page says there is no more, MAX_PAGES, or the time is up. Keeps the rows whose trigger moment is
+ * in (from, to]. Stopped early: `safeUntil` is the earliest moment a row not read yet can have.
+ */
+async function scanPages<R>(
+  read: (after: Key | null) => Promise<R[]>,
+  keyOf: (r: R) => Key,
+  toCandidates: (rows: R[]) => Promise<Candidate[]> | Candidate[],
+  earliestAfter: (v: Date | string) => number,
+  from: Date,
+  to: Date,
+  stopAt: number,
+): Promise<Scan> {
+  const found: Candidate[] = [];
+  let after: Key | null = null;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const rows = await read(after);
+    for (const c of await toCandidates(rows)) if (c.moment > from.getTime() && c.moment <= to.getTime()) found.push(c);
+    // "More to come" from the rows read, not from the ones kept.
+    if (rows.length < LIMIT) return {found, safeUntil: to.getTime()};
+    after = keyOf(rows.at(-1)!);
+    if (Date.now() > stopAt) break;
+  }
+  return {found, safeUntil: earliestAfter(after!.v)};
+}
+
+async function dateCandidates(db: Db, a: Automation, t: Extract<Trigger, {kind: 'date'}>, from: Date, to: Date, stopAt: number): Promise<Scan> {
+  const none: Scan = {found: [], safeUntil: to.getTime()};
   const object = objectOf(a);
-  if (object === 'none') return [];
+  if (object === 'none') return none;
+  if (t.source === 'booking' && object !== 'contact') return none;
+  const field = t.source === 'booking' ? null : (await fieldsFor(db, object)).find((f) => f.key === t.field && f.kind === 'date');
+  if (t.source !== 'booking' && !field) return none;
+  const dateOnly = !!field?.dateOnly;
   const sign = t.direction === 'before' ? -1 : 1;
   const offset = t.amount * UNIT_MS[t.unit];
-  // The value lies near (moment - offset); two days either side cover time zones and time of day.
-  const lo = new Date(from.getTime() - sign * offset - 2 * DAY);
-  const hi = new Date(to.getTime() - sign * offset + 2 * DAY);
+  // The value lies at (moment - offset); when a time of day or a time zone moves the moment, two
+  // days either side cover it.
+  const margin = ((t.unit === 'days' || t.unit === 'weeks') && t.time) || dateOnly ? 2 * DAY : 0;
+  const lo = new Date(from.getTime() - sign * offset - margin);
+  const hi = new Date(to.getTime() - sign * offset + margin);
+  // Rows at or after a value fire no earlier than this (the same value may still hold unread rows).
+  const earliestAfter = (v: Date | string) => valueMs(v) + sign * offset - (margin || 1);
   const tz = tzOf(a);
-  let rows: {id: string; value: Date | string; ownerId: string | null; context?: Record<string, unknown>}[] = [];
-  let dateOnly = false;
   if (t.source === 'booking') {
-    if (object !== 'contact') return [];
-    const bookings = await db.booking.findMany({where: {status: 'CONFIRMED', contactId: {not: null}, startAt: {gte: lo, lte: hi}}, orderBy: {startAt: 'asc'}, take: LIMIT, select: {id: true, contactId: true, startAt: true, hostId: true, title: true}});
-    return bookings
-      .map((b) => ({recordId: b.contactId!, value: `${b.id}@${b.startAt.toISOString()}`, moment: triggerMoment(t, b.startAt, false, tz), context: {bookingId: b.id, startAt: b.startAt.toISOString(), title: b.title}}))
-      .filter((c) => c.moment > from.getTime() && c.moment <= to.getTime());
+    return scanPages(
+      (after) =>
+        db.booking.findMany({
+          where: {status: 'CONFIRMED', contactId: {not: null}, startAt: {gte: lo, lte: hi}, ...(after ? {OR: [{startAt: {gt: after.v as Date}}, {startAt: after.v as Date, id: {gt: after.id}}]} : {})},
+          orderBy: [{startAt: 'asc'}, {id: 'asc'}],
+          take: LIMIT,
+          select: {id: true, contactId: true, startAt: true, title: true},
+        }),
+      (b) => ({v: b.startAt, id: b.id}),
+      (rows) => rows.map((b) => ({recordId: b.contactId!, value: `${b.id}@${b.startAt.toISOString()}`, moment: triggerMoment(t, b.startAt, false, tz), context: {bookingId: b.id, startAt: b.startAt.toISOString(), title: b.title}})),
+      earliestAfter,
+      from,
+      to,
+      stopAt,
+    );
   }
-  const field = (await fieldsFor(db, object)).find((f) => f.key === t.field && f.kind === 'date');
-  if (!field) return [];
-  dateOnly = !!field.dateOnly;
+  const key = field!.key;
   // Table and owner column from fixed maps; values bound as parameters.
   const table = Prisma.raw(TABLES[object]);
   const owner = Prisma.raw(OWNER_COLUMN[object]);
-  if (field.key.startsWith('custom.')) {
-    const key = field.key.slice(7);
+  type Row = {id: string; value: Date | string; ownerId: string | null};
+  let read: (after: Key | null) => Promise<Row[]>;
+  if (key.startsWith('custom.')) {
     // Custom dates are stored as "YYYY-MM-DD" strings, which compare in order.
-    const value = Prisma.sql`custom->>${key}::text`;
-    const found = await db.$queryRaw<{id: string; value: string; ownerId: string | null}[]>(
-      Prisma.sql`SELECT id, ${value} AS value, ${owner} AS "ownerId" FROM ${table} WHERE ${value} >= ${lo.toISOString().slice(0, 10)} AND ${value} <= ${hi.toISOString().slice(0, 10)} ORDER BY ${value} LIMIT ${LIMIT}`,
-    );
-    rows = found.filter((r) => /^\d{4}-\d{2}-\d{2}/.test(r.value));
+    const value = Prisma.sql`custom->>${key.slice(7)}::text`;
+    read = (after) =>
+      db.$queryRaw<Row[]>(
+        Prisma.sql`SELECT id, ${value} AS value, ${owner} AS "ownerId" FROM ${table} WHERE ${value} >= ${lo.toISOString().slice(0, 10)} AND ${value} <= ${hi.toISOString().slice(0, 10)} ${after ? Prisma.sql`AND (${value}, id) > (${after.v as string}::text, ${after.id}::text)` : Prisma.empty} ORDER BY ${value}, id LIMIT ${LIMIT}`,
+      );
   } else {
     // A built-in date field: its key is the column's name (the field list is written in code).
-    if (!/^[a-zA-Z]+$/.test(field.key)) return [];
-    const column = Prisma.raw(`"${field.key}"`);
-    rows = await db.$queryRaw<{id: string; value: Date; ownerId: string | null}[]>(
-      Prisma.sql`SELECT id, ${column} AS value, ${owner} AS "ownerId" FROM ${table} WHERE ${column} >= ${lo} AND ${column} <= ${hi} ORDER BY ${column} LIMIT ${LIMIT}`,
-    );
+    if (!/^[a-zA-Z]+$/.test(key)) return none;
+    const column = Prisma.raw(`"${key}"`);
+    read = (after) =>
+      db.$queryRaw<Row[]>(
+        Prisma.sql`SELECT id, ${column} AS value, ${owner} AS "ownerId" FROM ${table} WHERE ${column} >= ${lo} AND ${column} <= ${hi} ${after ? Prisma.sql`AND (${column}, id) > (${after.v}, ${after.id}::text)` : Prisma.empty} ORDER BY ${column}, id LIMIT ${LIMIT}`,
+      );
   }
-  const zones = t.zone === 'owner' ? await ownerZones(db, rows.map((r) => r.ownerId)) : new Map<string, string>();
-  return rows
-    .map((r) => {
+  const toCandidates = async (rows: Row[]) => {
+    const dated = rows.filter((r) => typeof r.value !== 'string' || /^\d{4}-\d{2}-\d{2}/.test(r.value));
+    const zones = t.zone === 'owner' ? await ownerZones(db, dated.map((r) => r.ownerId)) : new Map<string, string>();
+    return dated.map((r) => {
       const value = typeof r.value === 'string' ? r.value.slice(0, 10) : dateOnly ? r.value.toISOString().slice(0, 10) : r.value.toISOString();
       const zone = (r.ownerId && zones.get(r.ownerId)) || tz;
-      return {recordId: r.id, value, moment: triggerMoment(t, r.value, dateOnly, zone), context: {field: field.key, value}};
-    })
-    .filter((c) => c.moment > from.getTime() && c.moment <= to.getTime());
+      return {recordId: r.id, value, moment: triggerMoment(t, r.value, dateOnly, zone), context: {field: key, value}};
+    });
+  };
+  return scanPages(read, (r) => ({v: r.value, id: r.id}), toCandidates, earliestAfter, from, to, stopAt);
 }
 
-async function inactivityCandidates(db: Db, a: Automation, t: Extract<Trigger, {kind: 'inactivity'}>, from: Date, to: Date): Promise<Candidate[]> {
+async function inactivityCandidates(db: Db, a: Automation, t: Extract<Trigger, {kind: 'inactivity'}>, from: Date, to: Date, stopAt: number): Promise<Scan> {
   const object = objectOf(a);
   const span = t.amount * (t.unit === 'hours' ? HOUR : DAY);
   // "Inactive for N" fires when (since + N) falls in (from, to], i.e. since in (from - N, to - N].
   const lo = new Date(from.getTime() - span);
   const hi = new Date(to.getTime() - span);
   const at = (since: Date) => since.getTime() + span;
+  const earliestAfter = (v: Date | string) => valueMs(v) + span - 1;
+  const scan = <R>(read: (after: Key | null) => Promise<R[]>, keyOf: (r: R) => Key, toCandidates: (rows: R[]) => Candidate[]) => scanPages(read, keyOf, toCandidates, earliestAfter, from, to, stopAt);
   if (t.rule === 'no_activity' && (object === 'contact' || object === 'company' || object === 'deal')) {
-    const rows = await db.$queryRaw<{id: string; since: Date}[]>(
-      Prisma.sql`SELECT id, "lastActivityAt" AS since FROM ${Prisma.raw(TABLES[object])} WHERE "lastActivityAt" > ${lo} AND "lastActivityAt" <= ${hi} ORDER BY "lastActivityAt" LIMIT ${LIMIT}`,
+    return scan(
+      (after) =>
+        db.$queryRaw<{id: string; since: Date}[]>(
+          Prisma.sql`SELECT id, "lastActivityAt" AS since FROM ${Prisma.raw(TABLES[object])} WHERE "lastActivityAt" > ${lo} AND "lastActivityAt" <= ${hi} ${after ? Prisma.sql`AND ("lastActivityAt", id) > (${after.v}, ${after.id}::text)` : Prisma.empty} ORDER BY "lastActivityAt", id LIMIT ${LIMIT}`,
+        ),
+      (r) => ({v: r.since, id: r.id}),
+      (rows) => rows.map((r) => ({recordId: r.id, value: r.since.toISOString(), moment: at(r.since), context: {lastActivityAt: r.since.toISOString()}})),
     );
-    return rows.map((r) => ({recordId: r.id, value: r.since.toISOString(), moment: at(r.since), context: {lastActivityAt: r.since.toISOString()}}));
   }
   if (t.rule === 'ticket_waiting' && object === 'ticket') {
     // Waiting since the last move to "waiting on us" (or since it was opened, for new tickets).
-    const rows = await db.$queryRaw<{id: string; since: Date}[]>`
-      SELECT t.id, s.since FROM "Ticket" t
-      CROSS JOIN LATERAL (
-        SELECT COALESCE((SELECT max(m."createdAt") FROM "TicketMessage" m WHERE m."ticketId" = t.id AND m.kind = 'event' AND m.data->>'type' = 'status' AND m.data->>'to' = 'WAITING_ON_US'), t."createdAt") AS since
-      ) s
-      WHERE t.status IN ('NEW', 'WAITING_ON_US') AND s.since > ${lo} AND s.since <= ${hi}
-      ORDER BY s.since LIMIT ${LIMIT}`;
-    return rows.map((r) => ({recordId: r.id, value: r.since.toISOString(), moment: at(r.since), context: {waitingSince: r.since.toISOString()}}));
+    return scan(
+      (after) => db.$queryRaw<{id: string; since: Date}[]>`
+        SELECT t.id, s.since FROM "Ticket" t
+        CROSS JOIN LATERAL (
+          SELECT COALESCE((SELECT max(m."createdAt") FROM "TicketMessage" m WHERE m."ticketId" = t.id AND m.kind = 'event' AND m.data->>'type' = 'status' AND m.data->>'to' = 'WAITING_ON_US'), t."createdAt") AS since
+        ) s
+        WHERE t.status IN ('NEW', 'WAITING_ON_US') AND s.since > ${lo} AND s.since <= ${hi} ${after ? Prisma.sql`AND (s.since, t.id) > (${after.v}, ${after.id}::text)` : Prisma.empty}
+        ORDER BY s.since, t.id LIMIT ${LIMIT}`,
+      (r) => ({v: r.since, id: r.id}),
+      (rows) => rows.map((r) => ({recordId: r.id, value: r.since.toISOString(), moment: at(r.since), context: {waitingSince: r.since.toISOString()}})),
+    );
   }
   if (t.rule === 'task_overdue' && (object === 'contact' || object === 'company' || object === 'deal')) {
     const key = `${object}Id` as 'contactId' | 'companyId' | 'dealId';
-    const tasks = await db.task.findMany({where: {done: false, dueAt: {gt: lo, lte: hi}, [key]: {not: null}}, orderBy: {dueAt: 'asc'}, take: LIMIT, select: {id: true, title: true, dueAt: true, assigneeId: true, contactId: true, companyId: true, dealId: true}});
-    return tasks.map((task) => ({recordId: task[key]!, value: `${task.id}@${task.dueAt!.toISOString()}`, moment: at(task.dueAt!), context: {task: {id: task.id, title: task.title, dueAt: task.dueAt!.toISOString(), assigneeId: task.assigneeId}}}));
+    return scan(
+      (after) =>
+        db.task.findMany({
+          where: {done: false, dueAt: {gt: lo, lte: hi}, [key]: {not: null}, ...(after ? {OR: [{dueAt: {gt: after.v as Date}}, {dueAt: after.v as Date, id: {gt: after.id}}]} : {})},
+          orderBy: [{dueAt: 'asc'}, {id: 'asc'}],
+          take: LIMIT,
+          select: {id: true, title: true, dueAt: true, assigneeId: true, contactId: true, companyId: true, dealId: true},
+        }),
+      (task) => ({v: task.dueAt!, id: task.id}),
+      (tasks) => tasks.map((task) => ({recordId: task[key]!, value: `${task.id}@${task.dueAt!.toISOString()}`, moment: at(task.dueAt!), context: {task: {id: task.id, title: task.title, dueAt: task.dueAt!.toISOString(), assigneeId: task.assigneeId}}})),
+    );
   }
   if (t.rule === 'in_list' && object === 'contact' && t.listId) {
-    const members = await db.contactListMember.findMany({where: {listId: t.listId, createdAt: {gt: lo, lte: hi}}, orderBy: {createdAt: 'asc'}, take: LIMIT, select: {contactId: true, createdAt: true}});
-    return members.map((m) => ({recordId: m.contactId, value: m.createdAt.toISOString(), moment: at(m.createdAt), context: {listId: t.listId, addedAt: m.createdAt.toISOString()}}));
+    const listId = t.listId;
+    return scan(
+      (after) =>
+        db.contactListMember.findMany({
+          where: {listId, createdAt: {gt: lo, lte: hi}, ...(after ? {OR: [{createdAt: {gt: after.v as Date}}, {createdAt: after.v as Date, contactId: {gt: after.id}}]} : {})},
+          orderBy: [{createdAt: 'asc'}, {contactId: 'asc'}],
+          take: LIMIT,
+          select: {contactId: true, createdAt: true},
+        }),
+      (m) => ({v: m.createdAt, id: m.contactId}),
+      (members) => members.map((m) => ({recordId: m.contactId, value: m.createdAt.toISOString(), moment: at(m.createdAt), context: {listId, addedAt: m.createdAt.toISOString()}})),
+    );
   }
-  return [];
+  return {found: [], safeUntil: to.getTime()};
 }
 
 /** How far back a tick looks when the scheduler was down (or the automation was just switched on). */
@@ -475,9 +559,10 @@ async function advanceInline(db: Db, runId: string, until: number) {
  * Date and inactivity triggers, from the `crm-tick` schedule. For each automation: the records
  * whose trigger moment is in (last check, now] start one run each. The run's dedupe key makes it
  * exactly-once even when ticks overlap or one stops midway, and AutomationFire (written after the
- * run exists) remembers it was handled. The time budget is checked for every record, at most
- * FIRES_PER_TICK runs start per tick, and the cursor is saved at the last moment handled, so the
- * next tick goes on from there.
+ * run exists) remembers it was handled. Candidates are read in keyset pages (value, id), so a burst
+ * of records sharing one timestamp is read whole. The time budget is checked for every record, at
+ * most FIRES_PER_TICK runs start per tick, and the cursor is saved just before the first moment not
+ * handled (never past what the scan read), so the next tick goes on from there.
  */
 export async function automationTick(db: Db, opts: {budgetMs?: number; until?: number; cap?: number} = {}) {
   const until = opts.until ?? Date.now() + (opts.budgetMs ?? 8_000);
@@ -494,40 +579,44 @@ export async function automationTick(db: Db, opts: {budgetMs?: number; until?: n
     if (fromMs >= now.getTime()) continue;
     const from = new Date(fromMs);
     const t = triggerOf(a);
-    let found: Candidate[] = [];
+    let scan: Scan = {found: [], safeUntil: now.getTime()};
     try {
-      if (t.kind === 'date') found = await dateCandidates(db, a, t, from, now);
-      else if (t.kind === 'inactivity' && INACTIVITY_RULES[t.rule]) found = await inactivityCandidates(db, a, t, from, now);
+      if (t.kind === 'date') scan = await dateCandidates(db, a, t, from, now, startUntil);
+      else if (t.kind === 'inactivity' && INACTIVITY_RULES[t.rule]) scan = await inactivityCandidates(db, a, t, from, now, startUntil);
     } catch (e) {
       console.error('[automations] tick', a.id, String((e as Error)?.message ?? e).slice(0, 200));
       continue;
     }
-    found.sort((x, y) => x.moment - y.moment);
+    // In moment order; records of one moment in a fixed order.
+    const found = scan.found.sort((x, y) => x.moment - y.moment || (x.recordId < y.recordId ? -1 : x.recordId > y.recordId ? 1 : 0));
     checked++;
-    // Handled before (an earlier tick that stopped midway): one query for the whole page.
-    const done = found.length
-      ? new Set((await db.automationFire.findMany({where: {automationId: a.id, recordId: {in: [...new Set(found.map((c) => c.recordId))]}}, select: {recordId: true, value: true}})).map((f) => `${f.recordId}|${f.value}`))
-      : new Set<string>();
-    // A full page means there may be more: resume after the last moment found.
-    let cursor = found.length >= LIMIT ? new Date(found.at(-1)!.moment) : now;
-    for (const [i, c] of found.entries()) {
-      if (Date.now() > startUntil || fired >= cap) {
-        // Stopped midway: the next tick starts just before this moment (records of the same moment are not skipped).
-        cursor = new Date(Math.max(fromMs, c.moment - 1));
-        if (i === 0) cursor = from;
-        break;
-      }
-      if (done.has(`${c.recordId}|${c.value}`)) continue;
-      const source = t.kind === 'date' ? 'date' : 'inactivity';
-      const {run} = await startRun(db, a, {recordId: c.recordId, source, dedupeKey: `${a.id}:fire:${c.recordId}:${c.value}`, context: {...c.context, moment: new Date(c.moment).toISOString()}, inline: true});
-      // Only now: a tick that dies before this line leaves no mark, and the dedupe key stops a second run.
-      await db.automationFire.createMany({data: [{automationId: a.id, recordId: c.recordId, value: c.value}], skipDuplicates: true});
-      if (run) {
-        fired++;
-        await advanceInline(db, run.id, until);
+    // Never past what the scan fully read (a scan that stopped early leaves rows for the next tick).
+    let cursor = Math.min(now.getTime(), scan.safeUntil);
+    let stopped = false;
+    const source = t.kind === 'date' ? 'date' : 'inactivity';
+    for (let i = 0; i < found.length && !stopped; i += LIMIT) {
+      const chunk = found.slice(i, i + LIMIT);
+      // Handled before (an earlier tick that stopped midway, or records of the same moment): one query a chunk.
+      const done = new Set((await db.automationFire.findMany({where: {automationId: a.id, recordId: {in: [...new Set(chunk.map((c) => c.recordId))]}}, select: {recordId: true, value: true}})).map((f) => `${f.recordId}|${f.value}`));
+      for (const c of chunk) {
+        if (Date.now() > startUntil || fired >= cap) {
+          // Stopped midway: the next tick starts just before this moment (records of the same moment are not skipped).
+          cursor = Math.min(cursor, c.moment - 1);
+          stopped = true;
+          break;
+        }
+        if (done.has(`${c.recordId}|${c.value}`)) continue;
+        const {run} = await startRun(db, a, {recordId: c.recordId, source, dedupeKey: `${a.id}:fire:${c.recordId}:${c.value}`, context: {...c.context, moment: new Date(c.moment).toISOString()}, inline: true});
+        // Only now: a tick that dies before this line leaves no mark, and the dedupe key stops a second run.
+        await db.automationFire.createMany({data: [{automationId: a.id, recordId: c.recordId, value: c.value}], skipDuplicates: true});
+        if (run) {
+          fired++;
+          await advanceInline(db, run.id, until);
+        }
       }
     }
-    await db.automation.update({where: {id: a.id}, data: {cursorAt: cursor}});
+    cursor = Math.max(fromMs, cursor);
+    await db.automation.update({where: {id: a.id}, data: {cursorAt: new Date(cursor)}});
   }
   const rescued = await rescueRuns(db).catch((e) => {
     console.error('[automations] rescue', String((e as Error)?.message || (e as {code?: string})?.code || e).slice(0, 200));

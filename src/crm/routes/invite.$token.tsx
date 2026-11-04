@@ -8,6 +8,7 @@ import {Button} from '@/components/ui/button';
 import {pageTitle} from '@/lib/brand';
 import {api} from '@/lib/api';
 import {keys} from '@/lib/queries';
+import {useWebsiteOn} from '@/lib/use-website-on';
 
 export const Route = createFileRoute('/invite/$token')({
   head: () => ({meta: [{title: pageTitle('Join your team')}]}),
@@ -28,6 +29,7 @@ function InvitePage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const back = encodeURIComponent(`/crm/invite/${token}`);
+  const websiteOn = useWebsiteOn();
 
   async function join() {
     setBusy(true);
@@ -45,9 +47,15 @@ function InvitePage() {
   if (invite.isError) {
     return (
       <AuthLayout title="This invite" highlight="can't be used" subtitle={(invite.error as Error).message}>
-        <a className="text-sm font-semibold text-primary hover:underline" href="/">
-          Back to the website
-        </a>
+        {websiteOn ? (
+          <a className="text-sm font-semibold text-primary hover:underline" href="/">
+            Back to the website
+          </a>
+        ) : (
+          <a className="text-sm font-semibold text-primary hover:underline" href="/crm/">
+            Open the CRM
+          </a>
+        )}
       </AuthLayout>
     );
   }

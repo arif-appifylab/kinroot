@@ -274,19 +274,26 @@ export async function rescoreContacts(db: Db, contactIds: string[], opts: Rescor
     }
   }
   if (revoke.length) await db.scoreEvent.updateMany({where: {id: {in: revoke}}, data: {revokedAt: new Date()}});
-  if (create.length) await db.scoreEvent.createMany({data: create});
+  // A rescore of the same contact running at the same time may have awarded it already: the partial
+  // unique index (one active property award per rule and contact) makes that insert a no-op.
+  if (create.length) await db.scoreEvent.createMany({data: create, skipDuplicates: true});
 
   // Totals. Written with SQL so a score change doesn't bump Contact.updatedAt.
   const [totals, before] = await Promise.all([
     computeScores(db, ids, settings.decay),
     db.contact.findMany({where: {id: {in: ids}}, select: {id: true, score: true, ownerId: true, firstName: true, lastName: true}}),
   ]);
-  const changed = before.filter((c) => (totals.get(c.id) ?? 0) !== c.score).map((c) => ({...c, next: totals.get(c.id) ?? 0}));
+  let changed = before.filter((c) => (totals.get(c.id) ?? 0) !== c.score).map((c) => ({...c, next: totals.get(c.id) ?? 0}));
   if (changed.length) {
-    await db.$executeRaw`
+    // Only rows whose score really changes here: a rescore of the same contact at the same time
+    // writes the same total, and only one of the two sees the change (and the band crossing).
+    const written = await db.$queryRaw<{id: string}[]>`
       UPDATE "Contact" AS c SET score = v.score, "scoreUpdatedAt" = ${new Date()}
       FROM (VALUES ${Prisma.join(changed.map((c) => Prisma.sql`(${c.id}, ${c.next}::int)`))}) AS v(id, score)
-      WHERE c.id = v.id`;
+      WHERE c.id = v.id AND c.score IS DISTINCT FROM v.score
+      RETURNING c.id`;
+    const ok = new Set(written.map((r) => r.id));
+    changed = changed.filter((c) => ok.has(c.id));
   }
   const crossed = changed
     .map((c) => ({contact: c, from: bandFor(c.score, settings.bands), to: bandFor(c.next, settings.bands)}))
@@ -521,9 +528,14 @@ export async function scoreBandWhere(db: Db, key: string) {
   return bandWhere(key, (await getScoringSettings(db)).bands);
 }
 
-/** Inside a merge transaction: moves the dropped contact's awards to the survivor (skipping ones it already has). */
+/**
+ * Inside a merge transaction: moves the dropped contact's awards to the survivor, skipping ones it
+ * already has (the same event, or an active award of the same property rule: one per rule and
+ * contact, kept by a partial unique index).
+ */
 export const moveScoreEvents = (db: Db, fromId: string, toId: string) =>
   db.$executeRaw`
     UPDATE "ScoreEvent" e SET "contactId" = ${toId}
     WHERE e."contactId" = ${fromId}
-      AND NOT EXISTS (SELECT 1 FROM "ScoreEvent" k WHERE k."contactId" = ${toId} AND k."ruleId" IS NOT DISTINCT FROM e."ruleId" AND k."eventId" = e."eventId")`;
+      AND NOT EXISTS (SELECT 1 FROM "ScoreEvent" k WHERE k."contactId" = ${toId} AND k."ruleId" IS NOT DISTINCT FROM e."ruleId" AND k."eventId" = e."eventId")
+      AND NOT (e.kind = 'property' AND e."revokedAt" IS NULL AND EXISTS (SELECT 1 FROM "ScoreEvent" k WHERE k."contactId" = ${toId} AND k.kind = 'property' AND k."revokedAt" IS NULL AND k."ruleId" = e."ruleId"))`;

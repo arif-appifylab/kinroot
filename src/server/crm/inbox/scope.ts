@@ -20,7 +20,7 @@ import {hasTeamAccess, inboxContext, type InboxContext} from './settings';
  *
  * `listable` is what the inbox lists. `readable` adds threads that are not
  * inbox conversations but open from a contact's timeline as before: ticket
- * threads and shared accounts that don't feed the team inbox.
+ * threads, and (admins only) shared accounts that don't feed the team inbox.
  *
  * Ticket threads follow their ticket's visibility (`ticketScope()`: with
  * "members see only their own", tickets assigned to them or to nobody). A
@@ -54,7 +54,8 @@ export async function inboxScope(db: Db, user: Pick<User, 'id' | 'role'>, ctx?: 
     AND: [narrow, {OR: [{channel: 'email', accountId: {in: c.teamAccountIds}}, {channel: {in: ['form', ...MESSAGE_CHANNELS]}}, {channel: 'email', accountId: null, assigneeId: null}]}],
   };
   const listable: Prisma.EmailThreadWhereInput = {OR: [...own, ...(team ? [teamWhere] : [])]};
-  const other: Prisma.EmailThreadWhereInput = {OR: [{channel: 'ticket'}, {channel: 'email', account: {userId: null}, accountId: {notIn: c.teamAccountIds}}]};
+  // Shared mailboxes an admin kept out of the team inbox stay with admins (AUDIT-2 L-2).
+  const other: Prisma.EmailThreadWhereInput = {OR: [{channel: 'ticket'}, ...(isAdmin(user) ? [{channel: 'email', account: {userId: null}, accountId: {notIn: c.teamAccountIds}}] : [])]};
   const tickets: Prisma.TicketWhereInput | null = owner.ownerId ? {OR: [{assigneeId: owner.ownerId}, {assigneeId: null}]} : null;
   return {ctx: c, team, listable, readable: {OR: [listable, other]}, tickets, owner};
 }

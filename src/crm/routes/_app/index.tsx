@@ -149,7 +149,7 @@ function Dashboard() {
                   <div key={s.id}>
                     <div className="mb-1.5 flex items-center justify-between text-sm">
                       <span className="font-medium text-slate-700">{s.name}</span>
-                      <span className="font-semibold text-slate-900">{percent(s.rate)} <span className="font-normal text-slate-400">· {s.reached}</span></span>
+                      <span className="font-semibold text-slate-900">{percent(s.rate)} <span className="font-normal text-muted-foreground">· {s.reached}</span></span>
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-slate-100">
                       <div className="h-full rounded-full bg-brand transition-all duration-500" style={{width: `${Math.max(s.rate * 100, 2)}%`}} />
@@ -224,7 +224,7 @@ function Dashboard() {
                 />
                 {d.lostReasons.length > 0 && (
                   <div className="mt-4 border-t border-slate-100 pt-4">
-                    <p className="mb-2 text-xs font-bold tracking-wider text-slate-400 uppercase">Why we lose</p>
+                    <p className="mb-2 text-xs font-bold tracking-wider text-muted-foreground uppercase">Why we lose</p>
                     <ul className="grid gap-1.5">
                       {d.lostReasons.map((r) => (
                         <li key={r.reason} className="flex items-center justify-between text-sm">

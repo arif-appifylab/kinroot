@@ -106,7 +106,7 @@ export function TaskRow({task, compact, showRecord = true}: {task: Task; compact
       {canEdit && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button type="button" disabled={remove.isPending} aria-busy={remove.isPending || undefined} className="cursor-pointer rounded-md p-1 text-slate-400 opacity-0 transition-opacity outline-none group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-card hover:text-slate-700 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed data-[state=open]:opacity-100 pointer-coarse:opacity-100" aria-label={`Actions for task ${task.title}`}>
+            <button type="button" disabled={remove.isPending} aria-busy={remove.isPending || undefined} className="cursor-pointer rounded-md p-1 text-muted-foreground opacity-0 transition-opacity outline-none group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-card hover:text-slate-700 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed data-[state=open]:opacity-100 pointer-coarse:opacity-100" aria-label={`Actions for task ${task.title}`}>
               <MoreHorizontal className="size-4" />
             </button>
           </DropdownMenuTrigger>

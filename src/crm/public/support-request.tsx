@@ -84,7 +84,7 @@ function PortalTicketPage({number}: {number: string}) {
         <a href="/support/tickets/" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-primary"><ArrowLeft className="size-4" /> My requests</a>
         <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-sm font-bold text-slate-400">#{ticket.number} · opened {dateTime(ticket.createdAt)}</p>
+            <p className="text-sm font-bold text-muted-foreground">#{ticket.number} · opened {dateTime(ticket.createdAt)}</p>
             <h1 className="mt-0.5 text-xl font-extrabold tracking-tight text-slate-900">{ticket.subject}</h1>
           </div>
           <CustomerStatus status={ticket.status} />

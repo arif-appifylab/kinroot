@@ -5,7 +5,7 @@ import {useEffect, useMemo, useRef, useState} from 'react';
 import {toast} from 'sonner';
 import {z} from 'zod';
 
-import {Flow} from '@/components/automations/flow';
+import {askDeleteStep, Flow} from '@/components/automations/flow';
 import {LoadError} from '@/components/data-table';
 import {automationKey, useAutomation, useNames, type Automation, type Problem} from '@/components/automations/hooks';
 import {ManualRunDialog} from '@/components/automations/record-tools';
@@ -270,7 +270,7 @@ function AutomationPage({automationId}: {automationId: string}) {
                   step={step}
                   object={draft.object}
                   onChange={(s: Step) => set({steps: replaceStep(draft.steps, s)})}
-                  onDelete={() => (set({steps: removeStep(draft.steps, step.id)}), setSelected(null))}
+                  onDelete={async () => (await askDeleteStep(step)) && (set({steps: removeStep(draft.steps, step.id)}), setSelected(null))}
                   problems={problems.filter((p) => p.stepId === step.id)}
                   readOnly={!isAdmin}
                   automationId={automationId}

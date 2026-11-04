@@ -169,7 +169,7 @@ export function ScheduleDrawer({open, onOpenChange, target, editing}: {open: boo
               {list.isError && <LoadError error={list.error} onRetry={() => list.refetch()} />}
               {list.data?.map((row) => (
                 <div key={row.id} className="flex items-start gap-3 rounded-xl border border-slate-100 bg-card p-4 shadow-soft">
-                  <span className={cn('mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-lg [&_svg]:size-4', row.active ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-400')}><Mail /></span>
+                  <span className={cn('mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-lg [&_svg]:size-4', row.active ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-muted-foreground')}><Mail /></span>
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-slate-900">{row.frequencyLabel}</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
@@ -361,7 +361,7 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
               {draft.emails.map((e) => (
                 <span key={e} className="inline-flex items-center gap-1 rounded-md bg-slate-100 py-0.5 pr-1 pl-2 text-xs font-medium text-slate-700">
                   {e}
-                  <button type="button" aria-label={`Remove ${e}`} className="cursor-pointer rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700" onClick={() => set({emails: draft.emails.filter((x) => x !== e)})}><X className="size-3" /></button>
+                  <button type="button" aria-label={`Remove ${e}`} className="cursor-pointer rounded p-0.5 text-muted-foreground hover:bg-slate-200 hover:text-slate-700" onClick={() => set({emails: draft.emails.filter((x) => x !== e)})}><X className="size-3" /></button>
                 </span>
               ))}
               <input

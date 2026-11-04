@@ -1,22 +1,35 @@
 ---
 /**
  * "Continue the conversation" from an email sent to a chat visitor: /chat/c/<signed token>. The link
- * is checked in-process (Kinroot's own Site API route); an expired one says so.
+ * is checked in-process (Kinroot's own Site API route); an expired one says so (410). A check that
+ * failed (the database is down) is a 503 "not available right now", never "expired" (AUDIT-2 L-14).
  */
 import ChatPage from '../../../crm/public/chat-page';
 import CrmPublic from '../../../layouts/CrmPublic.astro';
-import {crmBrand, crmRead} from '../../../server/crm/page';
+import {crmBrand, crmGet} from '../../../server/crm/page';
 
 export const prerender = false;
 
 const token = Astro.params.token ?? '';
-const [brand, link] = await Promise.all([crmBrand(Astro.request), crmRead<{valid: boolean}>(Astro.request, `/public/chat/link/${encodeURIComponent(token)}`)]);
-const valid = link?.valid === true;
-if (!valid) Astro.response.status = 410;
+const [brand, link] = await Promise.all([crmBrand(Astro.request), crmGet<{valid: boolean}>(Astro.request, `/public/chat/link/${encodeURIComponent(token)}`)]);
+const failed = link.status !== 200 || !link.data;
+const valid = !failed && link.data?.valid === true;
+Astro.response.status = failed ? 503 : valid ? 200 : 410;
 Astro.response.headers.set('Cache-Control', 'private, no-store');
 Astro.response.headers.set('Referrer-Policy', 'no-referrer');
 ---
 
 <CrmPublic brand={brand} title="Chat" noindex>
-  <ChatPage client:only="react" continueToken={token} valid={valid} />
+  {
+    failed ? (
+      <main class="grid min-h-dvh place-items-center p-6 text-center">
+        <div>
+          <h1 class="text-xl font-extrabold">Chat is not available right now</h1>
+          <p class="mt-2 text-sm text-muted-foreground">Please try again in a few minutes, or reply to our email instead.</p>
+        </div>
+      </main>
+    ) : (
+      <ChatPage client:only="react" continueToken={token} valid={valid} />
+    )
+  }
 </CrmPublic>

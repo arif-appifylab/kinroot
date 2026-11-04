@@ -45,9 +45,11 @@ function FormPage() {
   const {tab = 'build'} = Route.useSearch();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const {canEdit} = useMe();
+  const {canEdit: mayWrite, isAdmin, me} = useMe();
   const q = useQuery({queryKey: [...keys.forms, formId], queryFn: () => api.get<{form: FormDetail}>(`/forms/${formId}`), select: (d) => d.form});
   const form = q.data;
+  // Only the form's creator or an admin changes it (the server refuses anyone else).
+  const canEdit = mayWrite && (isAdmin || !form || form.createdById === me.id);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved');

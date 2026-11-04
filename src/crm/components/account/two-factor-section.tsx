@@ -17,7 +17,7 @@ const TITLE = 'Two-step sign-in';
 const DESCRIPTION = 'A code from your phone as well as your password, so a stolen password is not enough.';
 
 /**
- * Settings → Security › Two-step sign-in (`/site-api/auth/two-factor/*`): set it up with a QR
+ * Settings → Your account › Two-step sign-in (`/site-api/auth/two-factor/*`): set it up with a QR
  * code or the key, confirm with a code, see the recovery codes ONCE, make new ones, turn it off.
  * `codes` lives in the screen, so nothing on the page can drop codes not saved yet.
  */

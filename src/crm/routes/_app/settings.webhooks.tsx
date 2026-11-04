@@ -333,7 +333,7 @@ function EventPicker({selected, onChange, onPreview}: {selected: string[]; onCha
                 <button type="button" className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left disabled:cursor-default" onClick={() => toggleGroup(g.label)} aria-expanded={isOpen} aria-controls={listId} disabled={!!q}>
                   <ChevronRight className={cn('size-4 shrink-0 text-slate-400 transition-transform', isOpen && 'rotate-90')} />
                   <span className="truncate text-sm font-semibold text-slate-800">{g.label}</span>
-                  <span className={cn('shrink-0 rounded-full px-1.5 py-px text-[11px] font-semibold tabular-nums', count ? 'bg-blue-50 text-blue-700' : 'text-slate-400')} aria-label={`${count} of ${g.events.length} selected`}>
+                  <span className={cn('shrink-0 rounded-full px-1.5 py-px text-[11px] font-semibold tabular-nums', count ? 'bg-blue-50 text-blue-700' : 'text-muted-foreground')} aria-label={`${count} of ${g.events.length} selected`}>
                     {count}/{g.events.length}
                   </span>
                 </button>
@@ -349,7 +349,7 @@ function EventPicker({selected, onChange, onPreview}: {selected: string[]; onCha
                         <Checkbox className="mt-0.5" checked={selected.includes(e.type)} onCheckedChange={(v) => set([e.type], v === true)} />
                         <span className="grid min-w-0">
                           <span className="truncate text-sm text-slate-700">{e.short}</span>
-                          <code className="truncate font-mono text-[11px] text-slate-400">{e.type}</code>
+                          <code className="truncate font-mono text-[11px] text-muted-foreground">{e.type}</code>
                         </span>
                       </label>
                     </li>
@@ -397,7 +397,7 @@ function PayloadPreview({type, hovering, onPick, hook, urlChanged, onDeliveries}
               <dt className="font-semibold text-slate-700">{h.name}:</dt>
               <dd className="min-w-0 break-all text-slate-500">
                 {h.name === 'X-Webhook-Event' ? type : h.value}
-                {h.name === 'X-Webhook-Test' && <span className="font-sans text-slate-400"> · tests only</span>}
+                {h.name === 'X-Webhook-Test' && <span className="font-sans text-muted-foreground"> · tests only</span>}
               </dd>
             </div>
           ))}

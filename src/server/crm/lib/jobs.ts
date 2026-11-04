@@ -123,6 +123,17 @@ const LABELS: Record<JobType, string> = {
   'incoming_webhook.process': 'Incoming webhook',
 };
 const LIST_LABELS = new Map(Object.entries(LABELS).map(([type, label]) => [listOf(type as JobType), label]));
+
+/**
+ * Which jobs go first when the rate holds some back (AUDIT-2 M-11): 0 = someone is waiting for it
+ * (a booking or form email, an SLA check, a survey, a forwarded reply, a report, a chat transcript,
+ * a snoozed conversation), 2 = bulk work an import or a merge queues by the hundred (scoring,
+ * duplicate checks, webhook deliveries), 1 = the rest. The rate itself is unchanged.
+ */
+const URGENT: JobType[] = ['booking.email', 'booking.reminder', 'form.after_submit', 'ticket.sla_check', 'ticket.csat', 'email.forward_reply', 'report.send', 'chat.email_visitor', 'inbox.wake'];
+const BULK: JobType[] = ['scoring.events', 'scoring.rescore', 'scoring.recalc', 'duplicates.check', 'duplicates.scan', 'webhook.deliver'];
+const PRIORITY = new Map<string, number>([...URGENT.map((t) => [listOf(t), 0] as const), ...BULK.map((t) => [listOf(t), 2] as const)]);
+export const priorityOf = (list: string) => PRIORITY.get(list) ?? 1;
 const LABEL_MAX = 80;
 
 // ─── Queueing ───────────────────────────────────────────────────────────────
@@ -311,6 +322,7 @@ function toRow(j: Outgoing, runAt: Date, extra: {lastError?: string | null; fail
     list: j.list,
     data: Object.keys(meta).length ? ({...j.data, [META]: meta} as Prisma.InputJsonObject) : j.data,
     runAt,
+    priority: priorityOf(j.list),
     key: j.key ?? null,
     lastError: extra.lastError ?? null,
     failedAt: extra.failedAt ?? null,
@@ -339,8 +351,10 @@ const rowOf = (j: Outgoing, o: Outcome) =>
   o.state === 'failed' ? toRow(j, new Date(), {lastError: o.reason, failedAt: new Date()}) : toRow(j, o.state === 'wait' ? o.until : new Date(), {lastError: o.state === 'wait' ? o.reason : null});
 
 /** Never throws: what is not sent waits in `JobBacklog` for the next `crm-tick`. */
-async function flush(jobs: Outgoing[]) {
-  if (runsJobsLocally()) return flushLocally(jobs);
+async function flush(queued: Outgoing[]) {
+  if (runsJobsLocally()) return flushLocally(queued);
+  // Urgent first when the rate lets only some go now (stable: queue order within a priority).
+  const jobs = queued.map((j, i) => ({j, i, p: priorityOf(j.list)})).sort((a, b) => a.p - b.p || a.i - b.i).map((x) => x.j);
   const db = getDb();
   let granted = jobs.length;
   if (db) {
@@ -365,7 +379,7 @@ async function flush(jobs: Outgoing[]) {
     if (lost) console.warn(`[jobs] ${lost} of ${now.length} job(s) not sent; kept for the next crm-tick`);
   }
   if (rateLimited && db) await markFull(db);
-  // Over this minute's share: they wait for the next minute, in the order they were queued.
+  // Over this minute's share: they wait for the next minute, by priority then in the order they were queued.
   const slot = nextMinute();
   for (const j of jobs.slice(now.length)) rows.push(toRow(j, slot, {lastError: RATE_WAIT}));
   await spill(rows);
@@ -386,13 +400,14 @@ async function flushLocally(jobs: Outgoing[]) {
 
 /**
  * From `crm-tick` (and, on your machine, after each request): sends what is due in the backlog,
- * within this minute's share of the rate. Bounded; rows are removed only once the platform took
- * them, set aside (`failedAt`) when it refused them for good, and never deleted for their age.
+ * within this minute's share of the rate, urgent jobs first (`priority`, then the order they came
+ * in). Bounded; rows are removed only once the platform took them, set aside (`failedAt`) when it
+ * refused them for good, and never deleted for their age.
  */
 export async function drainBacklog(db: Db, limit = MAX_BATCH) {
   const due = await db.jobBacklog.findMany({
     where: {failedAt: null, runAt: {lte: new Date()}},
-    orderBy: [{runAt: 'asc'}, {createdAt: 'asc'}],
+    orderBy: [{priority: 'asc'}, {runAt: 'asc'}, {createdAt: 'asc'}],
     take: Math.min(limit, MAX_BATCH),
     select: {id: true, list: true, data: true, key: true, attempts: true},
   });

@@ -58,7 +58,8 @@ async function seed() {
   C = await person('cal@kinroot-port.io');
   team = await mailbox(own, {fromName: 'Support team', fromEmail: 'team@kinroot-port.io', shared: true, replyTo: TEAM_IN});
   await mailbox(own, {fromName: 'Billing', fromEmail: 'billing@kinroot-port.io', shared: true, replyTo: BILLING_IN});
-  await mailbox(A.c, {fromName: 'Ada', fromEmail: 'ada-box@kinroot-port.io', replyTo: ADA_IN});
+  // A member's personal API mailbox sends as their own sign-in address (AUDIT-2 M-7).
+  await mailbox(A.c, {fromName: 'Ada', fromEmail: 'ada@kinroot-port.io', replyTo: ADA_IN});
   await saveSettings({teamAccounts: [team.id], access: 'everyone', memberIds: [], visibility: 'all', assignment: 'manual', roundRobinIds: [], autoAssignReplies: true, autoCloseDays: null, blockedAddresses: [], blockedDomains: []});
   known = (await ok(own.post('/site-api/crm/contacts', {firstName: 'Kim', lastName: 'Known', email: 'kim@client-port.io'}), 201)).contact;
   personalContact = (await ok(own.post('/site-api/crm/contacts', {firstName: 'Pat', lastName: 'Private', email: 'pat@client-port.io'}), 201)).contact;

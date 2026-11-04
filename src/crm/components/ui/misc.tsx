@@ -4,7 +4,10 @@ import * as React from 'react';
 import {initials} from '@/lib/format';
 import {cn} from '@/lib/utils';
 
-/** A person: their profile picture when they have one (src), else initials on their colour. */
+/** The colour of a customer's (contact's, visitor's) initials: the brand's second colour, a token. */
+export const CUSTOMER_COLOR = 'var(--secondary)';
+
+/** A person: their profile picture when they have one (src), else initials on their colour (a hex or a `var(--token)`). */
 export function Avatar({name, color, src, size = 'md', className}: {name: string; color?: string | null; src?: string | null; size?: 'xs' | 'sm' | 'md' | 'lg'; className?: string}) {
   const sizes = {xs: 'size-5 text-[9px]', sm: 'size-7 text-[11px]', md: 'size-9 text-xs', lg: 'size-14 text-lg'};
   const [broken, setBroken] = React.useState(false);
@@ -15,7 +18,7 @@ export function Avatar({name, color, src, size = 'md', className}: {name: string
     <span
       aria-hidden
       className={cn('inline-flex shrink-0 items-center justify-center rounded-full font-bold text-white ring-2 ring-card', sizes[size], className)}
-      style={{background: color ? `linear-gradient(135deg, ${color}, ${color}cc)` : 'linear-gradient(135deg, var(--primary), var(--secondary))'}}
+      style={{background: color ? `linear-gradient(135deg, ${color}, ${color.startsWith('var(') ? `color-mix(in srgb, ${color} 80%, transparent)` : `${color}cc`})` : 'linear-gradient(135deg, var(--primary), var(--secondary))'}}
     >
       {initials(name)}
     </span>

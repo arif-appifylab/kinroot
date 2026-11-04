@@ -94,7 +94,7 @@ const noValue: CondOp[] = ['empty', 'not_empty', 'is_true', 'is_false'];
 function Section({title, children}: {title: string; children: ReactNode}) {
   return (
     <section className="grid gap-3 border-b border-slate-100 px-5 py-4 last:border-0">
-      <h2 className="text-xs font-bold tracking-wider text-slate-400 uppercase">{title}</h2>
+      <h2 className="text-xs font-bold tracking-wider text-muted-foreground uppercase">{title}</h2>
       {children}
     </section>
   );

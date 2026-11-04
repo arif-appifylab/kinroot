@@ -1,60 +1,104 @@
-import {useMutation, useQueryClient} from '@tanstack/react-query';
-import {createFileRoute, Link} from '@tanstack/react-router';
-import {Camera, ShieldCheck, Trash2} from 'lucide-react';
-import {useRef, useState} from 'react';
+import {useMutation, useQuery, useQueryClient} from '@tanstack/react-query';
+import {createFileRoute, useRouterState} from '@tanstack/react-router';
+import {Camera, Trash2} from 'lucide-react';
+import {type ReactNode, useEffect, useRef, useState} from 'react';
 import {toast} from 'sonner';
 
+import {DeleteSection} from '@/components/account/delete-section';
+import {DevicesSection} from '@/components/account/devices-section';
 import {EmailSection} from '@/components/account/email-section';
-import {OwnerAccessNote} from '@/components/account/owner-note';
 import {FormError, FormField, PendingButton, useForm} from '@/components/account/form';
+import {OwnerAccessNote} from '@/components/account/owner-note';
+import {PasswordSection} from '@/components/account/password-section';
+import {TwoFactorSection} from '@/components/account/two-factor-section';
+import {LoadError} from '@/components/data-table';
 import {SettingsSection} from '@/components/settings-section';
-import {Button} from '@/components/ui/button';
 import {Input} from '@/components/ui/form';
-import {Avatar} from '@/components/ui/misc';
-import {accountApi, AccountError, accountKeys} from '@/lib/account-api';
+import {Avatar, Skeleton} from '@/components/ui/misc';
+import {accountApi, AccountError, accountKeys, viewerQuery} from '@/lib/account-api';
 import {api} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
+import {colourName} from '@/lib/colours';
 import {keys, useApiMutation, useMe} from '@/lib/queries';
 import {uploadFile} from '@/lib/upload';
 import {cn} from '@/lib/utils';
 import {AUTH_RULES} from '../../../lib/rules';
 
 export const Route = createFileRoute('/_app/settings/profile')({
-  head: () => ({meta: [{title: pageTitle('Profile')}]}),
-  component: ProfileSettings,
+  head: () => ({meta: [{title: pageTitle('Your account')}]}),
+  component: YourAccount,
 });
 
 const COLORS = ['#2563eb', '#0d9488', '#7c3aed', '#db2777', '#ea580c', '#16a34a', '#0891b2', '#475569'];
 
 /**
- * Settings → Profile: your picture, colour and name, and the email address you sign in with.
- * The name is the site account's (`PATCH /site-api/auth/me`); Kinroot keeps a copy in its
- * `Member` row with the colour (`PATCH /site-api/crm/auth/me`). Password, two-step sign-in,
- * devices and deleting the account are in Settings → Security.
+ * Settings → Your account (owner request, 4 Nov; it was Profile and Security): your picture, colour
+ * and name; the email you sign in with; your password and two-step sign-in (`#security`); signed-in
+ * devices; deleting the account. The name is the site account's (`PATCH /site-api/auth/me`); Kinroot
+ * keeps a copy in its `Member` row with the colour (`PATCH /site-api/crm/auth/me`). Everything else is
+ * the site's auth core (`/site-api/auth/*`, src/crm/lib/account-api.ts).
+ *
+ * The site owner's account has no email, password or two-step sign-in here (it comes from the
+ * dashboard): they see a note instead, and their devices. The account is read before any of those
+ * parts show, so the owner never sees them flash while it loads (AUDIT-2 L-17).
  */
-function ProfileSettings() {
+function YourAccount() {
   const {me} = useMe();
-  if (me.accountOwner) {
-    return (
-      <div>
-        <ProfileSection />
-        <OwnerAccessNote />
+  const viewer = useQuery(viewerQuery);
+  // Held here: nothing else on the page can drop recovery codes not saved yet.
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const owner = Boolean(me.accountOwner || viewer.data?.platformOwner);
+  // The account's own email, for the "not your email address" password rule.
+  const email = viewer.data?.email ?? me.email ?? '';
+  useScrollToHash(!viewer.isPending);
+
+  let signIn: ReactNode;
+  if (owner) signIn = <OwnerAccessNote />;
+  else if (viewer.isPending)
+    signIn = (
+      <div className="mb-6 grid gap-3" aria-busy="true" aria-label="Loading your sign-in settings">
+        <Skeleton className="h-40" />
+        <Skeleton className="h-40" />
       </div>
     );
-  }
+  else if (viewer.isError)
+    signIn = (
+      <SettingsSection title="Sign-in">
+        <LoadError title="Your sign-in settings could not be loaded" error={viewer.error} onRetry={() => void viewer.refetch()} />
+      </SettingsSection>
+    );
+  else
+    signIn = (
+      <>
+        <EmailSection />
+        <div id="security" className="scroll-mt-24">
+          <PasswordSection email={email} />
+          <TwoFactorSection codes={codes} setCodes={setCodes} />
+        </div>
+      </>
+    );
+
   return (
     <div>
       <ProfileSection />
-      <EmailSection />
-      <SettingsSection title="Password and sign-in" description="Your password, two-step sign-in, signed-in devices and deleting your account.">
-        <Button asChild variant="secondary">
-          <Link to="/settings/security">
-            <ShieldCheck /> Open security settings
-          </Link>
-        </Button>
-      </SettingsSection>
+      {signIn}
+      <DevicesSection />
+      {!owner && viewer.isSuccess && <DeleteSection />}
     </div>
   );
+}
+
+/** An old Settings → Security link lands here with `#security`: show that part once it rendered. */
+function useScrollToHash(ready: boolean) {
+  const hash = useRouterState({select: (s) => s.location.hash});
+  useEffect(() => {
+    if (!ready || !hash) return;
+    const el = document.getElementById(hash);
+    if (!el) return;
+    el.scrollIntoView({block: 'start'});
+    el.querySelector<HTMLElement>('h2')?.setAttribute('tabindex', '-1');
+    el.querySelector<HTMLElement>('h2')?.focus({preventScroll: true});
+  }, [ready, hash]);
 }
 
 function ProfileSection() {
@@ -76,10 +120,12 @@ function ProfileSection() {
   const picker = useRef<HTMLInputElement>(null);
   const upload = useApiMutation((file: File) => uploadFile('/auth/me/avatar', file), {invalidate: [keys.auth, keys.team], success: 'Profile picture updated'});
   const removePhoto = useApiMutation(() => api.del('/auth/me/avatar'), {invalidate: [keys.auth, keys.team], success: 'Profile picture removed'});
+  const [pickError, setPickError] = useState<string | null>(null);
   const pick = (file?: File) => {
     if (picker.current) picker.current.value = '';
+    setPickError(null);
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) return toast.error('Pictures can be up to 2 MB');
+    if (file.size > 2 * 1024 * 1024) return setPickError('That picture is over 2 MB. Choose a smaller one.');
     upload.mutate(file);
   };
   const shownName = form.values.name.trim() || me.name;
@@ -101,10 +147,25 @@ function ProfileSection() {
                 </PendingButton>
               )}
             </div>
+            {pickError && (
+              <p role="alert" className="text-xs font-medium text-destructive">
+                {pickError}
+              </p>
+            )}
             <p className="text-xs text-muted-foreground">PNG, JPEG, WebP or GIF, up to 2 MB. Without a picture your initials show on this colour:</p>
             <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Avatar colour">
               {COLORS.map((c) => (
-                <button key={c} type="button" role="radio" aria-checked={color === c} aria-label={c} onClick={() => setColor(c)} className={cn('size-6 cursor-pointer rounded-full transition-transform hover:scale-110', color === c && 'ring-2 ring-offset-2 ring-slate-900')} style={{background: c}} />
+                <button
+                  key={c}
+                  type="button"
+                  role="radio"
+                  aria-checked={color === c}
+                  aria-label={colourName(c)}
+                  title={colourName(c)}
+                  onClick={() => setColor(c)}
+                  className={cn('size-6 cursor-pointer rounded-full transition-transform outline-none hover:scale-110 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2', color === c && 'ring-2 ring-slate-900 ring-offset-2')}
+                  style={{background: c}}
+                />
               ))}
             </div>
           </div>

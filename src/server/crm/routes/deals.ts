@@ -365,7 +365,8 @@ export const deals = new Hono<AppEnv>()
     }
     if (status === 'WON') {
       const contactIds = deal.contacts.map((l) => l.contactId);
-      const promoted = await db.contact.findMany({where: {id: {in: contactIds}, lifecycleStage: {not: 'CUSTOMER'}}, select: {id: true, firstName: true, lastName: true, lifecycleStage: true}});
+      // Only contacts this person may see become customers (AUDIT-2 L-5), the scope in the where.
+      const promoted = await db.contact.findMany({where: {id: {in: contactIds}, lifecycleStage: {not: 'CUSTOMER'}, ...scope}, select: {id: true, firstName: true, lastName: true, lifecycleStage: true}});
       if (promoted.length) {
         await db.contact.updateMany({where: {id: {in: promoted.map((p) => p.id)}}, data: {lifecycleStage: 'CUSTOMER'}});
         await auditMany(db, c, promoted.map((p) => ({action: 'contact.updated', entity: 'contact', recordId: p.id, label: [p.firstName, p.lastName].filter(Boolean).join(' '), meta: {changes: [{field: 'lifecycleStage', from: p.lifecycleStage, to: 'CUSTOMER'}], reason: `Deal won: ${deal.title}`}})));

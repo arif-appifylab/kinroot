@@ -39,6 +39,7 @@ const withSlash = (p: string) => (p.endsWith('/') ? p : `${p}/`);
 const seo = indexable && !noindex;
 // One URL per page: the path without its query.
 const canonical = seo ? absoluteUrl(withSlash(path)) : null;
+// The uploaded logo's public link (never a data: URL): the JSON-LD logo and the social card image.
 const logo = brand.logo && !brand.logo.startsWith('data:') ? absoluteUrl(brand.logo) : null;
 const structured = seo ? [...(path === '/' ? [siteJsonLd({name, logo}, description ?? '', SITE.lang)] : []), ...(jsonLd ? [jsonLd] : [])] : [];
 ---
@@ -60,9 +61,11 @@ const structured = seo ? [...(path === '/' ? [siteJsonLd({name, logo}, descripti
           <meta property="og:title" content={title ?? name} />
           {description && <meta property="og:description" content={description} />}
           {canonical && <meta property="og:url" content={canonical} />}
+          {logo && <meta property="og:image" content={logo} />}
           <meta name="twitter:card" content="summary" />
           <meta name="twitter:title" content={title ?? name} />
           {description && <meta name="twitter:description" content={description} />}
+          {logo && <meta name="twitter:image" content={logo} />}
           <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
         </>
       )

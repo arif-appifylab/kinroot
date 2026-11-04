@@ -125,7 +125,7 @@ export function NativeSelect({size = 'default', ...input}: Omit<React.ComponentP
           <SelectPrimitive.Viewport className="max-h-[inherit] overflow-y-auto p-1 scrollbar-thin">
             {groups.map((g, gi) => (
               <SelectPrimitive.Group key={gi} className={cn(gi > 0 && 'mt-1 border-t border-slate-100 pt-1')}>
-                {g.label && <SelectPrimitive.Label className="px-2.5 pt-1.5 pb-1 text-[11px] font-bold tracking-wide text-slate-400 uppercase">{g.label}</SelectPrimitive.Label>}
+                {g.label && <SelectPrimitive.Label className="px-2.5 pt-1.5 pb-1 text-[11px] font-bold tracking-wide text-muted-foreground uppercase">{g.label}</SelectPrimitive.Label>}
                 {g.options.map((o) => (
                   <SelectPrimitive.Item
                     key={o.value}

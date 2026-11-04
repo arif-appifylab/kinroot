@@ -8,6 +8,10 @@
  *                    → JSON → Idempotency-Key → validation (zod built from the
  *                    catalogue fields) → the action's handler. Every request
  *                    with a known route is logged (DataInRequest), refused or not.
+ *   handleDataInUrl() the same actions for no-code tools (Pabbly, Zapier, Make):
+ *                    `POST /site-api/crm/public/data-in/<action>/<access token>` with an
+ *                    `X-Signature-Token` header instead of a key and an HMAC; same limits, log
+ *                    and idempotency, acting as the admin who turned it on (src/crm/lib/data-in-url.ts).
  *   HANDLERS         one per catalogue action. They write through the shared
  *                    helpers (record-writes, createNote, logInteraction,
  *                    createTicket, addToList, emit…), acting as the user who
@@ -36,6 +40,7 @@ import {
   type DataInField,
   type DataInRecord,
 } from '@/lib/data-in';
+import {ACCESS_TOKEN_PATTERN, DATA_IN_URL_NAME, DATA_IN_URL_TOKEN_PREFIX, SIGNATURE_TOKEN_HEADER, SIGNATURE_TOKEN_PREFIX, type DataInUrlState} from '@/lib/data-in-url';
 import {decryptJson, encryptJson, randomToken, sha256Hex} from '../kit/crypto';
 import {CRM_APP} from '../kit/config';
 import type {Db} from '../kit/db';
@@ -59,10 +64,19 @@ import {createTicket} from './tickets';
 import {asUser, withEmail} from './users';
 import {strings} from './json-list';
 
-// ─── Settings: signing secret, rate limit ───────────────────────────────────
+// ─── Settings: signing secret, rate limit, Data in URL ──────────────────────
 
 const SETTING_KEY = 'data-in';
-type Stored = {secret?: string; rotatedAt?: string; rateLimit?: number};
+
+/**
+ * The Data in URL (for Pabbly, Zapier and other no-code tools that can't sign requests): an access
+ * token in the URL path and a signature token sent as the `X-Signature-Token` header, both needed.
+ * Each is kept twice: its SHA-256 (what requests are compared against, in constant time) and
+ * encrypted with encryptJson() (only for an admin's "Show tokens"). `createdById` is the admin who
+ * turned it on or regenerated it last: requests act as them, like an API key acts as its creator.
+ */
+type UrlStored = {id: string; enabled: boolean; accessHash: string; access: string; signatureHash: string; signature: string; createdById: string; rotatedAt: string};
+type Stored = {secret?: string; rotatedAt?: string; rateLimit?: number; url?: UrlStored};
 
 async function stored(db: Db): Promise<Stored> {
   const row = await db.setting.findUnique({where: {key: SETTING_KEY}});
@@ -101,6 +115,77 @@ export async function dataInSettings(db: Db) {
 export const saveRateLimit = (db: Db, rateLimit: number) => store(db, {rateLimit});
 
 export const maskSecret = (secret: string) => `${secret.slice(0, SIGNING_SECRET_PREFIX.length + 2)}${'•'.repeat(16)}${secret.slice(-4)}`;
+
+const accessHash = (token: string) => sha256Hex(`datain-url:${token}`);
+const signatureTokenHash = (token: string) => sha256Hex(`datain-sigtoken:${token}`);
+
+/** Equal-length hex digests compared without an early exit. */
+function sameHex(a: string, b: string) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+const maskToken = (prefix: string, token: string) => `${prefix}${'•'.repeat(12)}${token.slice(-4)}`;
+
+export async function dataInUrlState(db: Db): Promise<DataInUrlState> {
+  const u = (await stored(db)).url;
+  if (!u) return {enabled: false, ready: false, rotatedAt: null, createdBy: null, accessMasked: null, signatureMasked: null};
+  const [tokens, createdBy] = await Promise.all([
+    urlTokens(u),
+    db.member.findUnique({where: {id: u.createdById}, select: {id: true, name: true, active: true}}),
+  ]);
+  return {
+    enabled: u.enabled,
+    ready: !!tokens,
+    rotatedAt: u.rotatedAt,
+    createdBy,
+    accessMasked: tokens ? maskToken(DATA_IN_URL_TOKEN_PREFIX, tokens.access) : null,
+    signatureMasked: tokens ? maskToken(SIGNATURE_TOKEN_PREFIX, tokens.signature) : null,
+  };
+}
+
+async function urlTokens(u: UrlStored): Promise<{access: string; signature: string} | null> {
+  const [access, signature] = await Promise.all([decryptJson<string>(u.access).catch(() => null), decryptJson<string>(u.signature).catch(() => null)]);
+  return access && signature ? {access, signature} : null;
+}
+
+/** Both tokens in full, for an admin's "Show tokens" (the route audits it). */
+export async function revealDataInUrl(db: Db): Promise<{access: string; signature: string} | null> {
+  const u = (await stored(db)).url;
+  return u ? urlTokens(u) : null;
+}
+
+/** New tokens (the old URL and header stop working at once), acting as `memberId` from now on. */
+export async function regenerateDataInUrl(db: Db, memberId: string, enabled?: boolean) {
+  const before = (await stored(db)).url;
+  const access = `${DATA_IN_URL_TOKEN_PREFIX}${randomToken(30)}`;
+  const signature = `${SIGNATURE_TOKEN_PREFIX}${randomToken(30)}`;
+  const url: UrlStored = {
+    id: randomToken(9),
+    enabled: enabled ?? before?.enabled ?? true,
+    accessHash: await accessHash(access),
+    access: await encryptJson(access),
+    signatureHash: await signatureTokenHash(signature),
+    signature: await encryptJson(signature),
+    createdById: memberId,
+    rotatedAt: new Date().toISOString(),
+  };
+  await store(db, {url});
+  return {access, signature, previous: before ? await urlTokens(before) : null};
+}
+
+/** Turns the Data in URL on (making its tokens the first time) or off. On: requests act as `memberId`. */
+export async function setDataInUrlEnabled(db: Db, memberId: string, enabled: boolean) {
+  const u = (await stored(db)).url;
+  if (!u || !(await urlTokens(u))) {
+    if (!enabled) return;
+    await regenerateDataInUrl(db, memberId, true);
+    return;
+  }
+  await store(db, {url: {...u, enabled, ...(enabled ? {createdById: memberId} : {})}});
+}
 
 // ─── API keys ───────────────────────────────────────────────────────────────
 
@@ -229,7 +314,7 @@ function validateBody(action: DataInAction, body: Record<string, unknown>): Reco
 type Ctx = {
   db: Db;
   user: User;
-  key: ApiKey;
+  key: Pick<ApiKey, 'id' | 'name'>;
   origin: string;
   params: Record<string, string>;
   writer: Writer;
@@ -644,31 +729,51 @@ async function signatureMatches(secret: string, t: number, v1: string, raw: Uint
   return crypto.subtle.verify('HMAC', key, sig, data);
 }
 
-export async function handleDataIn(db: Db, input: DataInInput): Promise<DataInOutput> {
-  const started = Date.now();
-  const match = matchDataInAction(input.method, input.path);
-  // Not a route of this API: answered, never logged.
-  if (!match) return {status: 404, body: errorBody('E_NOT_FOUND', `No action at ${input.method} ${input.path || '/'}. The actions are listed in Settings → Webhooks → Incoming.`)};
-  const {action, params} = match;
-  const idemHeader = input.headers.get('idempotency-key')?.trim().slice(0, 200) || null;
-  const state: {key: ApiKey | null; body: string | null; records: DataInRecord[]; replayed: boolean} = {key: null, body: null, records: [], replayed: false};
+/** Who a request acts as, and how it is named in the log, the records' source and idempotency. */
+type Caller = {
+  key: Pick<ApiKey, 'id' | 'name'>;
+  user: User;
+  log: {apiKeyId: string | null; name: string; prefix: string};
+  writer: Pick<Writer, 'by' | 'source' | 'data'> & {meta: Record<string, unknown>};
+};
 
-  const finish = async (status: number, body: unknown, errorCode?: DataInErrorCode, extraHeaders: Record<string, string> = {}): Promise<DataInOutput> => {
+type Run = {
+  db: Db;
+  input: DataInInput;
+  action: DataInAction;
+  params: Record<string, string>;
+  idemHeader: string | null;
+  state: {log: Caller['log'] | null; body: string | null; records: DataInRecord[]; replayed: boolean};
+  finish: (status: number, body: unknown, errorCode?: DataInErrorCode, extraHeaders?: Record<string, string>) => Promise<DataInOutput>;
+  fail: (code: DataInErrorCode, message: string, field?: string) => Promise<DataInOutput>;
+  refuse: (code: DataInErrorCode, message: string) => DataInOutput;
+  /** Counts a refusal against the connection (no log row); past the limit, E_RATE_LIMITED. */
+  strike: (code: DataInErrorCode, message: string) => Promise<DataInOutput>;
+  blockedNow: () => Promise<DataInOutput | null>;
+};
+
+/** Logging and refusals shared by both ways in. `logPath` never holds a token. */
+async function begin(db: Db, input: DataInInput, action: DataInAction, params: Record<string, string>, logPath: string): Promise<Run> {
+  const started = Date.now();
+  const idemHeader = input.headers.get('idempotency-key')?.trim().slice(0, 200) || null;
+  const state: Run['state'] = {log: null, body: null, records: [], replayed: false};
+
+  const finish: Run['finish'] = async (status, body, errorCode, extraHeaders = {}) => {
     const err = (body as {error?: {message?: string}}).error;
     await db.dataInRequest
       .create({
         data: {
-          apiKeyId: state.key?.id ?? null,
-          keyName: state.key?.name ?? null,
-          keyPrefix: state.key?.prefix ?? null,
+          apiKeyId: state.log?.apiKeyId ?? null,
+          keyName: state.log?.name ?? null,
+          keyPrefix: state.log?.prefix ?? null,
           action: action.key,
           method: input.method.toUpperCase(),
-          path: input.path.slice(0, 300),
+          path: logPath.slice(0, 300),
           status,
           errorCode: errorCode ?? null,
           error: err?.message?.slice(0, 500) ?? null,
           durationMs: Date.now() - started,
-          idempotencyKey: state.key ? idemHeader : null,
+          idempotencyKey: state.log ? idemHeader : null,
           replayed: state.replayed,
           body: state.body,
           response: JSON.parse(JSON.stringify(body)) as Prisma.InputJsonValue,
@@ -678,17 +783,90 @@ export async function handleDataIn(db: Db, input: DataInInput): Promise<DataInOu
       .catch((e) => console.error('[data-in] log', String((e as Error)?.message ?? e).slice(0, 200)));
     return {status, body, headers: extraHeaders};
   };
-  const fail = (code: DataInErrorCode, message: string, field?: string) => finish(DATA_IN_ERRORS[code].status, errorBody(code, message, field), code);
+  const fail: Run['fail'] = (code, message, field) => finish(DATA_IN_ERRORS[code].status, errorBody(code, message, field), code);
 
   // Answered without a log row: nobody can be told apart before a valid key (anyone could fill the log).
-  const refuse = (code: DataInErrorCode, message: string): DataInOutput => ({status: DATA_IN_ERRORS[code].status, body: errorBody(code, message)});
-  // Refused before anything is written: a wrong method, no key or an unknown key counts against the
-  // connection (`datain:bad:<ip>`, 30 per 10 minutes) and leaves no request log row.
+  const refuse: Run['refuse'] = (code, message) => ({status: DATA_IN_ERRORS[code].status, body: errorBody(code, message)});
+  // Refused before anything is written: a wrong method, no key or an unknown key (or Data in URL)
+  // counts against the connection (`datain:bad:<ip>`, 30 per 10 minutes) and leaves no log row.
   const badKey = `datain:bad:${await ipKey(input.ip)}`;
-  const blocked = () => refuse('E_RATE_LIMITED', 'Too many requests with unknown API keys from this address. Try again later.');
-  const strike = async (code: DataInErrorCode, message: string) => ((await hit(db, badKey, BAD_KEY_LIMIT, 600)) ? refuse(code, message) : blocked());
+  const blocked = () => refuse('E_RATE_LIMITED', 'Too many requests with unknown API keys or URLs from this address. Try again later.');
+  const strike: Run['strike'] = async (code, message) => ((await hit(db, badKey, BAD_KEY_LIMIT, 600)) ? refuse(code, message) : blocked());
   // Over the limit: not even a key lookup until the window has passed.
-  if ((await db.rateHit.count({where: {key: badKey, at: {gte: new Date(Date.now() - 600_000)}}})) >= BAD_KEY_LIMIT) return blocked();
+  const blockedNow = async () => ((await db.rateHit.count({where: {key: badKey, at: {gte: new Date(Date.now() - 600_000)}}})) >= BAD_KEY_LIMIT ? blocked() : null);
+  return {db, input, action, params, idemHeader, state, finish, fail, refuse, strike, blockedNow};
+}
+
+/** The caller's rate limit, then the body's size; the raw body, or the answer that refused it. */
+async function limitAndRead(run: Run, rateKey: string, per: string, rateLimit: number): Promise<Uint8Array | DataInOutput> {
+  if (!(await hit(run.db, rateKey, Math.max(1, rateLimit), 60))) return run.fail('E_RATE_LIMITED', `Too many requests: ${per} may send ${rateLimit} per minute. Slow down and retry.`);
+  const tooLarge = `The body is larger than ${DATA_IN_MAX_BYTES / 1024} KB.`;
+  if (Number(run.input.headers.get('content-length') ?? 0) > DATA_IN_MAX_BYTES) return run.fail('E_PAYLOAD_TOO_LARGE', tooLarge);
+  const raw = new Uint8Array(await run.input.body());
+  if (raw.byteLength > DATA_IN_MAX_BYTES) return run.fail('E_PAYLOAD_TOO_LARGE', tooLarge);
+  run.state.body = bodyPreview(raw);
+  return raw;
+}
+
+/** JSON → Idempotency-Key → validation → the action's handler; the same for both ways in. */
+async function runAction(run: Run, caller: Caller, raw: Uint8Array, opts: {idemScope: string; jsonHint?: string; prepare?: (body: Record<string, unknown>) => Record<string, unknown>}): Promise<DataInOutput> {
+  const {db, action, idemHeader, state, fail, finish} = run;
+  // ─── JSON ───
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(raw) || 'null');
+  } catch {
+    return fail('E_INVALID_JSON', `The body is not valid JSON.${opts.jsonHint ?? ''}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fail('E_INVALID_JSON', `The body must be a JSON object.${opts.jsonHint ?? ''}`);
+  state.body = bodyPreview(raw, parsed);
+
+  // ─── Idempotency ───
+  let reservation: string | null = null;
+  if (idemHeader) {
+    await db.dataInIdempotency.deleteMany({where: {apiKeyId: opts.idemScope, key: idemHeader, createdAt: {lt: new Date(Date.now() - IDEMPOTENCY_HOURS * 3_600_000)}}});
+    try {
+      reservation = (await db.dataInIdempotency.create({data: {apiKeyId: opts.idemScope, key: idemHeader, action: action.key}})).id;
+    } catch (e) {
+      if ((e as {code?: string}).code !== 'P2002') throw e;
+      const prior = await db.dataInIdempotency.findUnique({where: {apiKeyId_key: {apiKeyId: opts.idemScope, key: idemHeader}}});
+      if (prior && prior.action !== action.key) return fail('E_INVALID_FIELD', `Idempotency-Key: this key was already used for ${prior.action}. Use a new key per request.`, 'Idempotency-Key');
+      if (!prior || prior.status === null) return fail('E_IDEMPOTENCY_IN_PROGRESS', 'A request with this Idempotency-Key is still running. Retry in a moment.');
+      state.replayed = true;
+      return finish(prior.status, prior.response, undefined, {'Idempotent-Replayed': 'true'});
+    }
+  }
+
+  // ─── Validate and run ───
+  const {user} = caller;
+  const writer: Writer = {...caller.writer, actor: {id: user.id, name: user.name, email: user.email}};
+  const ctx: Ctx = {db, user, key: caller.key, origin: run.input.origin, params: run.params, writer, scope: await userScope(db, user), records: state.records};
+  try {
+    const input = parsed as Record<string, unknown>;
+    const body = validateBody(action, opts.prepare ? opts.prepare(input) : input);
+    const out = await HANDLERS[action.key](ctx, body as Body);
+    const response = {ok: true, action: action.key, result: out.result};
+    if (reservation) await db.dataInIdempotency.update({where: {id: reservation}, data: {status: out.status, response: JSON.parse(JSON.stringify(response)) as Prisma.InputJsonValue}});
+    return finish(out.status, response);
+  } catch (e) {
+    // A refused or failed request can be fixed and sent again with the same key.
+    if (reservation) await db.dataInIdempotency.deleteMany({where: {id: reservation}});
+    if (e instanceof DataInError) return fail(e.code, e.message, e.field);
+    console.error('[data-in]', action.key, String((e as Error)?.message ?? e).slice(0, 200));
+    return fail('E_INTERNAL', 'Something went wrong on our side. Retry with the same Idempotency-Key.');
+  }
+}
+
+const OWNER_INACTIVE = 'can no longer make changes';
+
+export async function handleDataIn(db: Db, input: DataInInput): Promise<DataInOutput> {
+  const match = matchDataInAction(input.method, input.path);
+  // Not a route of this API: answered, never logged.
+  if (!match) return {status: 404, body: errorBody('E_NOT_FOUND', `No action at ${input.method} ${input.path || '/'}. The actions are listed in Settings → Webhooks → Incoming.`)};
+  const run = await begin(db, input, match.action, match.params, input.path);
+  const {action, fail, strike} = run;
+  const blocked = await run.blockedNow();
+  if (blocked) return blocked;
   if (match.wrongMethod) return strike('E_NOT_FOUND', `${action.path} only accepts ${action.method} requests`);
 
   // ─── API key ───
@@ -698,20 +876,15 @@ export async function handleDataIn(db: Db, input: DataInInput): Promise<DataInOu
   if (!key) return strike('E_UNAUTHORIZED', 'Unknown API key. Copy it again, or create a new one in Settings → Webhooks → Incoming.');
   const {createdBy, ...keyRow} = key;
   const user = createdBy ? asUser(createdBy) : null;
-  state.key = keyRow;
+  run.state.log = {apiKeyId: key.id, name: key.name, prefix: key.prefix};
   if (key.revokedAt) return fail('E_UNAUTHORIZED', 'This API key was revoked. Create a new one in Settings → Webhooks → Incoming.');
   if (!user || !user.active || user.role === 'VIEWER') {
-    return fail('E_KEY_OWNER_INACTIVE', 'The person who created this API key was deactivated or can no longer make changes. Ask an admin to create a new key.');
+    return fail('E_KEY_OWNER_INACTIVE', `The person who created this API key was deactivated or ${OWNER_INACTIVE}. Ask an admin to create a new key.`);
   }
 
   // ─── Rate limit, size ───
-  const {rateLimit} = await dataInSettings(db);
-  if (!(await hit(db, `datain:${key.id}`, Math.max(1, rateLimit), 60))) return fail('E_RATE_LIMITED', `Too many requests: this key may send ${rateLimit} per minute. Slow down and retry.`);
-  const tooLarge = `The body is larger than ${DATA_IN_MAX_BYTES / 1024} KB.`;
-  if (Number(input.headers.get('content-length') ?? 0) > DATA_IN_MAX_BYTES) return fail('E_PAYLOAD_TOO_LARGE', tooLarge);
-  const raw = new Uint8Array(await input.body());
-  if (raw.byteLength > DATA_IN_MAX_BYTES) return fail('E_PAYLOAD_TOO_LARGE', tooLarge);
-  state.body = bodyPreview(raw);
+  const raw = await limitAndRead(run, `datain:${key.id}`, 'this key', (await dataInSettings(db)).rateLimit);
+  if (!(raw instanceof Uint8Array)) return raw;
 
   // ─── Signature ───
   const header = input.headers.get('x-signature');
@@ -730,52 +903,124 @@ export async function handleDataIn(db: Db, input: DataInInput): Promise<DataInOu
   }
   await db.apiKey.update({where: {id: key.id}, data: {lastUsedAt: new Date()}});
 
-  // ─── JSON ───
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(new TextDecoder().decode(raw) || 'null');
-  } catch {
-    return fail('E_INVALID_JSON', 'The body is not valid JSON.');
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fail('E_INVALID_JSON', 'The body must be a JSON object.');
-  state.body = bodyPreview(raw, parsed);
-
-  // ─── Idempotency ───
-  let reservation: string | null = null;
-  if (idemHeader) {
-    await db.dataInIdempotency.deleteMany({where: {apiKeyId: key.id, key: idemHeader, createdAt: {lt: new Date(Date.now() - IDEMPOTENCY_HOURS * 3_600_000)}}});
-    try {
-      reservation = (await db.dataInIdempotency.create({data: {apiKeyId: key.id, key: idemHeader, action: action.key}})).id;
-    } catch (e) {
-      if ((e as {code?: string}).code !== 'P2002') throw e;
-      const prior = await db.dataInIdempotency.findUnique({where: {apiKeyId_key: {apiKeyId: key.id, key: idemHeader}}});
-      if (prior && prior.action !== action.key) return fail('E_INVALID_FIELD', `Idempotency-Key: this key was already used for ${prior.action}. Use a new key per request.`, 'Idempotency-Key');
-      if (!prior || prior.status === null) return fail('E_IDEMPOTENCY_IN_PROGRESS', 'A request with this Idempotency-Key is still running. Retry in a moment.');
-      state.replayed = true;
-      return finish(prior.status, prior.response, undefined, {'Idempotent-Replayed': 'true'});
-    }
-  }
-
-  // ─── Validate and run ───
-  const writer: Writer = {
-    by: `API key ${key.name}`,
-    source: {kind: 'api', name: key.name},
-    data: {apiKeyId: key.id},
-    meta: {source: {kind: 'api', name: key.name}, dataInKey: {id: key.id, name: key.name, prefix: key.prefix}, action: action.key},
-    actor: {id: user.id, name: user.name, email: user.email},
+  const caller: Caller = {
+    key: keyRow,
+    user,
+    log: run.state.log,
+    writer: {
+      by: `API key ${key.name}`,
+      source: {kind: 'api', name: key.name},
+      data: {apiKeyId: key.id},
+      meta: {source: {kind: 'api', name: key.name}, dataInKey: {id: key.id, name: key.name, prefix: key.prefix}, action: action.key},
+    },
   };
-  const ctx: Ctx = {db, user, key: keyRow, origin: input.origin, params, writer, scope: await userScope(db, user), records: state.records};
-  try {
-    const body = validateBody(action, parsed as Record<string, unknown>);
-    const out = await HANDLERS[action.key](ctx, body as Body);
-    const response = {ok: true, action: action.key, result: out.result};
-    if (reservation) await db.dataInIdempotency.update({where: {id: reservation}, data: {status: out.status, response: JSON.parse(JSON.stringify(response)) as Prisma.InputJsonValue}});
-    return finish(out.status, response);
-  } catch (e) {
-    // A refused or failed request can be fixed and sent again with the same key.
-    if (reservation) await db.dataInIdempotency.deleteMany({where: {id: reservation}});
-    if (e instanceof DataInError) return fail(e.code, e.message, e.field);
-    console.error('[data-in]', action.key, String((e as Error)?.message ?? e).slice(0, 200));
-    return fail('E_INTERNAL', 'Something went wrong on our side. Retry with the same Idempotency-Key.');
+  return runAction(run, caller, raw, {idemScope: key.id});
+}
+
+// ─── The Data in URL (Pabbly, Zapier, Make…) ────────────────────────────────
+
+/**
+ * Values as no-code tools send them: an unmapped field arrives as "" (left out here, so it never
+ * clears a value; null still does), numbers and true/false as text, lists as "a, b", and an object
+ * as JSON text. Anything else is left as sent, for validateBody() to accept or refuse by name.
+ */
+function lenient(action: DataInAction, body: Record<string, unknown>): Record<string, unknown> {
+  const fields = new Map(action.fields.map((f) => [f.name, f]));
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (typeof v === 'string' && v.trim() === '') continue;
+    const f = fields.get(k);
+    if (f && typeof v === 'string') {
+      const t = v.trim();
+      if ((f.type === 'number' || f.type === 'integer') && /^-?\d+(\.\d+)?$/.test(t)) {
+        out[k] = Number(t);
+        continue;
+      }
+      if (f.type === 'boolean' && /^(true|false|yes|no|1|0)$/i.test(t)) {
+        out[k] = /^(true|yes|1)$/i.test(t);
+        continue;
+      }
+      if (f.type === 'string[]' || f.type === 'email[]') {
+        out[k] = t.split(',').map((x) => x.trim()).filter(Boolean);
+        continue;
+      }
+      if (f.type === 'object' && t.startsWith('{')) {
+        try {
+          const o: unknown = JSON.parse(t);
+          if (o && typeof o === 'object' && !Array.isArray(o)) {
+            out[k] = o;
+            continue;
+          }
+        } catch {
+          // not JSON: refused by validation, naming the field
+        }
+      }
+    }
+    out[k] = v;
   }
+  return out;
+}
+
+const URL_GONE = 'This Data in URL is not active: it was regenerated or turned off. Copy the current URL from Settings → Webhooks → Incoming.';
+
+/**
+ * `POST /site-api/crm/public/data-in/<action path>/<access token>` with `X-Signature-Token`. Same
+ * checks as an API key, in the same order, with the two tokens instead of a key and a signature:
+ * connection limit → route → access token (unknown, regenerated or turned off: 404, counted
+ * against the connection) → the admin it acts as still active → rate limit → size → signature
+ * token (401) → JSON → Idempotency-Key → validation → handler. Neither token is ever logged.
+ */
+export async function handleDataInUrl(db: Db, input: DataInInput): Promise<DataInOutput> {
+  const path = input.path.replace(/\/+$/, '');
+  const cut = path.lastIndexOf('/');
+  const token = cut >= 0 ? path.slice(cut + 1) : '';
+  const actionPath = cut > 0 ? path.slice(0, cut) : '/';
+  const match = matchDataInAction(input.method, actionPath);
+  if (!match) return {status: 404, body: errorBody('E_NOT_FOUND', `No action at ${input.method} ${actionPath}/{access_token}. The actions and their URLs are listed in Settings → Webhooks → Incoming.`)};
+  const run = await begin(db, input, match.action, match.params, `${actionPath}/{access_token}`);
+  const {action, fail, strike} = run;
+  const blocked = await run.blockedNow();
+  if (blocked) return blocked;
+  if (match.wrongMethod) return strike('E_NOT_FOUND', `This URL only accepts ${action.method} requests.`);
+
+  // ─── Access token (in the URL) ───
+  if (!ACCESS_TOKEN_PATTERN.test(token)) return strike('E_NOT_FOUND', URL_GONE);
+  const settings = await stored(db);
+  const url = settings.url;
+  if (!url || !url.enabled || !sameHex(await accessHash(token), url.accessHash)) return strike('E_NOT_FOUND', URL_GONE);
+  run.state.log = {apiKeyId: null, name: DATA_IN_URL_NAME, prefix: token.slice(0, DATA_IN_URL_TOKEN_PREFIX.length + 4)};
+  const member = await db.member.findUnique({where: {id: url.createdById}, include: withEmail});
+  const user = member ? asUser(member) : null;
+  if (!user || !user.active || user.role === 'VIEWER') {
+    return fail('E_KEY_OWNER_INACTIVE', `The admin who turned on this Data in URL was deactivated or ${OWNER_INACTIVE}. Ask an admin to regenerate the URL.`);
+  }
+
+  // ─── Rate limit, size ───
+  const raw = await limitAndRead(run, `datain:url:${url.id}`, 'the Data in URL', settings.rateLimit ?? DEFAULT_DATA_IN_RATE_LIMIT);
+  if (!(raw instanceof Uint8Array)) return raw;
+
+  // ─── Signature token (a header) ───
+  const sent = input.headers.get(SIGNATURE_TOKEN_HEADER)?.trim();
+  if (!sent) return fail('E_UNAUTHORIZED', `${SIGNATURE_TOKEN_HEADER}: add this header with the signature token from Settings → Webhooks → Incoming.`, SIGNATURE_TOKEN_HEADER);
+  if (sent.length > 200 || !sameHex(await signatureTokenHash(sent), url.signatureHash)) {
+    return fail('E_UNAUTHORIZED', `${SIGNATURE_TOKEN_HEADER}: the signature token does not match. Copy it again from Settings → Webhooks → Incoming (it changes when the URL is regenerated).`, SIGNATURE_TOKEN_HEADER);
+  }
+
+  const name = DATA_IN_URL_NAME;
+  const caller: Caller = {
+    key: {id: `url:${url.id}`, name},
+    user,
+    log: run.state.log,
+    writer: {
+      by: name,
+      source: {kind: 'api', name},
+      data: {dataInUrl: url.id},
+      meta: {source: {kind: 'api', name}, dataInUrl: {id: url.id}, action: action.key},
+    },
+  };
+  return runAction(run, caller, raw, {
+    idemScope: `url:${url.id}`,
+    jsonHint: ' Send the body as JSON (Zapier: Payload Type "json"; Pabbly: Payload Type "JSON").',
+    prepare: (body) => lenient(action, body),
+  });
 }

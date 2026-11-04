@@ -13,7 +13,7 @@ import {custom, fieldError, httpUrl, listQuery, notFound, optStr, optText, owner
 import {COMPANY_LIMITS, copyName} from '@/lib/record-limits';
 import {adoptContactsForDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
-import {moveToBin} from '../lib/recycle-bin';
+import {BIN_BATCH, moveToBin} from '../lib/recycle-bin';
 import {rememberOption} from '../lib/settings';
 import {userSelect} from '../lib/users';
 import {strings} from '../lib/json-list';
@@ -185,6 +185,8 @@ export const companies = new Hono<AppEnv>()
     const {ids, action, value} = c.req.valid('json');
     const where = {id: {in: ids}, ...(await ownerScope(c))};
     if (action === 'delete') {
+      // Each deleted record is snapshotted for the recycle bin: a bounded number per request (AUDIT-2 M-14).
+      if (ids.length > BIN_BATCH) throw new HTTPException(400, {message: `Delete at most ${BIN_BATCH} companies at a time: select fewer and repeat`});
       const gone = await db.company.findMany({where});
       await moveToBin(db, 'company', gone.map((r) => r.id), me);
       // One batch of events and one of audit rows, not a few queries per record.

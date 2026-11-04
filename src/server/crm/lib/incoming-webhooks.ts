@@ -177,7 +177,7 @@ function decodeSignature(value: string, encoding: 'hex' | 'base64'): Uint8Array<
 }
 
 /** Null when the request passes the webhook's verification, else why not (shown to the sender and in the log). */
-async function verifyRequest(hook: Pick<IncomingWebhook, 'verify' | 'verifyHeader' | 'verifyEncoding' | 'secretName'>, headers: Headers, raw: Uint8Array<ArrayBuffer>): Promise<string | null> {
+async function verifyRequest(hook: Pick<IncomingWebhook, 'verify' | 'verifyHeader' | 'verifyEncoding' | 'secretName'>, headers: Headers, raw: Uint8Array<ArrayBuffer>, out: {stampSigned?: boolean} = {}): Promise<string | null> {
   // Every request proves the sender (the site's rule for webhooks into the site): no check set up, nothing accepted.
   if (hook.verify !== 'header' && hook.verify !== 'hmac') return 'This webhook has no sender check yet. Set one up in Settings → Webhooks → Incoming.';
   const name = hook.verifyHeader?.trim();
@@ -196,10 +196,9 @@ async function verifyRequest(hook: Pick<IncomingWebhook, 'verify' | 'verifyHeade
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), {name: 'HMAC', hash: 'SHA-256'}, false, ['verify']);
   // crypto.subtle.verify compares in constant time. With a timestamp, the signature may cover
   // `<timestamp>.<body>` (then an old request can't be sent again with a new time).
-  const signed =
-    (await crypto.subtle.verify('HMAC', key, sig, raw)) ||
-    (stamp !== null && (await crypto.subtle.verify('HMAC', key, sig, concat(enc.encode(`${stamp}.`), raw))));
-  if (!signed) return 'The signature does not match the body';
+  const bodyOnly = await crypto.subtle.verify('HMAC', key, sig, raw);
+  out.stampSigned = !bodyOnly && stamp !== null && (await crypto.subtle.verify('HMAC', key, sig, concat(enc.encode(`${stamp}.`), raw)));
+  if (!bodyOnly && !out.stampSigned) return 'The signature does not match the body';
   return stamp === null || freshStamp(stamp) ? null : STALE;
 }
 
@@ -223,6 +222,8 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array<ArrayBuffer> {
 
 /** How long an identical body (and timestamp) is remembered when the hook has no idempotency key. */
 const SAME_BODY_WINDOW_S = 10 * 60;
+/** HMAC hooks whose signature doesn't cover a timestamp: the same body is taken once a day. */
+const UNSTAMPED_BODY_WINDOW_S = 23 * 3600;
 
 export type Received = {status: 200 | 400 | 401 | 403 | 404 | 405 | 413 | 429; body: Record<string, unknown>};
 
@@ -261,7 +262,8 @@ export async function receiveIncoming(db: Db, input: ReceiveInput): Promise<Rece
   const raw = new Uint8Array(await input.body());
   if (raw.byteLength > MAX_BODY_BYTES) return reject(413, `The body is larger than ${MAX_BODY_BYTES / 1024} KB`, raw.byteLength);
 
-  const denied = await verifyRequest(hook, input.headers, raw);
+  const proof: {stampSigned?: boolean} = {};
+  const denied = await verifyRequest(hook, input.headers, raw, proof);
   if (denied) return reject(401, denied, raw.byteLength);
 
   const listening = !!hook.listenUntil && hook.listenUntil > new Date();
@@ -292,9 +294,16 @@ export async function receiveIncoming(db: Db, input: ReceiveInput): Promise<Rece
   const key = (fromPath || input.headers.get('idempotency-key') || input.headers.get('x-idempotency-key') || '').trim().slice(0, 200) || null;
   // No idempotency key: the very same signed body (and timestamp) again within 10 minutes is a
   // replay or a resend, taken once (AUDIT P2-12). A key, when there is one, is the sender's own rule.
-  const seen = key ? null : await firstDelivery(db, `inhook:${hook.id}:${input.headers.get(TIMESTAMP_HEADER) ?? ''}:${await bytesHash(raw)}`, SAME_BODY_WINDOW_S);
+  // A signature that doesn't cover a timestamp can be sent again later with any time on it: then the
+  // body alone is remembered, for a day (AUDIT-2 L-11; the longest RateHit keeps, `pruneRateHits`).
+  const replayable = hook.verify === 'hmac' && !proof.stampSigned;
+  const seen = key
+    ? null
+    : replayable
+      ? await firstDelivery(db, `inhook:${hook.id}:body:${await bytesHash(raw)}`, UNSTAMPED_BODY_WINDOW_S)
+      : await firstDelivery(db, `inhook:${hook.id}:${input.headers.get(TIMESTAMP_HEADER) ?? ''}:${await bytesHash(raw)}`, SAME_BODY_WINDOW_S);
   if (seen && !seen.first) {
-    const dupe = await log('duplicate', null, {size: raw.byteLength, payload: json, result: {outcome: 'none', reason: 'Same body as a request in the last 10 minutes (send an Idempotency-Key to tell them apart)'}});
+    const dupe = await log('duplicate', null, {size: raw.byteLength, payload: json, result: {outcome: 'none', reason: replayable ? 'Same body as a request in the last day (sign X-Webhook-Timestamp with the body, or send an Idempotency-Key, to tell them apart)' : 'Same body as a request in the last 10 minutes (send an Idempotency-Key to tell them apart)'}});
     await db.incomingWebhook.update({where: {id: hook.id}, data: {lastRequestAt: new Date(), lastStatus: 'duplicate'}});
     return {status: 200, body: {ok: true, id: dupe.id, duplicate: true}};
   }

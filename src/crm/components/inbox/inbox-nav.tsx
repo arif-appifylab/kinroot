@@ -23,12 +23,12 @@ function Item({icon: Icon, label, count, active, onClick}: {icon: typeof Inbox; 
     >
       <Icon className={cn('size-4 shrink-0', active ? 'text-primary' : 'text-slate-400')} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {!!count && <span className={cn('text-xs font-semibold tabular-nums', active ? 'text-primary' : 'text-slate-400')}>{count}</span>}
+      {!!count && <span className={cn('text-xs font-semibold tabular-nums', active ? 'text-primary' : 'text-muted-foreground')}>{count}</span>}
     </button>
   );
 }
 
-const Heading = ({children}: {children: string}) => <p className="mt-4 mb-1 px-2.5 text-[11px] font-bold tracking-wide text-slate-400 uppercase first:mt-0">{children}</p>;
+const Heading = ({children}: {children: string}) => <p className="mt-4 mb-1 px-2.5 text-[11px] font-bold tracking-wide text-muted-foreground uppercase first:mt-0">{children}</p>;
 
 /** Left navigation: views, channels with counts, folders and (for admins) the settings link. */
 export function InboxNav({value, counts, onChange}: {value: NavValue; counts: InboxCounts | undefined; onChange: (v: NavValue) => void}) {

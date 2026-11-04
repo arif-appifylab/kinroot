@@ -106,7 +106,7 @@ function DealsPage() {
       ) : (
         <Badge tone={d.status === 'WON' ? 'green' : 'rose'}>{d.status === 'WON' ? 'Won' : 'Lost'}</Badge>
       )},
-    {key: 'expectedCloseDate', header: 'Close date', sortable: true, hideBelow: 'md', cell: (d) => d.expectedCloseDate ? dueLabel(d.expectedCloseDate) : <span className="text-slate-400">—</span>},
+    {key: 'expectedCloseDate', header: 'Close date', sortable: true, hideBelow: 'md', cell: (d) => d.expectedCloseDate ? dueLabel(d.expectedCloseDate) : <span className="text-muted-foreground">—</span>},
     {key: 'next', header: 'Next step', hideBelow: 'lg', cell: (d) => d.nextTask ? <span className="truncate text-xs">{dueLabel(d.nextTask.dueAt)} · {d.nextTask.title}</span> : d.status === 'OPEN' ? <span className="text-xs font-semibold text-amber-600">None</span> : '—'},
     {key: 'owner', header: 'Owner', hideBelow: 'xl', cell: (d) => d.owner ? <span className="inline-flex items-center gap-2"><Avatar name={d.owner.name} color={d.owner.color} src={d.owner.avatarUrl} size="xs" />{d.owner.name.split(' ')[0]}</span> : '—'},
     {key: 'lastActivityAt', header: 'Activity', sortable: true, hideBelow: 'sm', cell: (d) => <span className="text-muted-foreground">{ago(d.lastActivityAt)}</span>},

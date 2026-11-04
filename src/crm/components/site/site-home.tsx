@@ -66,7 +66,7 @@ export function SiteHome({site}: {site: PublicWebsite}) {
 
         {ways.length > 0 && (
           <Card className="p-3 sm:p-4">
-            <p className="px-3 pt-2 pb-1 text-xs font-bold tracking-wide text-slate-400 uppercase">Get in touch</p>
+            <p className="px-3 pt-2 pb-1 text-xs font-bold tracking-wide text-muted-foreground uppercase">Get in touch</p>
             <div className="grid gap-1">{ways}</div>
           </Card>
         )}

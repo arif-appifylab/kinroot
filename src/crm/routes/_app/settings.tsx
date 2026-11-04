@@ -1,5 +1,5 @@
 import {createFileRoute, Link, Outlet, useRouterState} from '@tanstack/react-router';
-import {CalendarDays, Columns3, CopyCheck, FileText, Flame, Globe, Inbox, KeyRound, LifeBuoy, Mail, ScrollText, Settings2, ShieldCheck, SlidersHorizontal, Trash2, UserCircle, UserCog, Users, Webhook} from 'lucide-react';
+import {CalendarDays, Columns3, CopyCheck, FileText, Flame, Globe, Inbox, LifeBuoy, Mail, ScrollText, Settings2, ShieldCheck, SlidersHorizontal, Trash2, UserCircle, Users, Webhook} from 'lucide-react';
 
 import {PageHeader} from '@/components/ui/misc';
 import {pageTitle} from '@/lib/brand';
@@ -14,10 +14,8 @@ export const Route = createFileRoute('/_app/settings')({
 
 const NAV = [
   {to: '/settings', label: 'General', icon: Settings2, exact: true},
-  {to: '/settings/profile', label: 'Profile', icon: UserCircle},
-  {to: '/settings/security', label: 'Security', icon: KeyRound},
+  {to: '/settings/profile', label: 'Your account', icon: UserCircle},
   {to: '/settings/team', label: 'Team', icon: Users},
-  {to: '/settings/accounts', label: 'Accounts', icon: UserCog, ability: 'manageUsers'},
   {to: '/settings/roles', label: 'Roles', icon: ShieldCheck, ability: 'manageRoles'},
   {to: '/settings/pipelines', label: 'Pipelines', icon: Columns3},
   {to: '/settings/fields', label: 'Custom fields', icon: SlidersHorizontal},

@@ -81,7 +81,7 @@ export function EmailDesignSection() {
       {q.isError && !q.data && <LoadError error={q.error} onRetry={() => q.refetch()} />}
       <form id="email-design-form" {...f.form(() => !save.isPending && save.mutate(undefined, {onError: f.fail}))} className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="grid content-start gap-4">
-          <p className="text-xs font-bold tracking-wide text-slate-400 uppercase">Header</p>
+          <p className="text-xs font-bold tracking-wide text-muted-foreground uppercase">Header</p>
           <Field label="Logo" group>
             <Segmented
               label="Header logo"
@@ -115,7 +115,7 @@ export function EmailDesignSection() {
             <ColorField id="d-header" label="Header colour" value={design.headerColor} onChange={(headerColor) => set({headerColor})} fallback={primary} error={f.error('headerColor')} onBlur={f.blur('headerColor')} />
             <ColorField id="d-accent" label="Buttons & links" value={design.accentColor} onChange={(accentColor) => set({accentColor})} fallback={primary} error={f.error('accentColor')} onBlur={f.blur('accentColor')} />
           </div>
-          <p className="pt-2 text-xs font-bold tracking-wide text-slate-400 uppercase">Footer</p>
+          <p className="pt-2 text-xs font-bold tracking-wide text-muted-foreground uppercase">Footer</p>
           <Field label="Company name" htmlFor="d-company" error={f.error('companyName')}><Input id="d-company" value={design.companyName} onChange={(e) => set({companyName: e.target.value})} onBlur={f.blur('companyName')} placeholder={q.data?.brand.name} /></Field>
           <Field label="Postal address" htmlFor="d-address" error={f.error('address')} hint="Anti-spam laws (CAN-SPAM, GDPR guidance) expect a physical address in marketing email.">
             <Textarea id="d-address" rows={2} value={design.address} onChange={(e) => set({address: e.target.value})} onBlur={f.blur('address')} placeholder={'123 Market Street, Suite 4\nSan Francisco, CA 94105'} />

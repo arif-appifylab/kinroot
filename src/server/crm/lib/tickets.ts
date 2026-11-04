@@ -13,6 +13,7 @@ import {clip, CONTACT_LIMITS} from '@/lib/record-limits';
 import {mergeFields} from '../email/render';
 import {sendEmail, sendSystemEmail, usableAccounts} from '../email/service';
 import {publicFileUrl} from '../routes/files';
+import {unconfirmedMailAllowed} from './rate-limit';
 import {logActivity} from './activity';
 import {contactIdByEmail} from './contact-email';
 import {associateByDomain} from './domains';
@@ -92,15 +93,18 @@ const activityData = (t: Ticket, extra: Record<string, unknown> = {}) => ({ticke
 
 // ─── Contacts by email ──────────────────────────────────────────────────────
 
-/** Finds the contact with this email or creates one (source "Support"). */
-export async function contactForEmail(db: Db, email: string, name?: string | null) {
+/**
+ * Finds the contact with this email or creates one (source "Support"). `ownerId` is the new
+ * contact's owner (a member's own ticket under owner-only visibility); an existing one keeps its own.
+ */
+export async function contactForEmail(db: Db, email: string, name?: string | null, opts: {ownerId?: string} = {}) {
   const address = email.trim().toLowerCase();
   const existingId = await contactIdByEmail(db, address);
   const existing = existingId ? await db.contact.findUnique({where: {id: existingId}, include: {companies: {orderBy: {isPrimary: 'desc'}, take: 1}}}) : null;
   if (existing) return existing;
   const [first, ...rest] = (name?.trim() || address.split('@')[0]!).split(/\s+/);
   const contact = await db.contact.create({
-    data: clip({firstName: first || address, lastName: rest.join(' ') || null, email: address, source: 'Support', lastActivityAt: new Date()}, CONTACT_LIMITS),
+    data: {...clip({firstName: first || address, lastName: rest.join(' ') || null, email: address, source: 'Support', lastActivityAt: new Date()}, CONTACT_LIMITS), ...(opts.ownerId ? {ownerId: opts.ownerId} : {})},
   });
   await logActivity(db, {type: 'contact_created', title: 'Contact created from a support request', contactId: contact.id});
   await associateByDomain(db, contact.id).catch(() => null);
@@ -472,13 +476,16 @@ export async function sendPortalLink(db: Db, contactId: string, origin: string, 
   const brand = (await getSettings(db)).brandName;
   const base = originOf(origin);
   const link = created ? `${base}/support/tickets/${created.number}` : `${base}/support/tickets`;
+  // Anyone can type any address into the support form: this email repeats nothing they wrote (no
+  // subject, no name), and goes out a few times an hour at most per address (AUDIT-2 M-6).
+  if (!(await unconfirmedMailAllowed(db, contact.email))) return false;
   return sendSystemEmail(db, {
     to: [contact.email],
-    subject: created ? `We received your request ${subjectToken(created.number)} ${created.subject}` : `Your support requests at ${brand}`,
+    subject: created ? `We received your request ${subjectToken(created.number)}` : `Your support requests at ${brand}`,
     text: [
-      `Hi ${contact.firstName},`,
+      'Hello,',
       created
-        ? `Thanks for getting in touch. Your request "${created.subject}" is ${ticketRef(created.number)}. We'll reply by email; you can also follow it and reply here:`
+        ? `Thanks for getting in touch with ${brand}. Your request is ${ticketRef(created.number)}. We'll reply by email; you can also follow it and reply here:`
         : `Here is your link to see your requests with ${brand} and reply to them:`,
       link,
       `To see it, sign in (or create your account) with this email address, ${contact.email}.`,

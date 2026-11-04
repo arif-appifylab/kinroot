@@ -7,7 +7,7 @@ import {useCreate} from '@/components/create-dialogs';
 import {LostDialog} from '@/components/deal-status';
 import {SingleCompanyPicker, SingleContactPicker, TagInput, UserSelect} from '@/components/pickers';
 import {PropertyHistoryProvider} from '@/components/property-history';
-import {ChoiceProperty, CustomFieldProperties, EditableProperty, Property, PropertyCard, TextProperty} from '@/components/properties';
+import {ChoiceProperty, CustomFieldProperties, EditableProperty, Property, PropertyCard, TextProperty, propertyRules} from '@/components/properties';
 import {ActivityButtons, Composer, RecordTasks, Timeline} from '@/components/timeline';
 import {AttachmentsCard} from '@/components/attachments';
 import {AutomationsCard} from '@/components/automations/record-tools';
@@ -57,7 +57,7 @@ function StageTrack({deal, onMove, busy}: {deal: DealDetail; onMove: (stageId: s
               onClick={() => onMove(s.id)}
               className={cn(
                 'relative flex min-w-28 flex-1 cursor-pointer items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold whitespace-nowrap transition-all outline-none first:rounded-l-lg last:rounded-r-lg focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-default',
-                active ? 'z-10 rounded-lg bg-brand text-white shadow-btn' : done ? 'text-primary hover:bg-card/60' : 'text-slate-400 hover:bg-card/60 hover:text-slate-600',
+                active ? 'z-10 rounded-lg bg-brand text-white shadow-btn' : done ? 'text-primary hover:bg-card/60' : 'text-muted-foreground hover:bg-card/60 hover:text-slate-600',
               )}
             >
               {done && <Check className="size-3.5" />}
@@ -173,20 +173,21 @@ function DealPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_300px]">
         <div className="grid min-w-0 grid-cols-1 content-start gap-6">
           <PropertyCard title="Details">
-            <TextProperty label="Name" field="title" maxLength={DEAL_LIMITS.title} value={d.title} onSave={(v) => v && save.mutate({title: v})} />
+            <TextProperty label="Name" field="title" maxLength={DEAL_LIMITS.title} value={d.title} required="Give the deal a name." onSave={(v) => save.mutateAsync({title: v})} />
             <EditableProperty
               label="Value" field="value"
+              rules={[propertyRules.number({min: 0, max: 1e12})]}
               value={String(d.value)}
               display={<span className="font-semibold">{money(d.value, d.currency)}</span>}
               editor={({value, onChange, onCommit}) => <Input autoFocus aria-label="Amount" type="number" inputMode="decimal" step="any" className="h-8" value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && onCommit()} />}
-              onSave={(v) => save.mutate({value: Number(v || 0)})}
+              onSave={(v) => save.mutateAsync({value: Number(v || 0)})}
             />
             <EditableProperty
               label="Close date" field="expectedCloseDate"
               value={toDateInput(d.expectedCloseDate)}
-              display={d.expectedCloseDate ? shortDate(d.expectedCloseDate) : <span className="text-slate-400">—</span>}
+              display={d.expectedCloseDate ? shortDate(d.expectedCloseDate) : <span className="text-muted-foreground">—</span>}
               editor={({value, onChange}) => <Input autoFocus type="date" className="h-8" value={value} onChange={(e) => onChange(e.target.value)} />}
-              onSave={(v) => save.mutate({expectedCloseDate: v || null})}
+              onSave={(v) => save.mutateAsync({expectedCloseDate: v || null})}
             />
             {(pipelines.data?.length ?? 0) > 1 && (
               <EditableProperty
@@ -198,22 +199,22 @@ function DealPage() {
                     {pipelines.data?.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </NativeSelect>
                 )}
-                onSave={(v) => save.mutate({pipelineId: v})}
+                onSave={(v) => save.mutateAsync({pipelineId: v})}
               />
             )}
             <EditableProperty
               label="Owner" field="ownerId"
               value={d.ownerId}
-              display={d.owner ? <span className="inline-flex items-center gap-1.5"><Avatar name={d.owner.name} color={d.owner.color} src={d.owner.avatarUrl} size="xs" />{d.owner.name}</span> : <span className="text-slate-400">Unassigned</span>}
+              display={d.owner ? <span className="inline-flex items-center gap-1.5"><Avatar name={d.owner.name} color={d.owner.color} src={d.owner.avatarUrl} size="xs" />{d.owner.name}</span> : <span className="text-muted-foreground">Unassigned</span>}
               editor={({value, onChange}) => <UserSelect value={value} onChange={onChange} />}
-              onSave={(v) => save.mutate({ownerId: v})}
+              onSave={(v) => save.mutateAsync({ownerId: v})}
             />
-            <ChoiceProperty label="Deal type" field="type" value={d.type} options={DEAL_TYPES} onSave={(v) => save.mutate({type: v})} />
-            <ChoiceProperty label="Priority" field="priority" value={d.priority} options={DEAL_PRIORITIES} onSave={(v) => save.mutate({priority: v})} />
-            <EditableProperty label="Tags" field="tags" value={d.tags} display={d.tags.length ? <span className="flex flex-wrap gap-1">{d.tags.map((t) => <Badge key={t} tone="teal">{t}</Badge>)}</span> : <span className="text-slate-400">—</span>} editor={({value, onChange}) => <TagInput entity="DEAL" value={value} onChange={onChange} />} onSave={(v) => save.mutate({tags: v})} />
+            <ChoiceProperty label="Deal type" field="type" value={d.type} options={DEAL_TYPES} onSave={(v) => save.mutateAsync({type: v})} />
+            <ChoiceProperty label="Priority" field="priority" value={d.priority} options={DEAL_PRIORITIES} onSave={(v) => save.mutateAsync({priority: v})} />
+            <EditableProperty label="Tags" field="tags" value={d.tags} display={d.tags.length ? <span className="flex flex-wrap gap-1">{d.tags.map((t) => <Badge key={t} tone="teal">{t}</Badge>)}</span> : <span className="text-muted-foreground">—</span>} editor={({value, onChange}) => <TagInput entity="DEAL" value={value} onChange={onChange} />} onSave={(v) => save.mutateAsync({tags: v})} />
             <Property label="Probability">{d.stage.probability}% · weighted {money((d.value * d.stage.probability) / 100, d.currency)}</Property>
             <Property label="Created">{shortDate(d.createdAt)}</Property>
-            {fields.data && <CustomFieldProperties fields={fields.data} values={d.custom as Record<string, unknown>} currency={d.currency} onSave={(key, v) => save.mutate({custom: {[key]: v}})} />}
+            {fields.data && <CustomFieldProperties fields={fields.data} values={d.custom as Record<string, unknown>} currency={d.currency} onSave={(key, v) => save.mutateAsync({custom: {[key]: v}})} />}
           </PropertyCard>
 
           <div className="grid gap-6 xl:hidden">

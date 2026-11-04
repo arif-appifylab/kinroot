@@ -305,7 +305,7 @@ function Toolbar({editor, images, headings, text, mergeFields, mentions}: Toolba
                 else chain().insertContent([{type: 'mergeField', attrs: {key: f.key, fallback: f.key === 'contact.first_name' ? 'there' : ''}}, {type: 'text', text: ' '}]).run();
               }}
             >
-              {f.label} <span className="ml-auto pl-3 font-mono text-[11px] text-slate-400">{f.key}</span>
+              {f.label} <span className="ml-auto pl-3 font-mono text-[11px] text-muted-foreground">{f.key}</span>
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>

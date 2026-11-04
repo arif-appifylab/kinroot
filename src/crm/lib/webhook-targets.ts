@@ -18,6 +18,8 @@ const WEBHOOK_SERVICES: Service[] = [
   {name: 'Google Chat', hosts: ['chat.googleapis.com'], path: /^\/v1\/spaces\//},
   {name: 'Discord', hosts: ['discord.com', 'discordapp.com'], path: /^\/api\/webhooks\//},
   {name: 'IFTTT', hosts: ['maker.ifttt.com']},
+  // Pabbly Connect's "Webhook" trigger URL: /workflow/sendwebhookdata/<id> (the documented form).
+  {name: 'Pabbly Connect', hosts: ['connect.pabbly.com'], path: /^\/workflow\/sendwebhookdata\/[^/]+/},
 ];
 
 export const WEBHOOK_SERVICE_NAMES = WEBHOOK_SERVICES.map((s) => s.name).join(', ');

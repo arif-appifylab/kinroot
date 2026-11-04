@@ -64,11 +64,11 @@ function CompaniesPage() {
         </div>
       ),
     },
-    {key: 'industry', header: 'Industry', sortable: true, hideBelow: 'md', cell: (c) => c.industry ?? <span className="text-slate-400">—</span>},
+    {key: 'industry', header: 'Industry', sortable: true, hideBelow: 'md', cell: (c) => c.industry ?? <span className="text-muted-foreground">—</span>},
     {key: 'people', header: 'People', cell: (c) => c._count?.contacts ?? 0},
-    {key: 'deals', header: 'Open deals', cell: (c) => (c._count?.deals ? <Badge tone="blue">{c._count.deals}</Badge> : <span className="text-slate-400">0</span>)},
+    {key: 'deals', header: 'Open deals', cell: (c) => (c._count?.deals ? <Badge tone="blue">{c._count.deals}</Badge> : <span className="text-muted-foreground">0</span>)},
     {key: 'tags', header: 'Tags', hideBelow: 'xl', cell: (c) => <span className="flex flex-wrap gap-1">{c.tags.map((t) => <Badge key={t} tone="teal">{t}</Badge>)}</span>},
-    {key: 'owner', header: 'Owner', hideBelow: 'lg', cell: (c) => c.owner ? <span className="inline-flex items-center gap-2"><Avatar name={c.owner.name} color={c.owner.color} src={c.owner.avatarUrl} size="xs" />{c.owner.name.split(' ')[0]}</span> : <span className="text-slate-400">—</span>},
+    {key: 'owner', header: 'Owner', hideBelow: 'lg', cell: (c) => c.owner ? <span className="inline-flex items-center gap-2"><Avatar name={c.owner.name} color={c.owner.color} src={c.owner.avatarUrl} size="xs" />{c.owner.name.split(' ')[0]}</span> : <span className="text-muted-foreground">—</span>},
     {key: 'lastActivityAt', header: 'Last activity', sortable: true, hideBelow: 'sm', cell: (c) => <span className="text-muted-foreground">{ago(c.lastActivityAt)}</span>},
   ];
 
@@ -133,13 +133,13 @@ function CompaniesPage() {
       </Card>
       <BulkBar count={selected.size} onClear={() => setSelected(new Set())}>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={bulk.isPending} aria-busy={(bulk.isPending && bulk.variables?.action === 'assign') || undefined}><UserCheck /> Assign</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={bulk.isPending} pending={bulk.isPending && bulk.variables?.action === 'assign'} pendingLabel="Assigning…"><UserCheck /> Assign</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             {team.data?.map((u) => <DropdownMenuItem key={u.id} onSelect={() => bulk.mutate({action: 'assign', value: u.id})}>{u.name}</DropdownMenuItem>)}
           </DropdownMenuContent>
         </DropdownMenu>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" disabled={bulk.isPending} aria-busy={(bulk.isPending && bulk.variables?.action === 'delete') || undefined}><Trash2 /> Delete</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" disabled={bulk.isPending} pending={bulk.isPending && bulk.variables?.action === 'delete'} pendingLabel="Deleting…"><Trash2 /> Delete</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             <DropdownMenuLabel>Delete {selected.size} companies?</DropdownMenuLabel>
             <DropdownMenuItem destructive onSelect={() => bulk.mutate({action: 'delete'})}>Yes, move to the recycle bin</DropdownMenuItem>

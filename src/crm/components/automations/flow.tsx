@@ -20,6 +20,7 @@ import {
 import {OPS, type SegmentRule} from '@/lib/segments';
 import {cn} from '@/lib/utils';
 
+import {confirm} from '../ui/confirm';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger} from '../ui/menu';
 import {IconBadge} from '../ui/misc';
 import {useNames} from './hooks';
@@ -82,7 +83,7 @@ function AddStep({onPick, disabled}: {onPick: (type: StepType) => void; disabled
       <Connector />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button type="button" className="flex size-7 cursor-pointer items-center justify-center rounded-full border border-dashed border-slate-300 bg-card text-slate-400 transition-all hover:scale-110 hover:border-primary hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" aria-label="Add a step here">
+          <button type="button" className="flex size-7 cursor-pointer items-center justify-center rounded-full border border-dashed border-slate-300 bg-card text-muted-foreground transition-all hover:scale-110 hover:border-primary hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" aria-label="Add a step here">
             <Plus className="size-4" />
           </button>
         </DropdownMenuTrigger>
@@ -227,6 +228,25 @@ const branchCount = (list: Step[]): number => list.reduce((n, s) => n + (s.type 
 
 // ─── Flow ───
 
+/** Every step inside an If's branches, nested ones included. */
+const innerSteps = (step: Step): number => [...(step.then ?? []), ...(step.else ?? [])].reduce((n, s) => n + 1 + innerSteps(s), 0);
+
+/**
+ * Asks before a step is deleted (AUDIT-2 M-18): the change autosaves, and a live automation uses it
+ * at once. An If step says how many steps its branches take with it.
+ */
+export function askDeleteStep(step: Step): Promise<boolean> {
+  const inner = step.type === 'if' ? innerSteps(step) : 0;
+  return confirm({
+    title: step.type === 'if' ? 'Delete this If step and both its paths?' : 'Delete this step?',
+    description:
+      (inner ? `The ${inner} step${inner === 1 ? '' : 's'} inside its Yes and No paths ${inner === 1 ? 'is' : 'are'} deleted with it. ` : '') +
+      'The automation saves the change, and a live automation runs without it from then on.',
+    confirmLabel: 'Delete step',
+    destructive: true,
+  });
+}
+
 /**
  * The automation on a pan / zoom canvas: trigger card, then steps; an if / else spreads its
  * Yes and No paths into side-by-side columns (each as wide as it needs), which join again
@@ -362,7 +382,7 @@ function StepNode(props: FlowProps & {step: Step; index: number; count: number; 
         {!readOnly && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" onClick={(e) => e.stopPropagation()} className="-mr-1 cursor-pointer rounded-md p-1 text-slate-400 opacity-60 outline-none hover:bg-slate-100 hover:text-slate-700 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30" aria-label="Step actions">
+              <button type="button" onClick={(e) => e.stopPropagation()} className="-mr-1 cursor-pointer rounded-md p-1 text-muted-foreground opacity-60 outline-none hover:bg-slate-100 hover:text-slate-700 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30" aria-label="Step actions">
                 <MoreHorizontal className="size-4" />
               </button>
             </DropdownMenuTrigger>
@@ -371,7 +391,7 @@ function StepNode(props: FlowProps & {step: Step; index: number; count: number; 
               <DropdownMenuItem disabled={index === count - 1} onSelect={() => onSteps(moveStep(steps, step.id, 1))}><ArrowDown /> Move down</DropdownMenuItem>
               <DropdownMenuItem onSelect={duplicate}><Copy /> Duplicate</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem destructive onSelect={() => (onSteps(removeStep(steps, step.id)), selected === step.id && onSelect(null))}><Trash2 /> Delete</DropdownMenuItem>
+              <DropdownMenuItem destructive onSelect={async () => (await askDeleteStep(step)) && (onSteps(removeStep(steps, step.id)), selected === step.id && onSelect(null))}><Trash2 /> Delete…</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         )}

@@ -35,7 +35,7 @@ export function TicketsCard({record, defaults}: {record: {contactId?: string; co
           <Link key={t.id} to="/tickets/$ticketId" params={{ticketId: String(t.number)}} className="flex items-start gap-2.5 rounded-lg px-3 py-2.5 hover:bg-slate-50">
             <LifeBuoy className="mt-0.5 size-4 shrink-0 text-slate-400" />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-slate-800"><span className="text-slate-400">#{t.number}</span> {t.subject}</p>
+              <p className="truncate text-sm font-semibold text-slate-800"><span className="text-muted-foreground">#{t.number}</span> {t.subject}</p>
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                 <StatusBadge status={t.status} />
                 <SlaBadge ticket={t} compact />

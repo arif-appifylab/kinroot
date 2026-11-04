@@ -55,6 +55,28 @@ async function visiblePairs(c: AppContext, kind: DupEntity, status: 'open' | 'di
   return {ids: rows.map((r) => r.id), total: count?.n ?? 0};
 }
 
+/**
+ * One pair this person may act on: with owner-only visibility both records are theirs, checked in
+ * the query (AUDIT-2 L-5), as the queue lists them. Else 404.
+ */
+async function visiblePair(c: AppContext, id: string) {
+  const db = c.var.db;
+  const scope = await ownerScope(c);
+  if (!scope.ownerId) {
+    const pair = await db.duplicatePair.findUnique({where: {id}});
+    if (!pair) throw notFound('Duplicate pair');
+    return pair;
+  }
+  const [row] = await db.$queryRaw<{id: string}[]>`
+    SELECT p.id FROM "DuplicatePair" p
+    LEFT JOIN "Contact" ca ON p.entity = 'contact' AND ca.id = p."aId" LEFT JOIN "Contact" cb ON p.entity = 'contact' AND cb.id = p."bId"
+    LEFT JOIN "Company" oa ON p.entity = 'company' AND oa.id = p."aId" LEFT JOIN "Company" ob ON p.entity = 'company' AND ob.id = p."bId"
+    WHERE p.id = ${id} AND COALESCE(ca."ownerId", oa."ownerId") = ${scope.ownerId} AND COALESCE(cb."ownerId", ob."ownerId") = ${scope.ownerId}`;
+  const pair = row ? await db.duplicatePair.findUnique({where: {id: row.id}}) : null;
+  if (!pair) throw notFound('Duplicate pair');
+  return pair;
+}
+
 /** Duplicate queue (Settings → Duplicates) and the "Possible duplicate" hint in the create dialogs. */
 export const duplicates = new Hono<AppEnv>()
   .get('/', valid('query', z.object({entity: entity.default('contact'), status: z.enum(['open', 'dismissed']).default('open'), low: z.enum(['1']).optional(), page: intParam(1, MAX_PAGE).default(1), pageSize: intParam(1, 100).default(25)})), async (c) => {
@@ -124,8 +146,7 @@ export const duplicates = new Hono<AppEnv>()
 
   .post('/:id/dismiss', async (c) => {
     const db = c.var.db;
-    const pair = await db.duplicatePair.findUnique({where: {id: c.req.param('id')}});
-    if (!pair) throw notFound('Duplicate pair');
+    const pair = await visiblePair(c, c.req.param('id'));
     if (pair.status === 'dismissed') throw new HTTPException(400, {message: 'Already marked as not a duplicate'});
     await db.duplicatePair.update({where: {id: pair.id}, data: {status: 'dismissed', dismissedById: currentUser(c).id, dismissedAt: new Date()}});
     await audit(db, c, {action: 'duplicate.dismissed', entity: pair.entity, recordId: pair.aId, meta: {pair: [pair.aId, pair.bId], reasons: pair.reasons, score: pair.score}});
@@ -134,8 +155,7 @@ export const duplicates = new Hono<AppEnv>()
 
   .post('/:id/reopen', async (c) => {
     const db = c.var.db;
-    const pair = await db.duplicatePair.findUnique({where: {id: c.req.param('id')}});
-    if (!pair) throw notFound('Duplicate pair');
+    const pair = await visiblePair(c, c.req.param('id'));
     await db.duplicatePair.update({where: {id: pair.id}, data: {status: 'open', dismissedById: null, dismissedAt: null}});
     await audit(db, c, {action: 'duplicate.reopened', entity: pair.entity, recordId: pair.aId, meta: {pair: [pair.aId, pair.bId]}});
     return c.json({ok: true});

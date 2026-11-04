@@ -152,7 +152,8 @@ export async function refreshChannelActivity(db: Db, threadId: string) {
     first: excerpt(first?.text ?? ''),
     last: last ? excerpt(last.text) : null,
     lastFrom: last?.direction === 'OUTBOUND' ? 'team' : 'contact',
-    page: ((first?.data ?? {}) as {page?: string}).page ?? null,
+    // Shown as a link on the timeline: http(s) only, also for messages stored before that rule (AUDIT-2 L-9).
+    page: [((first?.data ?? {}) as {page?: unknown}).page].find((p): p is string => typeof p === 'string' && /^https?:\/\//i.test(p)) ?? null,
     startedAt: (t.firstInboundAt ?? t.createdAt).toISOString(),
     closedAt: closed ? (t.closedAt?.toISOString() ?? null) : null,
   } satisfies Prisma.InputJsonObject;

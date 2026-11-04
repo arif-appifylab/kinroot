@@ -72,7 +72,7 @@ function ActorLabel({actor}: {actor: HistoryActor}) {
   );
 }
 
-const Empty = () => <span className="text-slate-400 italic">empty</span>;
+const Empty = () => <span className="text-muted-foreground italic">empty</span>;
 
 /** A value that may be long (descriptions, URLs): wraps anywhere, clamps to a few lines, full text on hover. */
 function Value({text, className}: {text: string | null; className?: string}) {
@@ -102,7 +102,7 @@ function EntryRow({entry, field}: {entry: HistoryEntry; field: string}) {
           {entry.kind === 'change' && (
             <p className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-slate-600">
               <Value text={entry.from} className="text-slate-500 line-through decoration-slate-300" />
-              <span aria-label="changed to" className="text-slate-400">→</span>
+              <span aria-label="changed to" className="text-muted-foreground">→</span>
               <Value text={entry.to} className="font-medium text-slate-900" />
             </p>
           )}
@@ -180,7 +180,7 @@ export function PropertyHistoryDrawer({entity, id, name, initialField = '', onCl
               <p className="text-xs text-muted-foreground" aria-live="polite">{first?.total ?? rows.length} {(first?.total ?? rows.length) === 1 ? 'entry' : 'entries'}</p>
               {days.map((d) => (
                 <section key={d.label} aria-label={d.label} className="min-w-0">
-                  <h3 className="mb-2 text-xs font-bold tracking-wider text-slate-400 uppercase">{d.label}</h3>
+                  <h3 className="mb-2 text-xs font-bold tracking-wider text-muted-foreground uppercase">{d.label}</h3>
                   <ol className="grid min-w-0 grid-cols-1 gap-2">
                     {d.rows.map((r) => <EntryRow key={r.id} entry={r} field={field} />)}
                   </ol>

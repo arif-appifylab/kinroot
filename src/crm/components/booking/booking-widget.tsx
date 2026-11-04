@@ -137,7 +137,7 @@ export function BookingWidget({link, initial, onBooked, className}: {link: strin
     staleTime: 60_000,
     retry: 1,
   });
-  if (q.isLoading) return <div className="flex justify-center py-10 text-slate-400"><Loader2 className="size-5 animate-spin" /></div>;
+  if (q.isLoading) return <div className="flex justify-center py-10 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>;
   if (!q.data) return <p className="py-6 text-center text-sm text-muted-foreground">{(q.error as Error | null)?.message ?? 'Booking unavailable'}</p>;
   if (!q.data.active) {
     return (
@@ -244,7 +244,7 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
         {error && <p role="alert" className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{error}</p>}
         {step === 'pick' && (
           !tz ? (
-            <div className="flex justify-center py-10 text-slate-400"><Loader2 className="size-5 animate-spin" /></div>
+            <div className="flex justify-center py-10 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>
           ) : (
             <>
               <h2 className="mb-4 text-base font-bold text-slate-900">Select a date & time</h2>

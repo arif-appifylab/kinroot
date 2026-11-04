@@ -2,9 +2,10 @@ import type {ChannelIdentity, ChannelMessage, EmailThread, Prisma} from '../../.
 import {tzLocation} from '@/lib/chat';
 import type {Db} from '../kit/db';
 import {userSelect} from '../lib/users';
-import {filesFor, identityLabel} from './channel-messages';
-import {getChatSettings, type VisitorData} from './chat';
+import {filesFor, identityLabel, type FileMeta} from './channel-messages';
+import {getChatSettings, visitorEmailVerified, type VisitorData} from './chat';
 import {strings} from '../lib/json-list';
+import {publicFileUrl} from '../routes/files';
 
 /**
  * The agent's side of a chat (or any message channel) in the inbox detail:
@@ -19,7 +20,7 @@ export async function chatDetail(db: Db, t: EmailThread) {
     getChatSettings(db),
     t.identityId ? db.emailThread.count({where: {identityId: t.identityId}}) : 0,
   ]);
-  const [files] = await Promise.all([filesFor(db, messages), markSeenByTeam(db, messages)]);
+  const [files] = await Promise.all([filesFor(db, messages).then(withAgentLinks), markSeenByTeam(db, messages)]);
   const data = (identity?.data ?? {}) as VisitorData;
   const now = Date.now();
   return {
@@ -30,6 +31,8 @@ export async function chatDetail(db: Db, t: EmailThread) {
           label: identityLabel(identity),
           name: identity.name,
           email: identity.email,
+          // Anyone can type any address into the chat: true only once they opened a link we mailed to it (AUDIT-2 L-4).
+          emailVerified: visitorEmailVerified(identity),
           blocked: !!identity.blockedAt,
           firstSeenAt: identity.firstSeenAt.toISOString(),
           ...visitorPresence(identity, s.awayAfterMin, now),
@@ -52,14 +55,23 @@ export async function chatDetail(db: Db, t: EmailThread) {
 type AgentRow = ChannelMessage & {sender: Prisma.MemberGetPayload<{select: typeof userSelect}> | null};
 
 /** One chat message as the inbox shows it (the detail and its `/updates`). */
-export function agentMessage(m: AgentRow, files: Awaited<ReturnType<typeof filesFor>>) {
+/**
+ * Chat files open through short signed links handed to someone who may read the conversation
+ * (this detail and its updates), not by id: /files/:id serves chat files to admins only (AUDIT-2 L-3).
+ */
+export async function withAgentLinks(files: Awaited<ReturnType<typeof filesFor>>) {
+  const linked = await Promise.all([...files].map(async ([id, f]) => [id, {...f, url: await publicFileUrl('', id, 1)}] as const));
+  return new Map(linked);
+}
+
+export function agentMessage(m: AgentRow, files: Map<string, FileMeta & {url?: string}>) {
   return {
     id: m.id,
     direction: m.direction,
     kind: m.kind as 'text' | 'auto',
     status: m.status,
     text: m.text,
-    files: strings(m.fileIds).map((id) => files.get(id)).filter((f) => !!f).map((f) => ({...f, url: `/site-api/crm/files/${f.id}`})),
+    files: strings(m.fileIds).map((id) => files.get(id)).filter((f) => !!f).map((f) => ({...f, url: f.url ?? `/site-api/crm/files/${f.id}`})),
     sender: m.sender,
     createdAt: m.createdAt.toISOString(),
     deliveredAt: m.deliveredAt?.toISOString() ?? null,

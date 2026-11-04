@@ -88,7 +88,7 @@ export function EmailComposer({to: initialTo = [], subject: initialSubject = '',
             <label htmlFor={`${uid}-to`} className={inlineLabel}>To</label>
             <Input id={`${uid}-to`} value={to} onChange={(e) => setTo(e.target.value)} onBlur={f.blur('to')} placeholder="name@company.com" className="pr-12 pl-10" />
             {!showCc && (
-              <button type="button" onClick={() => setShowCc(true)} className="absolute top-1/2 right-3 -translate-y-1/2 cursor-pointer rounded text-xs font-semibold text-slate-400 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30" aria-label="Add Cc">Cc</button>
+              <button type="button" onClick={() => setShowCc(true)} className="absolute top-1/2 right-3 -translate-y-1/2 cursor-pointer rounded text-xs font-semibold text-muted-foreground outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30" aria-label="Add Cc">Cc</button>
             )}
           </div>
         </Field>

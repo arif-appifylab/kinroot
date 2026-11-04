@@ -6,7 +6,8 @@ import {DATA_IN_PATH, dataInBaseUrl, type ApiKeyRow, type DataInLogRow, type Dat
 import {publicOrigin} from '../kit/config';
 import {requireRole, type AppEnv} from '../kit/guards';
 import {audit, clientIp, fingerprint} from '../lib/audit';
-import {dataInSettings, handleDataIn, maskSecret, newApiKey, rotateSigningSecret, saveRateLimit, signingSecret} from '../lib/data-in';
+import {DATA_IN_URL_PATH} from '@/lib/data-in-url';
+import {dataInSettings, dataInUrlState, handleDataIn, handleDataInUrl, maskSecret, newApiKey, regenerateDataInUrl, revealDataInUrl, rotateSigningSecret, saveRateLimit, setDataInUrlEnabled, signingSecret} from '../lib/data-in';
 import {notFound, valid} from '../lib/http';
 
 type KeyWithCreator = Prisma.ApiKeyGetPayload<{include: {createdBy: {select: {id: true; name: true; active: true}}}}>;
@@ -84,6 +85,47 @@ export const dataIn = new Hono<AppEnv>()
     return c.json({secret: {masked: maskSecret(secret), rotatedAt: settings.rotatedAt}});
   })
 
+  /**
+   * The Data in URL (Pabbly, Zapier, Make…): an access token in the URL and a signature token as a
+   * header. The overview holds masks only; the tokens come from "Show tokens" (audited).
+   */
+  .get('/url', async (c) => {
+    const [state, settings] = await Promise.all([dataInUrlState(c.var.db), dataInSettings(c.var.db)]);
+    return c.json({...state, origin: publicOrigin(c.req.raw), rateLimit: settings.rateLimit});
+  })
+
+  .post('/url/reveal', async (c) => {
+    const db = c.var.db;
+    const tokens = await revealDataInUrl(db);
+    if (!tokens) throw notFound('Data in URL');
+    await audit(db, c, {action: 'data_in.url_revealed', category: 'security', entity: 'data_in', label: 'Data in URL tokens', meta: {fingerprint: await fingerprint(tokens.access), signatureFingerprint: await fingerprint(tokens.signature)}});
+    return c.json({accessToken: tokens.access, signatureToken: tokens.signature});
+  })
+
+  /** New access and signature tokens: the old URL and header stop working at once. Acts as this admin from now on. */
+  .post('/url/regenerate', async (c) => {
+    const db = c.var.db;
+    const made = await regenerateDataInUrl(db, c.var.user!.id);
+    await audit(db, c, {
+      action: 'data_in.url_regenerated',
+      category: 'security',
+      entity: 'data_in',
+      label: 'Data in URL',
+      meta: {fingerprint: await fingerprint(made.access), ...(made.previous ? {previousFingerprint: await fingerprint(made.previous.access)} : {})},
+    });
+    return c.json(await dataInUrlState(db));
+  })
+
+  /** On (its tokens are made the first time; requests act as this admin) or off (its URLs answer 404). */
+  .patch('/url', valid('json', z.object({enabled: z.boolean()})), async (c) => {
+    const db = c.var.db;
+    const {enabled} = c.req.valid('json');
+    const before = await dataInUrlState(db);
+    await setDataInUrlEnabled(db, c.var.user!.id, enabled);
+    if (before.enabled !== enabled) await audit(db, c, {action: enabled ? 'data_in.url_enabled' : 'data_in.url_disabled', category: 'security', entity: 'data_in', label: 'Data in URL'});
+    return c.json(await dataInUrlState(db));
+  })
+
   .patch('/settings', valid('json', z.object({rateLimit: z.number().int().min(1).max(1000)})), async (c) => {
     const db = c.var.db;
     const {rateLimit} = c.req.valid('json');
@@ -140,16 +182,22 @@ export const dataIn = new Hono<AppEnv>()
     },
   );
 
-/** POST /site-api/crm/public/data-in/v1/*: anyone with an API key and the signing secret. */
-export const dataInPublic = new Hono<AppEnv>().all('/data-in/v1/*', async (c) => {
-  const url = new URL(c.req.url);
-  const r = await handleDataIn(c.var.db, {
+/**
+ * POST /site-api/crm/public/data-in/v1/<action>: an API key and a signed request (developers).
+ * POST /site-api/crm/public/data-in/<action>/<access token>: the Data in URL with its
+ * X-Signature-Token header (Pabbly, Zapier, Make…). Same actions, same checks otherwise.
+ */
+export const dataInPublic = new Hono<AppEnv>().all('/data-in/*', async (c) => {
+  const pathname = new URL(c.req.url).pathname;
+  const signed = pathname === DATA_IN_PATH || pathname.startsWith(`${DATA_IN_PATH}/`);
+  const input = {
     method: c.req.method,
-    path: url.pathname.slice(DATA_IN_PATH.length) || '/',
+    path: pathname.slice(signed ? DATA_IN_PATH.length : DATA_IN_URL_PATH.length) || '/',
     headers: c.req.raw.headers,
     body: () => c.req.arrayBuffer(),
     ip: clientIp(c),
     origin: publicOrigin(c.req.raw),
-  });
+  };
+  const r = signed ? await handleDataIn(c.var.db, input) : await handleDataInUrl(c.var.db, input);
   return c.json(r.body as object, r.status as 200, r.headers);
 });

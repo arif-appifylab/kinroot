@@ -24,6 +24,7 @@ import {
 } from '../lib/tickets';
 import {onceOf, runOnce} from '../lib/once';
 import {sign} from '../kit/crypto';
+import {defuseMerge} from '../email/render';
 import type {Ticket} from '../../../generated/prisma/client';
 import {publicFileUrl} from './files';
 import {strings} from '../lib/json-list';
@@ -138,7 +139,7 @@ export const supportPublic = new Hono<AppEnv>()
       if (!email) throw fieldError('email', 'Enter your email address');
       const settings = await getTicketSettings(db);
       const input = {
-        subject: body.subject,
+        subject: defuseMerge(body.subject), // never filled in when the team replies (AUDIT-2 L-6)
         description: desc.text,
         descriptionHtml: desc.html,
         category: body.category && settings.categories.includes(body.category) ? body.category : null,

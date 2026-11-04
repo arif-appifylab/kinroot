@@ -31,7 +31,7 @@ export function BookingSlotField({field, value, onChange}: {field: FormField; va
   }, [v?.start, v?.timezone, detected, duration, onChange]);
 
   if (!field.bookingLinkId) return <p className="rounded-xl border border-dashed border-slate-200 p-4 text-sm text-muted-foreground">Choose a booking link for this field.</p>;
-  if (link.isLoading || !tz) return <div className="flex justify-center py-6 text-slate-400"><Loader2 className="size-5 animate-spin" /></div>;
+  if (link.isLoading || !tz) return <div className="flex justify-center py-6 text-muted-foreground"><Loader2 className="size-5 animate-spin" /></div>;
   if (!link.data?.active) return <p className="text-sm text-muted-foreground">Online booking is not available right now.</p>;
 
   const set = (patch: {start?: string | null; duration?: number; timezone?: string}) => {

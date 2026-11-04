@@ -4,7 +4,7 @@ import {siteFetch} from '../../platform/browser';
 import type {Viewer} from '../../platform/types';
 
 /**
- * The person's own account, for Settings → Profile and Settings → Security. Every call is the
+ * The person's own account, for Settings → Your account. Every call is the
  * site's auth core (`/site-api/auth/*`, src/platform/auth): through `siteFetch` (CSRF header,
  * one shared session refresh), never Kinroot's `api` (that one targets `/site-api/crm`).
  */

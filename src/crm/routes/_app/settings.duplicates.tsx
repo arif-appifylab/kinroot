@@ -175,8 +175,8 @@ function Duplicates() {
       <FilterBar className="mb-4">
         <Tabs value={entity} onValueChange={(v) => set({entity: v as Entity})}>
           <TabsList size="sm" aria-label="Record type">
-            <TabsTrigger value="contact"><User /> Contacts {counts.data?.contact ? <span className="text-slate-400">{counts.data.contact}</span> : null}</TabsTrigger>
-            <TabsTrigger value="company"><Building2 /> Companies {counts.data?.company ? <span className="text-slate-400">{counts.data.company}</span> : null}</TabsTrigger>
+            <TabsTrigger value="contact"><User /> Contacts {counts.data?.contact ? <span className="text-muted-foreground">{counts.data.contact}</span> : null}</TabsTrigger>
+            <TabsTrigger value="company"><Building2 /> Companies {counts.data?.company ? <span className="text-muted-foreground">{counts.data.company}</span> : null}</TabsTrigger>
           </TabsList>
         </Tabs>
         <Tabs value={status} onValueChange={(v) => set({status: v as 'open' | 'dismissed'})}>

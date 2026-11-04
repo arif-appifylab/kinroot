@@ -191,7 +191,7 @@ export function RunDialog({runId, onClose}: {runId: string; onClose: () => void}
                   return (
                     <li key={s.id} className="rounded-xl border border-slate-100 bg-card p-3">
                       <div className="flex items-start gap-2.5">
-                        <span className="mt-0.5 text-xs font-bold text-slate-400 tabular-nums">{i + 1}</span>
+                        <span className="mt-0.5 text-xs font-bold text-muted-foreground tabular-nums">{i + 1}</span>
                         <Icon className="mt-0.5 size-4 shrink-0 text-slate-400" />
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-semibold text-slate-800">{STEP_TYPES[s.type]?.label ?? s.type}{!def && <span className="ml-1 text-xs font-normal text-muted-foreground">(no longer in the automation)</span>}</p>

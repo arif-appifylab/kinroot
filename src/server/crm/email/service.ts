@@ -1,7 +1,7 @@
 import {HTTPException} from 'hono/http-exception';
 
 import type {EmailAccount} from '../../../generated/prisma/client';
-import type {User} from '../kit/guards';
+import {isAdmin, type User} from '../kit/guards';
 import {config} from '../kit/config';
 import {randomToken} from '../kit/crypto';
 import type {Db} from '../kit/db';
@@ -19,8 +19,8 @@ import {composeEmail, systemEmailHtml} from './design';
 import {type Address, type Attachment, newMessageId} from './mime';
 import {logMailboxError, mailboxErrorText} from './errors';
 import {accountCredentials} from './oauth';
-import {deliver, isReservedAddress, reachesReserved} from './providers';
-import {addTracking, htmlToText, mergeFields, textToHtml} from './render';
+import {deliver, isReservedAddress, PROVIDER_INFO, reachesReserved} from './providers';
+import {addTracking, defuseMerge, htmlToText, mergeFields, plainName, textToHtml} from './render';
 import {isOwnerAddress, notifyOwner, shownEmail} from '../lib/owner-account';
 import {teamAddresses} from '../lib/users';
 
@@ -41,6 +41,11 @@ export type SendInput = {
   replyTo?: string;
   /** For a new thread: 'ticket' keeps it out of the inbox (tickets.ts); default 'email'. */
   channel?: string;
+  /**
+   * The recipient never confirmed this address and the record's names came from them (a form's
+   * autoresponder): merge fields get letters only, no links (AUDIT-2 M-6, render.ts `plainName`).
+   */
+  strangerValues?: boolean;
 };
 
 /** Accounts a user may send from: their own plus shared team accounts. */
@@ -51,10 +56,29 @@ export async function usableAccounts(db: Db, user: Pick<User, 'id'>) {
   });
 }
 
+/** A provider that sends as whatever From it is given (the owner's API key), not a mailbox the provider signs in to. */
+export const freeSender = (provider: EmailAccount['provider']) => PROVIDER_INFO[provider].kind !== 'oauth';
+
+export const PERSONAL_SENDER_RULE = 'A personal account on an email service sends only as your own sign-in address. Use that address, or ask an admin for a shared team account.';
+
+/**
+ * AUDIT-2 M-7: a personal account on an API provider sends only as its member's own confirmed
+ * sign-in address (an admin's may use any address, as a shared one). Checked on every send, so an
+ * account saved before the rule existed can't be used to send as someone else either.
+ */
+export async function assertPersonalSender(db: Db, account: Pick<EmailAccount, 'userId' | 'provider' | 'fromEmail'>) {
+  if (!account.userId || !freeSender(account.provider)) return;
+  const member = await db.member.findUnique({where: {id: account.userId}, select: {role: true, user: {select: {email: true, emailVerifiedAt: true}}}});
+  if (member && isAdmin(member)) return;
+  const own = member?.user?.emailVerifiedAt ? member.user.email.toLowerCase() : null;
+  if (!own || own !== account.fromEmail.toLowerCase()) throw new HTTPException(403, {message: PERSONAL_SENDER_RULE});
+}
+
 export async function sendEmail(db: Db, me: Pick<User, 'id' | 'name' | 'role'>, origin: string, input: SendInput) {
   const accounts = await usableAccounts(db, me);
   const account = input.accountId ? accounts.find((a) => a.id === input.accountId) : accounts.find((a) => a.userId === me.id && a.isDefault) ?? accounts[0];
   if (!account) throw new HTTPException(400, {message: 'Connect an email account in Settings → Email first'});
+  await assertPersonalSender(db, account);
 
   const recipients = [...input.to, ...(input.cc ?? []), ...(input.bcc ?? [])].map((e) => e.toLowerCase());
   const optedOut = [...(await optedOutEmails(db, recipients))];
@@ -80,7 +104,14 @@ export async function sendEmail(db: Db, me: Pick<User, 'id' | 'name' | 'role'>, 
     ? await db.company.findUnique({where: {id: input.companyId}})
     : contact?.companies[0]?.company ?? (deal?.companyId ? await db.company.findUnique({where: {id: deal.companyId}}) : null);
 
-  const ctx = {contact, company, deal, me: {name: me.name, email: account.fromEmail}, unsubscribeUrl: contact ? await unsubscribeUrl(origin, contact.id) : null};
+  const merged = input.strangerValues
+    ? {
+        contact: contact && {...contact, firstName: plainName(contact.firstName), lastName: plainName(contact.lastName), title: plainName(contact.title)},
+        company: company && {...company, name: plainName(company.name)},
+        deal: deal && {...deal, title: plainName(deal.title)},
+      }
+    : {contact, company, deal};
+  const ctx = {...merged, me: {name: me.name, email: account.fromEmail}, unsubscribeUrl: contact ? await unsubscribeUrl(origin, contact.id) : null};
   const subject = mergeFields(input.subject, ctx);
   // Merge fields → signature → layout, then tracking. The text part comes from the untracked HTML.
   const composed = await composeEmail(db, {html: input.html, text: input.body, layout: input.layout ?? 'plain', preheader: input.preheader, ctx, account, origin});
@@ -184,6 +215,11 @@ export type IncomingMessage = {
   externalId?: string | null;
   externalThreadId?: string | null;
   date?: Date;
+  /**
+   * The receiving mail service said the `From:` domain passed DMARC (or an aligned SPF / DKIM):
+   * email/sender-auth.ts. Absent = unverified (AUDIT-2 M-8).
+   */
+  senderVerified?: boolean;
 };
 
 const baseSubject = (s: string) => s.replace(/^\s*((re|fw|fwd|aw|sv)\s*:\s*)+/i, '').trim() || '(no subject)';
@@ -199,6 +235,8 @@ export async function ingestMessage(db: Db, account: EmailAccount | null, incomi
   // so reading it later costs nothing and a crafted message can't hold the CPU on every open.
   const m: IncomingMessage = {
     ...incoming,
+    // An outsider's "{{deal.value}}" stays text when the team replies "Re: …" (AUDIT-2 L-6).
+    subject: defuseMerge(incoming.subject ?? ''),
     html: await cleanReceivedHtml(incoming.html),
     text: incoming.text && incoming.text.length > MAX_RECEIVED_HTML ? incoming.text.slice(0, MAX_RECEIVED_HTML) : incoming.text,
   };
@@ -309,7 +347,7 @@ export async function ingestMessage(db: Db, account: EmailAccount | null, incomi
 
 /**
  * Sends a plain notification email (no tracking, no timeline entry) from a
- * shared team account, else any connected account. The site owner (who has no
+ * shared team account (never a personal mailbox). The site owner (who has no
  * address here) gets it from the platform instead, as text (`notifyOwner`).
  * Returns false when nobody could be sent it, so callers can fall back to
  * in-app notifications.
@@ -344,10 +382,9 @@ async function sendFromTeamAccount(db: Db, input: {to: string[]; subject: string
   return true;
 }
 
-/** The account system email goes out from: a shared team account, else any connected one (null = none). */
+/** The account system email goes out from: a shared team account (null = none). */
 export async function systemAccount(db: Db) {
-  return (
-    (await db.emailAccount.findFirst({where: {userId: null, status: {not: 'ERROR'}}, orderBy: [{isDefault: 'desc'}, {createdAt: 'asc'}]})) ??
-    (await db.emailAccount.findFirst({where: {status: 'CONNECTED'}, orderBy: [{isDefault: 'desc'}, {createdAt: 'asc'}]}))
-  );
+  // Shared team accounts only, never a member's personal mailbox (AUDIT-2 L-7): without one, the
+  // owner still hears from the platform and the team in the app.
+  return db.emailAccount.findFirst({where: {userId: null, status: {not: 'ERROR'}}, orderBy: [{isDefault: 'desc'}, {createdAt: 'asc'}]});
 }

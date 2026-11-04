@@ -1,4 +1,4 @@
-import {LogIn, UserPlus} from 'lucide-react';
+import {Loader2, LogIn, UserPlus} from 'lucide-react';
 import {useCallback, useEffect, useState} from 'react';
 
 import {siteFetch} from '../../../platform/browser';
@@ -64,20 +64,45 @@ export function SignInPrompt({title = 'Find your requests', intro}: {title?: str
 }
 
 export function PortalNav({session}: {session: PortalSession | null}) {
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
   async function signOut() {
-    // The site's sign-out, then back to the portal's front page.
-    await siteFetch('/site-api/auth/logout', {method: 'POST'}).catch(() => null);
-    window.location.href = '/support/';
+    if (signingOut) return;
+    setSigningOut(true);
+    setSignOutError(null);
+    // The site's sign-out, then back to the portal's front page; a failure says so and stays here.
+    try {
+      const res = await siteFetch('/site-api/auth/logout', {method: 'POST'});
+      if (!res.ok) throw new Error();
+      window.location.href = '/support/';
+    } catch {
+      setSignOutError('You are still signed in: that did not go through. Check your connection and try again.');
+      setSigningOut(false);
+    }
   }
   return (
     <div className="mx-auto mt-6 flex w-full max-w-2xl flex-wrap items-center gap-x-4 gap-y-2 text-sm sm:mt-10">
       <a href="/support/" className="font-semibold text-primary hover:underline">New request</a>
       {session && <a href="/support/tickets/" className="font-semibold text-primary hover:underline">My requests</a>}
       {session && (
-        <span className="ml-auto text-muted-foreground">
+        <span className="ml-auto inline-flex items-center gap-1 text-muted-foreground">
           {session.email} ·{' '}
-          <button onClick={signOut} className="cursor-pointer font-semibold text-slate-600 hover:text-primary">Sign out</button>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            disabled={signingOut}
+            aria-busy={signingOut || undefined}
+            className="inline-flex cursor-pointer items-center gap-1 rounded font-semibold text-slate-600 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-wait disabled:opacity-70"
+          >
+            {signingOut && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
+            {signingOut ? 'Signing out…' : 'Sign out'}
+          </button>
         </span>
+      )}
+      {signOutError && (
+        <p role="alert" className="w-full text-right text-xs font-medium text-destructive">
+          {signOutError}
+        </p>
       )}
     </div>
   );

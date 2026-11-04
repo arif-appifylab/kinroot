@@ -32,6 +32,8 @@ export const GET: APIRoute = async ({request}) => {
     ...(website && !website.enabled ? ['/', '/contact/', '/demo/'] : []),
     ...(website && !website.contact ? ['/contact/'] : []),
     ...(website && !website.demo ? ['/demo/'] : []),
+    // The customer portal's pages only while the portal is on (AUDIT-2 L-15).
+    ...(website && !website.support ? ['/support/'] : []),
   ]);
   const urls = pagePaths
     .filter(path => !hidden.has(path))

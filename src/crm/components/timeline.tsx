@@ -130,7 +130,7 @@ function NoteComposer({record}: {record: RecordRef}) {
         placeholder="Write a note… what did you learn, what was agreed, what's next? Type @ to mention a teammate."
       />
       <div className="flex items-center justify-between">
-        <span className="text-xs text-slate-400">⌘ + Enter to save · @ to mention</span>
+        <span className="text-xs text-muted-foreground">⌘ + Enter to save · @ to mention</span>
         <Button type="submit" size="sm" disabled={!body.trim()} pending={save.isPending} pendingLabel="Saving…">
           Save note
         </Button>
@@ -366,7 +366,7 @@ function TicketItem({activity}: {activity: Activity}) {
   if (!d.number) return null;
   return (
     <Link to="/tickets/$ticketId" params={{ticketId: String(d.number)}} className="block rounded-xl border border-slate-100 bg-card p-3.5 shadow-soft transition-all hover:-translate-y-0.5 hover:shadow-lift">
-      <p className="truncate text-sm font-semibold text-slate-900"><span className="text-slate-400">#{d.number}</span> {d.subject}</p>
+      <p className="truncate text-sm font-semibold text-slate-900"><span className="text-muted-foreground">#{d.number}</span> {d.subject}</p>
       {d.body && activity.type !== 'ticket_status' && <p className="mt-1 line-clamp-2 text-sm whitespace-pre-wrap text-slate-600">{d.body}</p>}
     </Link>
   );
@@ -510,7 +510,7 @@ function InteractionItem({activity}: {activity: Activity}) {
                 return <Icon className="size-3 shrink-0" />;
               })()}
               {!d.location ? (
-                <span className="text-slate-400">No details</span>
+                <span className="text-muted-foreground">No details</span>
               ) : /^https?:/.test(d.location) ? (
                 <a href={d.location} target="_blank" rel="noopener noreferrer" className="truncate text-primary hover:underline">{upcoming ? 'Join meeting' : d.location}</a>
               ) : d.locationType === 'PHONE' ? (
@@ -866,13 +866,13 @@ export function Timeline({record, showRecord}: {record: RecordRef; showRecord?: 
           <>
             {upcoming.length > 0 && (
               <>
-                <h3 className="mb-3 text-xs font-bold tracking-wider text-slate-400 uppercase">Upcoming</h3>
+                <h3 className="mb-3 text-xs font-bold tracking-wider text-muted-foreground uppercase">Upcoming</h3>
                 <ol className="mb-6 [&>li:last-child>span:first-child]:hidden">
                   {upcoming.map((a) => <ActivityItem key={a.id} activity={a} showRecord={showRecord} record={record} />)}
                 </ol>
               </>
             )}
-            {past.length > 0 && upcoming.length > 0 && <h3 className="mb-3 text-xs font-bold tracking-wider text-slate-400 uppercase">Past</h3>}
+            {past.length > 0 && upcoming.length > 0 && <h3 className="mb-3 text-xs font-bold tracking-wider text-muted-foreground uppercase">Past</h3>}
             <ol className="[&>li:last-child>span:first-child]:hidden">
               {past.map((a) => <ActivityItem key={a.id} activity={a} showRecord={showRecord} record={record} />)}
             </ol>

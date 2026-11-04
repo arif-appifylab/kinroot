@@ -42,8 +42,9 @@ export type FieldType = P.FieldType;
 export type EmailProvider = P.EmailProvider;
 
 export type UserLite = {id: string; name: string; email: string; color: string; avatarUrl?: string | null};
-/** `accountOwner`: the site owner's account, which has no email address on the site (it comes from the dashboard). */
-export type Me = UserLite & {role: Role; active: boolean; invited: boolean; lastSeenAt: string | null; accountOwner?: boolean};
+/** `accountOwner`: the site owner's account, which has no email address on the site (it comes from the dashboard).
+ * `accountId`: the member's site account (`users.id`); null for a pending invite. */
+export type Me = UserLite & {role: Role; active: boolean; invited: boolean; lastSeenAt: string | null; accountOwner?: boolean; accountId?: number | null};
 
 export type Stage = Jsonify<P.Stage>;
 export type Pipeline = Jsonify<P.Pipeline> & {stages: Stage[]; _count?: {deals: number}};
@@ -439,6 +440,8 @@ export type ChatVisitor = {
   label: string;
   name: string | null;
   email: string | null;
+  /** False until the visitor opened a link mailed to that address: anyone can type any email into the chat. */
+  emailVerified: boolean;
   blocked: boolean;
   firstSeenAt: string;
   lastSeenAt: string;

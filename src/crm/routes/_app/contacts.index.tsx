@@ -89,11 +89,11 @@ function ContactsPage() {
         </div>
       ),
     },
-    {key: 'company', header: 'Company', hideBelow: 'md', cell: (c) => c.companies[0] ? <span className="font-medium">{c.companies[0].company.name}</span> : <span className="text-slate-400">—</span>},
-    {key: 'title', header: 'Title', hideBelow: 'xl', cell: (c) => c.title ?? <span className="text-slate-400">—</span>},
+    {key: 'company', header: 'Company', hideBelow: 'md', cell: (c) => c.companies[0] ? <span className="font-medium">{c.companies[0].company.name}</span> : <span className="text-muted-foreground">—</span>},
+    {key: 'title', header: 'Title', hideBelow: 'xl', cell: (c) => c.title ?? <span className="text-muted-foreground">—</span>},
     {key: 'lifecycleStage', header: 'Stage', sortable: true, cell: (c) => <Badge tone={LIFECYCLE[c.lifecycleStage].tone}>{LIFECYCLE[c.lifecycleStage].label}</Badge>},
     {key: 'score', header: 'Score', sortable: true, hideBelow: 'sm', cell: (c) => <ScoreBadge score={c.score} compact />},
-    {key: 'owner', header: 'Owner', hideBelow: 'lg', cell: (c) => c.owner ? <span className="inline-flex items-center gap-2"><Avatar name={c.owner.name} color={c.owner.color} src={c.owner.avatarUrl} size="xs" />{c.owner.name.split(' ')[0]}</span> : <span className="text-slate-400">—</span>},
+    {key: 'owner', header: 'Owner', hideBelow: 'lg', cell: (c) => c.owner ? <span className="inline-flex items-center gap-2"><Avatar name={c.owner.name} color={c.owner.color} src={c.owner.avatarUrl} size="xs" />{c.owner.name.split(' ')[0]}</span> : <span className="text-muted-foreground">—</span>},
     {key: 'lastActivityAt', header: 'Last activity', sortable: true, hideBelow: 'sm', cell: (c) => <span className="text-muted-foreground">{ago(c.lastActivityAt)}</span>},
   ];
 
@@ -215,7 +215,7 @@ function ContactsPage() {
           trigger={<Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" aria-label="Remove from list" disabled={busy} aria-busy={removeFromList.isPending || undefined}><ListMinus /> <span className="hidden sm:inline">Remove from list</span></Button>}
         />
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" disabled={busy} aria-busy={(bulk.isPending && bulk.variables?.action === 'delete') || undefined}><Trash2 /> Delete</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" disabled={busy} pending={bulk.isPending && bulk.variables?.action === 'delete'} pendingLabel="Deleting…"><Trash2 /> Delete</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             <DropdownMenuLabel>Delete {selected.size} contacts?</DropdownMenuLabel>
             <DropdownMenuItem destructive onSelect={() => bulk.mutate({action: 'delete'})}>Yes, move to the recycle bin</DropdownMenuItem>

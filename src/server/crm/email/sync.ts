@@ -2,6 +2,7 @@ import type {EmailAccount} from '../../../generated/prisma/client';
 import {fromB64} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {parseAddressList, stripAngle} from './mime';
+import {authResultsPass} from './sender-auth';
 import {accountCredentials} from './oauth';
 import type {OAuthCreds} from './providers';
 import {ingestMessage, type IncomingMessage} from './service';
@@ -54,14 +55,19 @@ async function syncGmail(db: Db, account: EmailAccount, creds: OAuthCreds, deadl
       id: string;
       threadId: string;
       internalDate: string;
+      labelIds?: string[];
       payload: GmailPart;
     };
     const h = (name: string) => msg.payload.headers?.find((x) => x.name.toLowerCase() === name)?.value ?? null;
     const bodies = gmailBodies(msg.payload);
     const date = new Date(Number(msg.internalDate));
     if (date > newest) newest = date;
+    const from = parseAddressList(h('from'))[0] ?? {email: 'unknown@unknown'};
     const incoming: IncomingMessage = {
-      from: parseAddressList(h('from'))[0] ?? {email: 'unknown@unknown'},
+      from,
+      // Sent by this mailbox (Google enforces its From), or Google's own verdict, its first
+      // Authentication-Results (AUDIT-2 M-8, email/sender-auth.ts).
+      senderVerified: !!msg.labelIds?.includes('SENT') || (/^\s*mx\.google\.com\s*;/i.test(h('authentication-results') ?? '') && authResultsPass(h('authentication-results'), from.email)),
       to: parseAddressList(h('to')),
       cc: parseAddressList(h('cc')),
       subject: h('subject') ?? '(no subject)',
@@ -96,6 +102,7 @@ type GraphMessage = {
   toRecipients: {emailAddress: {address: string; name: string}}[];
   ccRecipients: {emailAddress: {address: string; name: string}}[];
   body: {contentType: 'html' | 'text'; content: string};
+  internetMessageHeaders?: {name: string; value: string}[];
 };
 
 async function syncOutlook(db: Db, account: EmailAccount, creds: OAuthCreds, deadline: number) {
@@ -104,7 +111,7 @@ async function syncOutlook(db: Db, account: EmailAccount, creds: OAuthCreds, dea
     $filter: `receivedDateTime ge ${new Date(since.getTime() - 60_000).toISOString()}`,
     $orderby: 'receivedDateTime asc',
     $top: String(MAX_PER_RUN),
-    $select: 'id,conversationId,subject,internetMessageId,receivedDateTime,from,toRecipients,ccRecipients,body',
+    $select: 'id,conversationId,subject,internetMessageId,receivedDateTime,from,toRecipients,ccRecipients,body,internetMessageHeaders',
   });
   const graphRes = await fetchOut(`https://graph.microsoft.com/v1.0/me/messages?${params}`, {headers: {authorization: `Bearer ${creds.accessToken}`}});
   const res = (await graphRes.json()) as {
@@ -126,8 +133,13 @@ async function syncOutlook(db: Db, account: EmailAccount, creds: OAuthCreds, dea
     const date = new Date(m.receivedDateTime);
     if (date > newest) newest = date;
     if (known.has(m.id)) continue;
+    const from = m.from ? addr(m.from) : {email: account.fromEmail};
+    // Microsoft's verdict (its first Authentication-Results); a message from this mailbox's own
+    // address that never crossed the internet (no such header) was sent by it (AUDIT-2 M-8).
+    const results = m.internetMessageHeaders?.find((x) => x.name.toLowerCase() === 'authentication-results')?.value ?? null;
     const incoming: IncomingMessage = {
-      from: m.from ? addr(m.from) : {email: account.fromEmail},
+      from,
+      senderVerified: results ? authResultsPass(results, from.email) : from.email.toLowerCase() === account.fromEmail.toLowerCase(),
       to: m.toRecipients.map(addr),
       cc: m.ccRecipients.map(addr),
       subject: m.subject ?? '(no subject)',

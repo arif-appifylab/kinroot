@@ -57,3 +57,26 @@ export async function pruneRateHits(db: Db, until = Date.now() + 10_000) {
   const cut = new Date(Date.now() - 86_400_000);
   return deleteInChunks(until, (n) => db.$executeRaw`DELETE FROM "RateHit" WHERE id IN (SELECT id FROM "RateHit" WHERE "at" < ${cut} LIMIT ${n})`);
 }
+
+/**
+ * Emails to an address nobody proved is theirs (a support request's confirmation, a booking's
+ * confirmation and reminders, a form's autoresponder) go out at most `perRecipient` times an hour to
+ * one address and `overall` times an hour in all (AUDIT-2 M-6): the company's mailbox is never a
+ * relay a stranger can aim at someone. The address is kept only as a keyed hash.
+ */
+export const UNCONFIRMED_MAIL = {perRecipient: 5, overall: 300, windowSec: 3600};
+
+/** True when one more such email may go to `to` now (and counts it); false: skip it. */
+export async function unconfirmedMailAllowed(db: Db, to: string) {
+  const who = await sign(`mail-to:${to.trim().toLowerCase()}`);
+  try {
+    await rateLimit(db, [
+      {key: `mail:unconfirmed:to:${who}`, limit: UNCONFIRMED_MAIL.perRecipient, windowSec: UNCONFIRMED_MAIL.windowSec},
+      {key: 'mail:unconfirmed:all', limit: UNCONFIRMED_MAIL.overall, windowSec: UNCONFIRMED_MAIL.windowSec},
+    ]);
+    return true;
+  } catch (e) {
+    if (e instanceof HTTPException && e.status === 429) return false;
+    throw e;
+  }
+}

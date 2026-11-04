@@ -213,6 +213,9 @@ describe.skipIf(!DATABASE_URL)('Ported: scheduled report emails (integration, re
 
     // Unsubscribe: the link's state with a masked address, a tampered token refused, only that address leaves.
     const token = unsub!.split('/report-unsubscribe/')[1]!;
+    // AUDIT-2 L-10: the link names the recipient by a keyed hash, never the address (not even encoded).
+    expect(token).toMatch(/^r\.[a-z0-9]+\.[\w-]{22}$/i);
+    expect(token).not.toContain(Buffer.from(ext(1)).toString('base64url').slice(0, 12));
     const guest = new Browser(app, '198.51.100.50');
     const state = await guest.get(`/site-api/crm/public/report-unsubscribe/${token}`);
     expect(state.status).toBe(200);

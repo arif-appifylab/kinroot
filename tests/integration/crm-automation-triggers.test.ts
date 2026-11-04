@@ -53,4 +53,41 @@ describe.skipIf(!DATABASE_URL)('Kinroot automation triggers (integration, real P
     await automationTick(db as unknown as Db);
     expect(await db.automationFire.count()).toBe(3);
   });
+
+  it('fires every record of a burst sharing one timestamp exactly once, over successive ticks (H-1)', async () => {
+    const pipeline = await db.pipeline.create({data: {name: 'Sales'}});
+    const stage = await db.stage.create({data: {pipelineId: pipeline.id, name: 'New'}});
+    await db.customFieldDef.create({data: {entity: 'DEAL', key: 'launch', label: 'Launch', type: 'DATE'}});
+    const N = 600;
+    const closedAt = ago(2 * HOUR);
+    const quietSince = ago(2 * DAY);
+    // An import: N deals sharing one close date, one launch day and one last-activity time…
+    await db.deal.createMany({data: Array.from({length: N}, (_, i) => ({title: `Due ${i}`, pipelineId: pipeline.id, stageId: stage.id, expectedCloseDate: closedAt, custom: {launch: day(ago(DAY))}, lastActivityAt: quietSince}))});
+    // …and N older ones a date trigger reads in its margin before the due ones (never due here).
+    await db.deal.createMany({data: Array.from({length: N}, (_, i) => ({title: `Old ${i}`, pipelineId: pipeline.id, stageId: stage.id, expectedCloseDate: ago(10 * DAY), custom: {launch: day(ago(4 * DAY))}, lastActivityAt: ago(10 * DAY)}))});
+
+    const autos = [
+      await automation('Close date passed', {kind: 'date', source: 'record', field: 'expectedCloseDate', amount: 1, unit: 'hours', direction: 'after'}),
+      await automation('After launch', {kind: 'date', source: 'record', field: 'custom.launch', amount: 1, unit: 'hours', direction: 'after'}),
+      await automation('Gone quiet', {kind: 'inactivity', rule: 'no_activity', amount: 1, unit: 'days'}),
+    ];
+
+    // A small cap per tick: each automation needs several ticks to get through its burst.
+    let ticks = 0;
+    for (; ticks < 40; ticks++) {
+      const r = await automationTick(db as unknown as Db, {budgetMs: 120_000, cap: 250});
+      if (!r.fired) break;
+    }
+    expect(ticks).toBeGreaterThan(3);
+
+    const due = new Set((await db.deal.findMany({where: {title: {startsWith: 'Due'}}, select: {id: true}})).map(d => d.id));
+    for (const a of autos) {
+      const fires = await db.automationFire.findMany({where: {automationId: a.id}, select: {recordId: true}});
+      expect(fires.length, a.name).toBe(N);
+      expect(fires.every(f => due.has(f.recordId)), a.name).toBe(true);
+      const runs = await db.automationRun.findMany({where: {automationId: a.id}, select: {recordId: true}});
+      expect(runs.length, a.name).toBe(N);
+      expect(new Set(runs.map(r => r.recordId)).size, a.name).toBe(N);
+    }
+  }, 300_000);
 });

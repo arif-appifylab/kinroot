@@ -107,7 +107,7 @@ function ListRowItem({list: l, onEdit}: {list: ContactListRow; onEdit: () => voi
       <td className="px-4 py-3">{l.kind === 'DYNAMIC' ? <Badge tone="violet"><Filter /> Segment</Badge> : <Badge tone="blue"><List /> Static</Badge>}</td>
       <td className="px-4 py-3 text-right font-semibold tabular-nums">{l.count.toLocaleString()}</td>
       <td className="hidden px-4 py-3 md:table-cell">
-        {l.owner ? <span className="inline-flex items-center gap-2"><Avatar name={l.owner.name} color={l.owner.color} src={l.owner.avatarUrl} size="xs" />{l.owner.name.split(' ')[0]}</span> : <span className="text-slate-400">—</span>}
+        {l.owner ? <span className="inline-flex items-center gap-2"><Avatar name={l.owner.name} color={l.owner.color} src={l.owner.avatarUrl} size="xs" />{l.owner.name.split(' ')[0]}</span> : <span className="text-muted-foreground">—</span>}
       </td>
       <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">{ago(l.updatedAt)}</td>
       <td className="px-2 py-3">

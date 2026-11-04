@@ -10,6 +10,7 @@ describe('Kinroot webhook targets', () => {
     expect(webhookTarget('https://acme.app.n8n.cloud/webhook/lead')?.service).toBe('n8n Cloud');
     expect(webhookTarget(' https://hooks.slack.com/services/T0/B0/X ')?.service).toBe('Slack');
     expect(webhookTarget('https://discord.com/api/webhooks/1/abc')?.service).toBe('Discord');
+    expect(webhookTarget('https://connect.pabbly.com/workflow/sendwebhookdata/IjU3NjUwNTZhMDYzMjA0MzE1MjY4NTUzYzUxMzYi_pc')?.service).toBe('Pabbly Connect');
   });
 
   it('refuses any other address, and tricks that look like one', () => {
@@ -22,6 +23,13 @@ describe('Kinroot webhook targets', () => {
       'https://user:pass@hooks.zapier.com/hooks/catch/1/a', // credentials
       'https://hooks.zapier.com:8443/hooks/catch/1/a', // port
       'https://discord.com/channels/1', // not the webhook path
+      'https://connect.pabbly.com.evil.test/workflow/sendwebhookdata/abc', // look-alike host
+      'https://connectpabbly.com/workflow/sendwebhookdata/abc',
+      'https://evil-connect.pabbly.com/workflow/sendwebhookdata/abc', // another Pabbly subdomain
+      'https://pabbly.com/workflow/sendwebhookdata/abc',
+      'https://connect.pabbly.com/login', // not the webhook path
+      'https://connect.pabbly.com/webhook-listener/webhook/abc', // not a confirmed webhook path
+      'https://connect.pabbly.com/workflow/sendwebhookdata/', // no workflow id
       'https://127.0.0.1/hook',
       'javascript:alert(1)',
       '',

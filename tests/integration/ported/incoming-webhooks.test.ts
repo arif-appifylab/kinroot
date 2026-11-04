@@ -367,6 +367,12 @@ describe.skipIf(!DATABASE_URL)('Ported: incoming webhooks (integration, real Pos
     const b64 = await hmacBase64(KEY, body);
     expect((await send(secHook.url, {raw: body, secret: false, headers: {'X-Signature': b64}})).status).toBe(200);
     expect((await send(secHook.url, {raw: body, secret: false, headers: {'X-Signature': hex}})).status).toBe(401);
+    // AUDIT-2 L-11: a signature over the body alone, sent again 11 minutes later with a fresh
+    // (unsigned) timestamp, is still a replay: taken once.
+    await db.rateHit.updateMany({where: {key: {startsWith: 'inbound-seen:'}}, data: {at: new Date(Date.now() - 11 * 60_000)}});
+    const replay = await send(secHook.url, {raw: body, secret: false, headers: {'X-Signature': b64, 'X-Webhook-Timestamp': String(Math.floor(Date.now() / 1000))}});
+    expect(replay.status).toBe(200);
+    expect(replay.json.duplicate).toBe(true);
 
     // Regenerate: the old URL stops working, the new one works.
     const regen = must<{webhook: Hook}>(await browser.post(`/site-api/crm/incoming-webhooks/${secHook.id}/regenerate`, {}), 'regenerate').webhook;

@@ -43,7 +43,7 @@ function TicketCard({ticket, overlay}: {ticket: TicketRow; overlay?: boolean}) {
             onKeyDown={(e) => e.stopPropagation()}
             className="rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/30"
           >
-            <span className="text-slate-400">#{ticket.number}</span> {ticket.subject}
+            <span className="text-muted-foreground">#{ticket.number}</span> {ticket.subject}
           </Link>
         </p>
         {ticket.assignee && <Avatar name={ticket.assignee.name} color={ticket.assignee.color} src={ticket.assignee.avatarUrl} size="xs" className="mt-0.5" />}
@@ -55,7 +55,7 @@ function TicketCard({ticket, overlay}: {ticket: TicketRow; overlay?: boolean}) {
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
         <PriorityLabel priority={ticket.priority} />
         {ticket.category && <span className="text-slate-500">{ticket.category}</span>}
-        <span className="ml-auto text-slate-400">{ago(ticket.lastMessageAt)}</span>
+        <span className="ml-auto text-muted-foreground">{ago(ticket.lastMessageAt)}</span>
       </div>
       <div className="mt-2 empty:hidden"><SlaBadge ticket={ticket} compact /></div>
     </div>

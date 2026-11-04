@@ -190,7 +190,7 @@ function PermissionBox({id, permission: p, checked, allowed, onChange}: {id: str
       <span className="min-w-0">
         <span className="block text-sm font-semibold text-slate-900">{p.title}</span>
         {p.description && <span className="block text-xs text-muted-foreground">{p.description}</span>}
-        <code className="mt-0.5 block text-[11px] text-slate-400">{p.codename}</code>
+        <code className="mt-0.5 block text-[11px] text-muted-foreground">{p.codename}</code>
         {!allowed && <span className="block text-xs font-medium text-amber-700">You do not hold this permission, so you cannot give it.</span>}
       </span>
     </label>

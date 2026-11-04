@@ -81,7 +81,7 @@ export async function countExport(db: Db, exp: Export, user: User) {
 }
 
 async function page(db: Db, exp: Export, user: User): Promise<Row[]> {
-  const base = await exportWhere(db, exp, user);
+  const [base, scope] = await Promise.all([exportWhere(db, exp, user), userScope(db, user)]);
   const after = exp.cursor ? {id: {gt: exp.cursor}} : {};
   const args = {orderBy: {id: 'asc' as const}, take: PAGE};
   if (exp.entity === 'contact') {
@@ -95,7 +95,8 @@ async function page(db: Db, exp: Export, user: User): Promise<Row[]> {
   const rows = await db.deal.findMany({
     ...args,
     where: {AND: [base as Prisma.DealWhereInput, after]},
-    include: {owner: ownerSelect, pipeline: {select: {name: true}}, stage: {select: {name: true}}, company: {select: {name: true, domain: true}}, contacts: {include: {contact: {select: {email: true}}}}},
+    // Linked contacts' addresses only of contacts the requester may see, as the deal page (AUDIT-2 L-1).
+    include: {owner: ownerSelect, pipeline: {select: {name: true}}, stage: {select: {name: true}}, company: {select: {name: true, domain: true}}, contacts: {where: {contact: scope}, include: {contact: {select: {email: true}}}}},
   });
   return rows.map((r) => ({
     ...r,
@@ -204,7 +205,9 @@ async function finishExport(db: Db, c: AppContext | null, exp: Export, user: Use
   await db.exportChunk.deleteMany({where: {exportId: exp.id}});
   const noun = IO_ENTITIES[exp.entity as IoEntity];
   let emailed = false;
-  if (exp.emailMe) {
+  // Claimed before sending (AUDIT-2 L-12): a retried or doubled finish never emails the link twice.
+  const claimed = exp.emailMe ? (await db.export.updateMany({where: {id: exp.id, emailed: false}, data: {emailed: true}})).count === 1 : false;
+  if (claimed) {
     const url = await publicFileUrl(exp.origin ?? '', exp.fileId!, IO_FILE_DAYS);
     emailed = await sendSystemEmail(db, {
       to: [user.email],
@@ -212,7 +215,8 @@ async function finishExport(db: Db, c: AppContext | null, exp: Export, user: Use
       text: [`Your export of ${exp.processed.toLocaleString('en-US')} ${noun.many} is ready.`, '', `Download (the link works for ${IO_FILE_DAYS} days, no sign-in needed):`, url].join('\n'),
     }).catch((e) => (console.error('[export] email', String((e as Error)?.message ?? e).slice(0, 200)), false));
   }
-  const done = await db.export.update({where: {id: exp.id}, data: {status: 'done', emailed, finishedAt: new Date()}});
+  // Not claimed: an earlier run sent it, and its `emailed` stays.
+  const done = await db.export.update({where: {id: exp.id}, data: {status: 'done', emailed: claimed ? emailed : undefined, finishedAt: new Date()}});
   // Small exports download right away in the browser; only background ones need a nudge.
   if (!c) await notify(db, [user.id], {type: 'export', title: `Export ready: ${exp.fileName}`, body: `${exp.processed.toLocaleString('en-US')} ${noun.many}${emailed ? ' · the link was emailed to you' : ''}`, link: exportDownloadPath(exp.fileId!)});
   const defs = await db.customFieldDef.findMany({where: {entity: noun.fieldEntity}, select: {key: true, label: true}});

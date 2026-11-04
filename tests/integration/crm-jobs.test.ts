@@ -149,6 +149,31 @@ describe.skipIf(!DATABASE_URL)('Kinroot background jobs on the platform (integra
     expect(new Set(platform.jobs.map((j) => j.data.threadId)).size).toBe(50);
   });
 
+  it('sends jobs someone waits for ahead of bulk work, in the request and from the backlog, within the rate (M-11)', async () => {
+    // An import queues 30 scoring jobs, then a booking confirmation and a form email: the two go now.
+    await inJob(async (d) => {
+      for (let i = 0; i < 30; i++) await enqueue(d, 'scoring.events', {eventIds: [`e${i}`]});
+      await enqueue(d, 'booking.email', {bookingId: 'b1', kind: 'confirmed'});
+      await enqueue(d, 'form.after_submit', {submissionId: 's1'});
+    });
+    expect(platform.jobs).toHaveLength(10);
+    expect(platform.jobs.slice(0, 2).map((j) => j.list)).toEqual(['crm-booking-email', 'crm-form-after-submit']);
+    expect(platform.sent('crm-scoring-events')).toHaveLength(8);
+    const rows = await backlog();
+    expect(rows).toHaveLength(22);
+    expect(rows.every((r) => r.priority === 2)).toBe(true);
+
+    // Later minutes: an SLA check and a survey that waited behind the import go first.
+    await db.jobBacklog.createMany({data: [{list: 'crm-ticket-sla-check', data: {ticketId: 't1'}, runAt: ago(500), priority: 0}, {list: 'crm-ticket-csat', data: {ticketId: 't1'}, runAt: ago(500), priority: 0}]});
+    await platform.nextMinute();
+    platform.jobs.length = 0;
+    await db.jobBacklog.updateMany({where: {priority: 2}, data: {runAt: ago(60_000)}});
+    expect(await inJob((d) => drainBacklog(d))).toBe(10);
+    expect(platform.jobs.slice(0, 2).map((j) => j.list).sort()).toEqual(['crm-ticket-csat', 'crm-ticket-sla-check']);
+    expect(await db.jobBacklog.count()).toBe(14);
+    expect(await db.jobBacklog.count({where: {priority: 0}})).toBe(0);
+  });
+
   it('follows the rate the owner set (raised to 50 in the Jobs tab)', async () => {
     platform.limit = 50;
     await db.setting.create({data: {key: 'jobs.perMinute', value: 50}});

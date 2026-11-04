@@ -334,43 +334,67 @@ function describe(entity: BinEntity, r: Row): {label: string; detail: string | n
 
 export type BinActor = {id: string; name: string};
 
+/** Records one bin transaction takes at most; bulk deletes are capped at this per request (AUDIT-2 M-14). */
+export const BIN_BATCH = 100;
+
+/** The main tables, for the row lock (fixed names, never input). */
+const LOCK_TABLE: Record<BinEntity, string> = {contact: '"Contact"', company: '"Company"', deal: '"Deal"', ticket: '"Ticket"', form: '"Form"', list: '"ContactList"', conversation: '"EmailThread"'};
+
 /**
- * Moves records to the recycle bin and deletes them, in one transaction.
- * Returns the bin entries (for "Undo"). Events, audit and permission checks
- * stay with the caller.
+ * Moves records to the recycle bin and deletes them, BIN_BATCH records per transaction (so one
+ * snapshot never holds more than that in memory). Returns the bin entries (for "Undo"). Events,
+ * audit and permission checks stay with the caller.
  */
 export async function moveToBin(db: Db, entity: BinEntity, ids: string[], actor: BinActor | null) {
+  const out: {id: string; recordId: string}[] = [];
+  for (let k = 0; k < ids.length; k += BIN_BATCH) out.push(...(await binBatch(db, entity, ids.slice(k, k + BIN_BATCH), actor)));
+  return out;
+}
+
+/**
+ * One transaction: locks the records, collects everything their delete takes with it, writes the
+ * bin entries and deletes. Collected inside the transaction, after the lock, so a note or a task
+ * added to a record meanwhile waits (then fails on the deleted record) instead of being deleted
+ * without being in the snapshot.
+ */
+async function binBatch(db: Db, entity: BinEntity, ids: string[], actor: BinActor | null) {
   if (!ids.length) return [];
-  const got = await COLLECT[entity](db, ids);
-  const deletedAt = new Date();
-  const expiresAt = new Date(deletedAt.getTime() + BIN_DAYS * 86_400_000);
-  const entries = got.records.map((record) => {
-    const id = record.id as string;
-    const rows = got.rows.get(id) ?? {};
-    for (const list of Object.values(rows)) {
-      for (const r of list) {
-        delete r.__ticketId;
-        delete r.__threadId;
-      }
-    }
-    const files = got.files.get(id) ?? [];
-    const snapshot: Snapshot = {v: 1, record: plain(record), rows: plain(rows), relink: got.relink.get(id) ?? {}, files};
-    const counts: Record<string, number> = Object.fromEntries(Object.entries(rows).filter(([, v]) => v.length).map(([k, v]) => [k, v.length]));
-    if (files.length) counts.file = files.length;
-    return {entity, recordId: id, ...describe(entity, record), counts, snapshot: snapshot as unknown as Prisma.InputJsonValue, fileIds: files.filter((f) => f.trashed).map((f) => f.id), deletedById: actor?.id ?? null, deletedByName: actor?.name ?? null, deletedAt, expiresAt};
-  });
-  const allFiles = [...got.files.values()].flat();
-  const trash = allFiles.filter((f) => f.trashed).map((f) => f.id);
-  const column = LINK_COLUMN[entity] as (typeof FILE_LINKS)[number] | undefined;
-  const unlink = allFiles.filter((f) => !f.trashed).map((f) => f.id);
-  const [created] = await db.$transaction([
-    db.deletedRecord.createManyAndReturn({data: entries, select: {id: true, recordId: true}}),
-    ...(trash.length ? [db.file.updateMany({where: {id: {in: trash}}, data: {purpose: 'trash', contactId: null, companyId: null, dealId: null}})] : []),
-    ...(unlink.length && column ? [db.file.updateMany({where: {id: {in: unlink}}, data: {[column]: null}})] : []),
-    ...got.alsoDelete.map((d) => model(db, d.table).deleteMany({where: {id: {in: d.ids}}})),
-    model(db, MAIN[entity]).deleteMany({where: {id: {in: got.records.map((r) => r.id)}}}),
-  ]);
-  return created as {id: string; recordId: string}[];
+  return db.$transaction(
+    async (trx) => {
+      const tx = trx as unknown as Db;
+      await tx.$queryRaw`SELECT id FROM ${Prisma.raw(LOCK_TABLE[entity])} WHERE id IN (${Prisma.join(ids)}) FOR UPDATE`;
+      const got = await COLLECT[entity](tx, ids);
+      const deletedAt = new Date();
+      const expiresAt = new Date(deletedAt.getTime() + BIN_DAYS * 86_400_000);
+      const entries = got.records.map((record) => {
+        const id = record.id as string;
+        const rows = got.rows.get(id) ?? {};
+        for (const list of Object.values(rows)) {
+          for (const r of list) {
+            delete r.__ticketId;
+            delete r.__threadId;
+          }
+        }
+        const files = got.files.get(id) ?? [];
+        const snapshot: Snapshot = {v: 1, record: plain(record), rows: plain(rows), relink: got.relink.get(id) ?? {}, files};
+        const counts: Record<string, number> = Object.fromEntries(Object.entries(rows).filter(([, v]) => v.length).map(([k, v]) => [k, v.length]));
+        if (files.length) counts.file = files.length;
+        return {entity, recordId: id, ...describe(entity, record), counts, snapshot: snapshot as unknown as Prisma.InputJsonValue, fileIds: files.filter((f) => f.trashed).map((f) => f.id), deletedById: actor?.id ?? null, deletedByName: actor?.name ?? null, deletedAt, expiresAt};
+      });
+      if (!entries.length) return [];
+      const allFiles = [...got.files.values()].flat();
+      const trash = allFiles.filter((f) => f.trashed).map((f) => f.id);
+      const column = LINK_COLUMN[entity] as (typeof FILE_LINKS)[number] | undefined;
+      const unlink = allFiles.filter((f) => !f.trashed).map((f) => f.id);
+      const created = await tx.deletedRecord.createManyAndReturn({data: entries, select: {id: true, recordId: true}});
+      if (trash.length) await tx.file.updateMany({where: {id: {in: trash}}, data: {purpose: 'trash', contactId: null, companyId: null, dealId: null}});
+      if (unlink.length && column) await tx.file.updateMany({where: {id: {in: unlink}}, data: {[column]: null}});
+      for (const d of got.alsoDelete) await model(tx, d.table).deleteMany({where: {id: {in: d.ids}}});
+      await model(tx, MAIN[entity]).deleteMany({where: {id: {in: got.records.map((r) => r.id)}}});
+      return created;
+    },
+    {maxWait: 5_000, timeout: 30_000},
+  );
 }
 
 // ─── Restore ───

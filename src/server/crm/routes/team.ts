@@ -7,6 +7,7 @@ import {randomToken, sha256Hex} from '../kit/crypto';
 import {currentUser, outranks, requireRole, type AppContext, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
 import {fieldError, notFound, valid} from '../lib/http';
+import {isOwnerAddress} from '../lib/owner-account';
 import {publicUser, seesEmails} from '../lib/users';
 
 const role = z.enum(['ADMIN', 'MEMBER', 'VIEWER']);
@@ -53,6 +54,7 @@ export const team = new Hono<AppEnv>()
     const member = await db.member.findUnique({where: {id: c.req.param('id')}});
     if (!member) throw notFound('User');
     if (member.userId !== null || !member.inviteEmail) throw new HTTPException(400, {message: 'This user has already joined'});
+    if (!member.active) throw new HTTPException(400, {message: 'This invite was cancelled. Reactivate it first, then make a new link.'});
     const invite = await newInvite();
     await db.member.update({where: {id: member.id}, data: invite.data});
     await audit(db, c, {action: 'team.invite_link', entity: 'user', recordId: member.id, label: member.name});
@@ -62,14 +64,20 @@ export const team = new Hono<AppEnv>()
   .patch('/:id', requireRole('ADMIN'), valid('json', z.object({role: role.optional(), active: z.boolean().optional()})), async (c) => {
     const me = currentUser(c);
     const db = c.var.db;
-    const target = await db.member.findUnique({where: {id: c.req.param('id')}});
-    if (!target) throw notFound('User');
+    const found = await db.member.findUnique({where: {id: c.req.param('id')}, include: {user: {select: {platformOwnerId: true, email: true}}}});
+    if (!found) throw notFound('User');
+    const {user: targetAccount, ...target} = found;
     if (target.id === me.id) throw new HTTPException(400, {message: 'You cannot change your own access'});
     // Only someone above a person changes them (an Admin changes Members and Viewers, only an Owner
     // changes Admins); Owners also change other Owners. Anyone else sees no such user.
     const ownerOnOwner = me.role === 'OWNER' && target.role === 'OWNER';
     if (!outranks(me, target) && !ownerOnOwner) throw notFound('User');
     const body = c.req.valid('json');
+    // The site owner's own row is never demoted or switched off, by anyone (AUDIT-2 M-5): loadUser
+    // would restore it on their next visit anyway.
+    if (isSiteOwnerAccount(targetAccount) && ((body.role && body.role !== target.role) || body.active === false)) {
+      throw new HTTPException(400, {message: "The site owner's access can't be changed"});
+    }
     // Nobody gives a role above their own (as inviting: an Admin may make an Admin).
     if (body.role && outranks({role: body.role}, me)) throw notFound('User');
     // The workspace always keeps an active Owner.
@@ -79,9 +87,49 @@ export const team = new Hono<AppEnv>()
       if (!others) throw new HTTPException(409, {message: 'The workspace needs at least one active owner'});
     }
     // Deactivating takes effect on the member's next request: every Kinroot route checks `active`.
-    const {user: account, ...user} = await db.member.update({where: {id: target.id}, data: {role: body.role, active: body.active}, include: {user: {select: {email: true}}}});
+    // A pending invite that is switched off also loses its link (AUDIT-2 M-1): reactivating needs a new one.
+    const cancelsInvite = body.active === false && target.userId === null;
+    const {user: account, ...user} = await db.member.update({
+      where: {id: target.id},
+      data: {role: body.role, active: body.active, ...(cancelsInvite ? {inviteTokenHash: null, inviteExpiresAt: null} : {})},
+      include: {user: {select: {email: true}}},
+    });
     const label = user.name;
     if (body.role && body.role !== target.role) await audit(db, c, {action: 'team.role_changed', entity: 'user', recordId: user.id, label, meta: {from: target.role, to: body.role}});
     if (body.active !== undefined && body.active !== target.active) await audit(db, c, {action: body.active ? 'team.reactivated' : 'team.deactivated', entity: 'user', recordId: user.id, label});
     return c.json({user: publicUser({...user, email: account?.email ?? user.inviteEmail}, await view(c))});
+  })
+
+  /**
+   * Cancel a pending invite (never someone who joined: deactivate them instead). Same rank rule as
+   * PATCH. The link stops working at once; the row goes when nothing was assigned to it yet, else it
+   * stays deactivated so those records keep their owner (AUDIT-2 M-1).
+   */
+  .delete('/:id', requireRole('ADMIN'), async (c) => {
+    const me = currentUser(c);
+    const db = c.var.db;
+    const target = await db.member.findFirst({
+      where: {id: c.req.param('id'), userId: null, inviteEmail: {not: null}},
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        _count: {select: {contacts: true, companies: true, deals: true, tasksAssigned: true, tasksCreated: true, tickets: true, conversations: true, notes: true, activities: true, files: true, forms: true, bookingLinks: true}},
+      },
+    });
+    if (!target || !outranks(me, target)) throw notFound('User');
+    const referenced = Object.values(target._count).some((n) => n > 0);
+    // Conditional on still pending: an invite accepted a moment ago is not removed.
+    const pending = {id: target.id, userId: null};
+    const done = referenced
+      ? await db.member.updateMany({where: pending, data: {active: false, inviteTokenHash: null, inviteExpiresAt: null}})
+      : await db.member.deleteMany({where: pending});
+    if (!done.count) throw notFound('User');
+    await audit(db, c, {action: 'team.invite_cancelled', entity: 'user', recordId: target.id, label: target.name, meta: {removed: !referenced}});
+    return c.json({ok: true});
   });
+
+/** The site owner's account (the platform's owner seat): its team row is protected (AUDIT-2 M-5). */
+export function isSiteOwnerAccount(account: {platformOwnerId: string | null; email: string} | null | undefined): boolean {
+  return !!account && (account.platformOwnerId !== null || isOwnerAddress(account.email));
+}

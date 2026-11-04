@@ -1,4 +1,4 @@
-import {Code2, Copy, ExternalLink, Link2, MousePointerClick, Sparkles} from 'lucide-react';
+import {Code2, Copy, ExternalLink, Link2, MousePointerClick} from 'lucide-react';
 import type {ReactNode} from 'react';
 import {toast} from 'sonner';
 
@@ -20,7 +20,7 @@ function Snippet({code, label}: {code: string; label: string}) {
   return (
     <div className="relative">
       <pre className="overflow-x-auto rounded-xl bg-slate-950 p-4 pr-12 text-xs leading-relaxed text-slate-200 scrollbar-thin">{code}</pre>
-      <Button size="icon-sm" variant="ghost" className="absolute top-2 right-2 text-slate-400 hover:bg-white/10 hover:text-white" onClick={() => copy(code, `${label} copied`)} aria-label={`Copy ${label}`}>
+      <Button size="icon-sm" variant="ghost" className="absolute top-2 right-2 text-muted-foreground hover:bg-white/10 hover:text-white" onClick={() => copy(code, `${label} copied`)} aria-label={`Copy ${label}`}>
         <Copy />
       </Button>
     </div>
@@ -71,9 +71,6 @@ export function SharePanel({slug, status, onPublish, publishing = false}: {slug:
         </Way>
         <Way icon={<MousePointerClick />} title="Your own button" description="Any element with this attribute opens the form in a small window.">
           <Snippet label="Popup code" code={`<button data-crm-form-popup="${slug}">Talk to sales</button>\n${script}`} />
-        </Way>
-        <Way icon={<Sparkles />} title="In a page built in this app" description="For landing pages the AI builds in this codebase: renders the form inline, no iframe.">
-          <Snippet label="Component code" code={`import {CrmForm} from '@/components/forms/crm-form';\n\n<CrmForm slug="${slug}" />`} />
         </Way>
       </SettingsSection>
     </div>

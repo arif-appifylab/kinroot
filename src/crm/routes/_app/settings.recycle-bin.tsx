@@ -137,9 +137,9 @@ function RecycleBin() {
         </form>
         <Tabs value={entity} onValueChange={(v) => (setEntity(v as BinEntity | 'all'), setPage(1), setSelected(new Set()))}>
           <TabsList size="sm" aria-label="Record type" className="max-w-full overflow-x-auto scrollbar-thin">
-            <TabsTrigger value="all">All {total ? <span className="text-slate-400">{total}</span> : null}</TabsTrigger>
+            <TabsTrigger value="all">All {total ? <span className="text-muted-foreground">{total}</span> : null}</TabsTrigger>
             {(Object.keys(BIN_ENTITIES) as BinEntity[]).map((k) => (
-              <TabsTrigger key={k} value={k}>{BIN_ENTITIES[k].plural}{data?.counts[k] ? <span className="text-slate-400">{data.counts[k]}</span> : null}</TabsTrigger>
+              <TabsTrigger key={k} value={k}>{BIN_ENTITIES[k].plural}{data?.counts[k] ? <span className="text-muted-foreground">{data.counts[k]}</span> : null}</TabsTrigger>
             ))}
           </TabsList>
         </Tabs>

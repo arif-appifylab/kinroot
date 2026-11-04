@@ -78,6 +78,11 @@ export const loadUser: MiddlewareHandler<AppEnv> = async (c, next) => {
         });
       }
     }
+    // The site owner is always an active Owner of their own CRM (AUDIT-2 M-5): a row a co-Owner
+    // demoted or switched off before that rule existed is put back on their next visit.
+    if (member && viewer.platformOwner && (!member.active || member.role !== 'OWNER')) {
+      member = await db.member.update({where: {id: member.id}, data: {active: true, role: 'OWNER'}});
+    }
     // The site owner has no address here: OWNER_ADDRESS routes their mail to the platform (lib/owner-account.ts).
     if (member?.active) user = {...(await touch(db, member, viewer)), email: viewer.platformOwner ? OWNER_ADDRESS : (viewer.email ?? '')};
   }

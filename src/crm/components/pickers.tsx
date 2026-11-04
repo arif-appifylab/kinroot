@@ -94,7 +94,7 @@ export function CompanyPicker({value, onChange, id}: {value: CompanyLite | null;
       <PopoverTrigger asChild>
         <button type="button" {...wired} className={trigger} onKeyDown={clearOnKey(value ? () => onChange(null) : undefined)}>
           <Building2 className="size-4 text-slate-400" />
-          <span className={cn('flex-1 truncate', !value && 'text-slate-400')}>{value?.name ?? 'Select company'}</span>
+          <span className={cn('flex-1 truncate', !value && 'text-muted-foreground')}>{value?.name ?? 'Select company'}</span>
           {value ? (
             <X aria-hidden className="size-4 text-slate-400 hover:text-slate-700" onClick={(e) => (e.stopPropagation(), onChange(null))} />
           ) : (
@@ -156,7 +156,7 @@ export function ContactsPicker({value, onChange, id}: {value: ContactLite[]; onC
       <PopoverTrigger asChild>
         <button type="button" {...wired} className={cn(trigger, 'h-auto min-h-10 flex-wrap py-1.5')} onKeyDown={clearOnKey(value.length ? () => onChange(value.slice(0, -1)) : undefined)}>
           <User className="size-4 text-slate-400" />
-          {value.length === 0 && <span className="flex-1 text-slate-400">Add people</span>}
+          {value.length === 0 && <span className="flex-1 text-muted-foreground">Add people</span>}
           {value.map((c) => (
             <span key={c.id} className="inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-xs font-semibold text-accent-foreground">
               {fullName(c)}
@@ -241,7 +241,7 @@ export function CreatableSelect({
           className={cn(trigger, multiple && 'h-auto min-h-10 flex-wrap py-1.5')}
           onKeyDown={clearOnKey(selected.length ? () => (multiple ? onChange(selected.slice(0, -1)) : onChange(null)) : undefined)}
         >
-          {selected.length === 0 && <span className="flex-1 truncate text-slate-400">{placeholder}</span>}
+          {selected.length === 0 && <span className="flex-1 truncate text-muted-foreground">{placeholder}</span>}
           {multiple
             ? selected.map((o) => (
                 <span key={o} className="inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-xs font-semibold text-accent-foreground">
@@ -403,7 +403,7 @@ export function TagInput({
         onMouseDown={(e) => e.preventDefault()}
       >
         <div role="listbox">
-          {!draft && matches.length > 0 && <p className="px-2.5 pt-1.5 pb-1 text-[11px] font-bold tracking-wider text-slate-400 uppercase">Existing {noun}s</p>}
+          {!draft && matches.length > 0 && <p className="px-2.5 pt-1.5 pb-1 text-[11px] font-bold tracking-wider text-muted-foreground uppercase">Existing {noun}s</p>}
           {items.map((it, i) => (
             <button
               key={`${it.create}-${it.tag}`}
@@ -476,7 +476,7 @@ export function DealPicker({value, onChange, id}: {value: {id: string; title: st
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button type="button" {...wired} className={trigger} onKeyDown={clearOnKey(value ? () => onChange(null) : undefined)}>
-          <span className={cn('flex-1 truncate', !value && 'text-slate-400')}>{value?.title ?? 'Select deal'}</span>
+          <span className={cn('flex-1 truncate', !value && 'text-muted-foreground')}>{value?.title ?? 'Select deal'}</span>
           {value ? <X aria-hidden className="size-4 text-slate-400 hover:text-slate-700" onClick={(e) => (e.stopPropagation(), onChange(null))} /> : <ChevronsUpDown className="size-4 text-slate-400" />}
         </button>
       </PopoverTrigger>

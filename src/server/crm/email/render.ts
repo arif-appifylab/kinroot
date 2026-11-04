@@ -38,6 +38,25 @@ export function mergeFields(template: string, ctx: MergeContext, opts: {html?: b
   });
 }
 
+/**
+ * A value a stranger typed (a form's name field), made safe to merge into an email the company sends
+ * to an address nobody confirmed (AUDIT-2 M-6): no links or domains, letters only, short.
+ */
+export function plainName(value: string | null | undefined): string {
+  return (value ?? '')
+    .replace(/\S*(?:[a-z][a-z0-9+.-]*:\/\/|www\.|@|\.[a-z]{2,}\b)\S*/gi, ' ')
+    .replace(/[^\p{L}\p{M} '’-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40);
+}
+
+/**
+ * Merge fields written by an outsider (an inbound email's subject, a support request's subject) are
+ * kept as text, never filled in (AUDIT-2 L-6): a reply's "Re: {{deal.value}}" never sends our data back.
+ */
+export const defuseMerge = (text: string) => text.replace(/\{\{/g, '{\u200b{');
+
 const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /** A long URL as people read it: host + start of the path, e.g. "calendar.google.com/calendar/render…". */

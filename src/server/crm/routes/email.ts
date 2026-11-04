@@ -9,7 +9,7 @@ import {CRM_APP, publicOrigin} from '../kit/config';
 import {decryptJson, encryptJson, sign, verifySignature} from '../kit/crypto';
 import {currentUser, isAdmin, requireRole, type AppContext, type AppEnv, type User} from '../kit/guards';
 import {audit} from '../lib/audit';
-import {fieldError, intParam, intValue, notFound, valid} from '../lib/http';
+import {fieldError, intParam, intValue, notFound, shownLink, valid} from '../lib/http';
 import {getSettings} from '../lib/settings';
 import {userSelect} from '../lib/users';
 import {emailBrand, getEmailDesign, saveEmailDesign} from '../email/design';
@@ -18,7 +18,7 @@ import {logMailboxError, mailboxErrorText, MailboxSetupError} from '../email/err
 import {PROVIDER_INFO, secretsPresent, verifyCredentials, type Credentials} from '../email/providers';
 import {htmlToText} from '../email/render';
 import {receiveInbound} from '../email/replies';
-import {sendEmail, usableAccounts} from '../email/service';
+import {freeSender, PERSONAL_SENDER_RULE, sendEmail, usableAccounts} from '../email/service';
 import {fromGallery, templateBody} from '../email/templates';
 import {queueAccountSync} from '../email/sync';
 import {receivedHtmlReader} from '../inbox/sanitize';
@@ -92,6 +92,19 @@ async function ownAccount(c: AppContext, id: string) {
 /** Templates this person may see (shared ones and their own; admins any), in the query. */
 const visibleTemplate = (me: User, id: string) => (isAdmin(me) ? {id} : {id, OR: [{shared: true}, {ownerId: me.id}]});
 
+/**
+ * AUDIT-2 M-7: a member's personal account on an API provider (the owner's key, which sends as any
+ * address) uses their own confirmed sign-in address as its From; any other address is a shared
+ * account, which only admins add. Gmail / Outlook mailboxes: the provider enforces the sender.
+ */
+function ownSenderOnly(c: AppContext, provider: EmailAccount['provider'], fromEmail: string, field: string) {
+  const me = currentUser(c);
+  if (!freeSender(provider) || isAdmin(me)) return;
+  if (!c.var.viewer.emailVerified || fromEmail.toLowerCase() !== me.email.toLowerCase()) {
+    throw fieldError(field, PERSONAL_SENDER_RULE, 422);
+  }
+}
+
 async function setDefault(c: AppContext, account: EmailAccount) {
   await c.var.db.emailAccount.updateMany({where: {userId: account.userId, id: {not: account.id}}, data: {isDefault: false}});
 }
@@ -111,6 +124,7 @@ export const emailRoutes = new Hono<AppEnv>()
     const {credentials, account: meta} = c.req.valid('json');
     if (meta.shared && !isAdmin(me)) throw new HTTPException(403, {message: 'Only admins can add shared team accounts'});
     const {provider, ...creds} = credentials;
+    if (!meta.shared) ownSenderOnly(c, provider, meta.fromEmail, 'account.fromEmail');
 
     let status: 'CONNECTED' | 'ERROR' = 'CONNECTED';
     let lastError: string | null = null;
@@ -151,6 +165,7 @@ export const emailRoutes = new Hono<AppEnv>()
   .patch('/accounts/:id', valid('json', accountMeta.partial().omit({shared: true}).extend({credentials: credentialsInput.optional()})), async (c) => {
     const existing = await ownAccount(c, c.req.param('id'));
     const {credentials, ...meta} = c.req.valid('json');
+    if (existing.userId && meta.fromEmail !== undefined) ownSenderOnly(c, existing.provider, meta.fromEmail, 'fromEmail');
     const data: Record<string, unknown> = {...meta};
     if (credentials) {
       if (credentials.provider !== existing.provider) throw new HTTPException(400, {message: 'Provider cannot change; add a new account instead'});
@@ -379,8 +394,8 @@ export const emailRoutes = new Hono<AppEnv>()
         ...(q.q && {OR: [{subject: {contains: q.q, mode: 'insensitive'}}, {messages: {some: {fromEmail: {contains: q.q, mode: 'insensitive'}}}}]}),
       },
       include: {
-        contact: {select: {id: true, firstName: true, lastName: true, email: true}},
-        deal: {select: {id: true, title: true}},
+        contact: {select: {id: true, firstName: true, lastName: true, email: true, ownerId: true}},
+        deal: {select: {id: true, title: true, ownerId: true}},
         messages: {orderBy: {sentAt: 'desc'}, take: 1, select: {text: true, fromEmail: true, fromName: true, direction: true, status: true, openCount: true}},
         _count: {select: {messages: true}},
       },
@@ -388,7 +403,8 @@ export const emailRoutes = new Hono<AppEnv>()
       take: q.take,
     });
     const visible = await withVisibleTickets(db, scope, rows);
-    return c.json({rows: visible.map(({messages, ...t}) => ({...t, last: messages[0] ? {...messages[0], text: messages[0].text?.slice(0, 200) ?? ''} : null}))});
+    // A linked contact or deal this person may not open shows as none (AUDIT-2 L-2).
+    return c.json({rows: visible.map(({messages, contact, deal, ...t}) => ({...t, contact: shownLink(contact, owner), deal: shownLink(deal, owner), last: messages[0] ? {...messages[0], text: messages[0].text?.slice(0, 200) ?? ''} : null}))});
   })
 
   .get('/threads/:id', async (c) => {

@@ -5,6 +5,7 @@ import {useEffect, useState} from 'react';
 
 import {finishProgress, installPageProgress, startProgress} from '../lib/page-progress';
 import {siteFetch} from '../platform/browser';
+import {NotFoundScreen, RouteErrorScreen} from './components/route-states';
 import {routeTree} from './routeTree.gen';
 
 /**
@@ -24,6 +25,9 @@ const router = createRouter({
   context: {queryClient},
   scrollRestoration: true,
   defaultPreload: 'intent',
+  // An unknown address and a screen that failed to load (AUDIT-2 M-15): branded, with a way on.
+  defaultNotFoundComponent: NotFoundScreen,
+  defaultErrorComponent: RouteErrorScreen,
 });
 
 // The thin bar in the brand colour while the next screen loads (src/lib/page-progress.ts): a

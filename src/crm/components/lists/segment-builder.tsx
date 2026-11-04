@@ -103,7 +103,7 @@ export function SegmentBuilder({rules, onChange, listId, exclude, fields: only, 
       {rules.groups.map((g, i) => (
         <div key={i} className="grid gap-3">
           {i > 0 && (
-            <div className="flex items-center gap-3 text-[11px] font-bold tracking-wider text-slate-400 uppercase">
+            <div className="flex items-center gap-3 text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
               <span className="h-px flex-1 bg-slate-200" />
               {rules.match === 'any' ? 'or' : 'and'}
               <span className="h-px flex-1 bg-slate-200" />
@@ -141,7 +141,7 @@ function GroupEditor({group, index, fields, listId, onChange, onRemove}: {group:
             </NativeSelect>
           </>
         )}
-        {onRemove && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto text-slate-400 hover:text-destructive" onClick={onRemove} aria-label="Remove group"><Trash2 /></Button>}
+        {onRemove && <Button type="button" variant="ghost" size="icon-sm" className="ml-auto text-muted-foreground hover:text-destructive" onClick={onRemove} aria-label="Remove group"><Trash2 /></Button>}
       </div>
       {group.rules.map((r, i) => (
         <RuleEditor key={i} rule={r} fields={fields} listId={listId} onChange={(next) => setRule(i, next)} onRemove={() => onChange({...group, rules: group.rules.filter((_, j) => j !== i)})} />
@@ -337,13 +337,13 @@ export function RulesSummary({rules}: {rules: SegmentRules}) {
     <div className="grid gap-2">
       {groups.map((g, i) => (
         <div key={i} className="grid gap-2">
-          {i > 0 && <p className="text-[11px] font-bold tracking-wider text-slate-400 uppercase">{rules.match === 'any' ? 'or' : 'and'}</p>}
+          {i > 0 && <p className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">{rules.match === 'any' ? 'or' : 'and'}</p>}
           <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50/60 p-2.5">
             {g.rules.map((r, j) => {
               const d = describe(r);
               return (
                 <span key={j} className="contents">
-                  {j > 0 && <span className="text-[11px] font-bold text-slate-400 uppercase">{g.match === 'any' ? 'or' : 'and'}</span>}
+                  {j > 0 && <span className="text-[11px] font-bold text-muted-foreground uppercase">{g.match === 'any' ? 'or' : 'and'}</span>}
                   <span className={d.incomplete ? 'rounded-lg border border-dashed border-amber-300 px-2 py-1 text-xs text-amber-700' : 'rounded-lg bg-card px-2 py-1 text-xs text-slate-700 shadow-xs'}>
                     <span className="font-semibold text-slate-900">{d.label}</span> {d.text}
                     {d.incomplete && ' (incomplete, ignored)'}

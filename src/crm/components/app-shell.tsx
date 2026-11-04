@@ -77,10 +77,10 @@ function Sidebar({onNavigate}: {onNavigate?: () => void}) {
               onClick={onNavigate}
               className={cn(
                 'group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200',
-                active ? 'bg-white/10 text-white shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]' : 'text-slate-400 hover:bg-white/5 hover:text-white',
+                active ? 'bg-white/10 text-white shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)]' : 'text-muted-foreground hover:bg-white/5 hover:text-white',
               )}
             >
-              <span className={cn('flex size-7 items-center justify-center rounded-md transition-all', active ? 'bg-brand text-white shadow-glow' : 'text-slate-400 group-hover:text-white')}>
+              <span className={cn('flex size-7 items-center justify-center rounded-md transition-all', active ? 'bg-brand text-white shadow-glow' : 'text-muted-foreground group-hover:text-white')}>
                 <item.icon className="size-4" />
               </span>
               {item.label}
@@ -99,7 +99,7 @@ function Sidebar({onNavigate}: {onNavigate?: () => void}) {
           onClick={onNavigate}
           className={cn(
             'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-            path.startsWith('/settings') ? 'bg-white/10 text-white' : 'text-slate-400 hover:bg-white/5 hover:text-white',
+            path.startsWith('/settings') ? 'bg-white/10 text-white' : 'text-muted-foreground hover:bg-white/5 hover:text-white',
           )}
         >
           <span className="flex size-7 items-center justify-center"><Settings className="size-4" /></span>
@@ -134,7 +134,7 @@ function UserMenu() {
           <p className="truncate text-xs font-normal">{me.accountOwner ? 'Site owner' : me.email}</p>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => navigate({to: '/settings/profile'})}><UserCog /> Profile & security</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => navigate({to: '/settings/profile'})}><UserCog /> Your account</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => navigate({to: '/settings'})}><Settings /> Settings</DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={signOut}><LogOut /> Sign out</DropdownMenuItem>
@@ -154,7 +154,7 @@ function TopBar({onMenu, onSearch}: {onMenu: () => void; onSearch: () => void}) 
       </Button>
       <button
         onClick={onSearch}
-        className="flex h-10 w-full max-w-md cursor-pointer items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50/80 px-3 text-sm text-slate-400 transition-all hover:border-slate-300 hover:bg-card focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
+        className="flex h-10 w-full max-w-md cursor-pointer items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50/80 px-3 text-sm text-muted-foreground transition-all hover:border-slate-300 hover:bg-card focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
       >
         <Search className="size-4" />
         <span className="flex-1 text-left">Search or jump to…</span>
@@ -245,7 +245,7 @@ function Shell({children}: {children: ReactNode}) {
           >
             <DialogPrimitive.Title className="sr-only">Menu</DialogPrimitive.Title>
             <Sidebar onNavigate={() => ((navigatedRef.current = true), setMobileOpen(false))} />
-            <DialogPrimitive.Close className="absolute top-4 right-3 cursor-pointer rounded-md p-1.5 text-slate-400 outline-none hover:text-white focus-visible:ring-2 focus-visible:ring-white/40" aria-label="Close menu">
+            <DialogPrimitive.Close className="absolute top-4 right-3 cursor-pointer rounded-md p-1.5 text-muted-foreground outline-none hover:text-white focus-visible:ring-2 focus-visible:ring-white/40" aria-label="Close menu">
               <X className="size-5" />
             </DialogPrimitive.Close>
           </DialogPrimitive.Content>

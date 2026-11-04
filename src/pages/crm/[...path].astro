@@ -10,7 +10,7 @@
 import CrmApp from '../../crm/CrmApp';
 import Crm from '../../layouts/Crm.astro';
 import {config} from '../../platform/config';
-import {crmBrand} from '../../server/crm/page';
+import {crmBrand, crmRead} from '../../server/crm/page';
 import {pageContext} from '../../server/page';
 
 export const prerender = false;
@@ -23,6 +23,9 @@ const back = encodeURIComponent(`${Astro.url.pathname}${Astro.url.search}`);
 // arrives signed out by design: the app redeems the ticket first (src/crm/CrmApp.tsx).
 const ownerTicket = Astro.url.searchParams.has('owner_ticket');
 const open = viewer.state === 'user' || config.preview || ownerTicket;
+// Only the signed-out card links to the website. With the website off, `/` comes straight back here:
+// no "Back to the website" link that goes round in a circle (AUDIT-2 L-18). A cached public read.
+const websiteOn = open ? false : ((await crmRead<{enabled?: boolean}>(Astro.request, '/public/website'))?.enabled ?? false);
 // The ticket is in this page's address until the app removes it: never send it on as a referrer.
 if (ownerTicket) Astro.response.headers.set('Referrer-Policy', 'no-referrer');
 ---
@@ -33,7 +36,7 @@ if (ownerTicket) Astro.response.headers.set('Referrer-Policy', 'no-referrer');
       <>
         <CrmApp client:only="react" />
         <noscript>
-          <p class="p-8 text-center text-muted-foreground">Kinroot needs JavaScript.</p>
+          <p class="p-8 text-center text-muted-foreground">{brand.name || 'This app'} needs JavaScript.</p>
         </noscript>
       </>
     ) : (
@@ -46,7 +49,7 @@ if (ownerTicket) Astro.response.headers.set('Referrer-Policy', 'no-referrer');
             class="mt-6 inline-flex h-10 w-full items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-btn"
             href={`/account/login/?next=${back}`}>Sign in</a
           >
-          <a class="mt-3 inline-block text-sm text-muted-foreground hover:text-foreground" href="/">Back to the website</a>
+          {websiteOn && <a class="mt-3 inline-block text-sm text-muted-foreground hover:text-foreground" href="/">Back to the website</a>}
         </div>
       </main>
     )

@@ -53,7 +53,7 @@ export function OptionPicker({options, value, onChange, placeholder = 'Any value
           type="button"
           className="flex h-10 w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg border border-input bg-card px-3 text-left text-sm shadow-xs transition-colors outline-none hover:border-slate-300 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span className={cn('min-w-0 flex-1 truncate', !value.length && 'text-slate-400')}>{value.length ? value.map((v) => labels.get(v) ?? v).join(', ') : placeholder}</span>
+          <span className={cn('min-w-0 flex-1 truncate', !value.length && 'text-muted-foreground')}>{value.length ? value.map((v) => labels.get(v) ?? v).join(', ') : placeholder}</span>
           <ChevronDown className="size-4 shrink-0 text-slate-400" />
         </button>
       </PopoverTrigger>

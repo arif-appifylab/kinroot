@@ -95,7 +95,7 @@ export function CommandPalette({open, onOpenChange}: {open: boolean; onOpenChang
                 <Command.Group heading="Tickets" className={group}>
                   {r.tickets.map((t) => (
                     <Command.Item key={t.id} value={`t-${t.id}`} className={item} onSelect={() => go(() => navigate({to: '/tickets/$ticketId', params: {ticketId: String(t.number)}}))}>
-                      <LifeBuoy /> <span className="truncate font-medium"><span className="text-slate-400">#{t.number}</span> {t.subject}</span>
+                      <LifeBuoy /> <span className="truncate font-medium"><span className="text-muted-foreground">#{t.number}</span> {t.subject}</span>
                       <span className="ml-auto shrink-0 text-xs text-muted-foreground">{STATUS[t.status].label}</span>
                     </Command.Item>
                   ))}

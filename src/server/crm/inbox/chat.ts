@@ -94,16 +94,33 @@ export async function identityFromToken(db: Db, token: string | null | undefined
   return id ? db.channelIdentity.findFirst({where: {id, channel: 'chat'}}) : null;
 }
 
-/** The link in emails back to a conversation: /chat/c/<threadId>.<identityId>.<expires>.<signature>. */
-export async function continueToken(threadId: string, identityId: string, days = 30) {
+/**
+ * The link in emails back to a conversation: /chat/c/<threadId>.<identityId>.<expires>.<signature>,
+ * plus `.<proof>` binding it to the address it was mailed to (`sentTo`): opening it proves that
+ * address is the visitor's (AUDIT-2 L-4, `visitorProvedEmail`).
+ */
+export async function continueToken(threadId: string, identityId: string, days = 30, sentTo?: string | null) {
   const exp = Math.floor(Date.now() / 1000) + days * 86_400;
-  return `${threadId}.${identityId}.${exp}.${await sign(`chatc:${threadId}:${identityId}:${exp}`)}`;
+  const proof = sentTo ? `.${await sign(`chatmail:${identityId}:${sentTo.trim().toLowerCase()}`)}` : '';
+  return `${threadId}.${identityId}.${exp}.${await sign(`chatc:${threadId}:${identityId}:${exp}`)}${proof}`;
 }
 
 export async function fromContinueToken(token: string) {
-  const [threadId, identityId, exp, sig] = token.split('.');
+  const [threadId, identityId, exp, sig, proof] = token.split('.');
   if (!threadId || !identityId || !exp || !sig || Number(exp) < Date.now() / 1000) return null;
-  return (await verifySignature(`chatc:${threadId}:${identityId}:${exp}`, sig)) ? {threadId, identityId} : null;
+  return (await verifySignature(`chatc:${threadId}:${identityId}:${exp}`, sig)) ? {threadId, identityId, proof: proof ?? null} : null;
+}
+
+/**
+ * The visitor opened a link we emailed to their CURRENT address (the token's proof is bound to it):
+ * the address is theirs, so an existing contact with it is linked now (AUDIT-2 L-4).
+ */
+export async function visitorProvedEmail(db: Db, identity: ChannelIdentity, proof: string | null) {
+  const email = identity.email?.trim().toLowerCase();
+  if (!email || !proof || visitorEmailVerified(identity)) return identity;
+  if (!(await verifySignature(`chatmail:${identity.id}:${email}`, proof))) return identity;
+  const proved = await db.channelIdentity.update({where: {id: identity.id}, data: {data: {...((identity.data ?? {}) as VisitorData), verifiedEmail: email} as Prisma.InputJsonObject}});
+  return proved.contactId ? proved : identifyVisitor(db, proved, {email});
 }
 
 /** Uploaded before the message is sent: the file waits as "chat_pending", bound to the visitor. */
@@ -212,7 +229,13 @@ export type VisitorData = {
   timeZone?: string | null;
   userAgent?: string | null;
   pages?: {url: string; title: string | null; at: string}[];
+  /** The address the visitor proved is theirs by opening a link we emailed to it (/chat/c/…): AUDIT-2 L-4. */
+  verifiedEmail?: string | null;
 };
+
+/** Whether the visitor's current address is one they proved (else anyone could have typed it). */
+export const visitorEmailVerified = (identity: Pick<ChannelIdentity, 'email' | 'data'>) =>
+  !!identity.email && ((identity.data ?? {}) as VisitorData).verifiedEmail === identity.email.toLowerCase();
 
 const cleanUrl = (u: string | null | undefined) => {
   if (!u) return null;
@@ -247,11 +270,15 @@ export async function newVisitor(db: Db, meta: VisitorMeta) {
   return touchVisitor(db, identity, meta, {force: true});
 }
 
-/** Finds the contact with this email or creates one (source "Chat"), with the usual duplicate checks. */
-async function contactForVisitor(db: Db, email: string, name?: string | null) {
+/**
+ * Finds the contact with this email or creates one (source "Chat"), with the usual duplicate checks.
+ * Anyone can type any address into the chat: an EXISTING contact is linked only once the visitor
+ * proved the address (`verified`), else null (AUDIT-2 L-4).
+ */
+async function contactForVisitor(db: Db, email: string, name: string | null | undefined, verified: boolean) {
   const address = email.trim().toLowerCase();
   const existing = await contactIdByEmail(db, address);
-  if (existing) return existing;
+  if (existing) return verified ? existing : null;
   const [first, ...rest] = (name?.trim() || address.split('@')[0]!).split(/\s+/);
   const contact = await db.contact.create({
     data: clip({firstName: first || address, lastName: rest.join(' ') || null, email: address, source: 'Chat', lastActivityAt: new Date()}, CONTACT_LIMITS),
@@ -267,7 +294,8 @@ async function contactForVisitor(db: Db, email: string, name?: string | null) {
 export async function identifyVisitor(db: Db, identity: ChannelIdentity, input: {name?: string | null; email?: string | null}) {
   const name = input.name?.trim().slice(0, 120) || identity.name;
   const email = input.email?.trim().toLowerCase().slice(0, 200) || identity.email;
-  const contactId = email ? await contactForVisitor(db, email, name) : identity.contactId;
+  const verified = !!email && ((identity.data ?? {}) as VisitorData).verifiedEmail === email;
+  const contactId = (email ? await contactForVisitor(db, email, name, verified) : null) ?? identity.contactId;
   const updated = await db.channelIdentity.update({where: {id: identity.id}, data: {name, email, contactId}});
   if (contactId) {
     const threads = await db.emailThread.findMany({where: {identityId: identity.id, contactId: null}});
@@ -339,7 +367,8 @@ export async function openChat(tx: Prisma.TransactionClient, place: Awaited<Retu
     },
   });
   const message = await tx.channelMessage.create({
-    data: inboundMessageData(thread, identity, {text: input.text, fileIds, data: {page: input.page}}, new Date()),
+    // The page is shown as a link: http(s) only (AUDIT-2 L-9).
+    data: inboundMessageData(thread, identity, {text: input.text, fileIds, data: {page: cleanUrl(input.page)}}, new Date()),
     select: {id: true},
   });
   return {identityId: identity.id, threadId: thread.id, messageId: message.id};
@@ -366,14 +395,15 @@ export async function chatOpened(db: Db, s: ChatSettings, opened: {threadId: str
     }
   }
   const text = message.text;
-  const received = await receiveChannelMessage(db, thread, identity, {text, fileIds: strings(message.fileIds), data: {page: input.page}}, undefined, message);
+  const page = cleanUrl(input.page); // http(s) only (AUDIT-2 L-9)
+  const received = await receiveChannelMessage(db, thread, identity, {text, fileIds: strings(message.fileIds), data: {page}}, undefined, message);
   const availability = await chatAvailability(db, s);
   if (availability.away) await awayNotice(db, received.thread, s, identity);
   await refreshChannelActivity(db, thread.id);
   const t = received.thread;
   await emit(db, 'chat.started', {
     recordId: t.id,
-    data: eventData(t, {visitor: {name: identity.name, email: identity.email}, page: input.page, away: availability.away, spam: received.spam}),
+    data: eventData(t, {visitor: {name: identity.name, email: identity.email}, page, away: availability.away, spam: received.spam}),
   });
   if (!received.spam && t.contactId) {
     await notifyWatchers(db, {contactId: t.contactId, dealId: t.dealId}, {type: 'chat', title: (name) => `${name} started a website chat`, body: text.slice(0, 300), link: conversationLink(t.id), except: t.assigneeId ? [t.assigneeId] : []});
@@ -383,7 +413,7 @@ export async function chatOpened(db: Db, s: ChatSettings, opened: {threadId: str
 
 /** A visitor's next message in their conversation. */
 export async function visitorMessage(db: Db, s: ChatSettings, thread: EmailThread, identity: ChannelIdentity, input: {text: string; fileIds: string[]; page: string | null}) {
-  const received = await receiveChannelMessage(db, thread, identity, {text: input.text, fileIds: input.fileIds, data: {page: input.page}});
+  const received = await receiveChannelMessage(db, thread, identity, {text: input.text, fileIds: input.fileIds, data: {page: cleanUrl(input.page)}});
   if ((await chatAvailability(db, s)).away) await awayNotice(db, received.thread, s, identity);
   return received.message;
 }
@@ -553,7 +583,7 @@ export async function emailVisitor(db: Db, payload: Record<string, unknown>) {
   if (!claimed.count) return;
   const brand = await getSettings(db);
   const teamName = s.teamName || brand.brandName || BRAND.name;
-  const link = `${origin}/chat/c/${await continueToken(thread.id, identity.id)}`;
+  const link = `${origin}/chat/c/${await continueToken(thread.id, identity.id, 30, to)}`;
   const files = await filesFor(db, pending);
   const lines = pending.map((m) => {
     const attached = strings(m.fileIds).map((id) => files.get(id)?.name).filter(Boolean);
@@ -601,7 +631,7 @@ export async function sendTranscript(db: Db, me: User, thread: EmailThread, orig
     const attached = m.files.length ? `\n(attached: ${m.files.map((f) => f.name).join(', ')})` : '';
     return `[${when(m.at)}] ${neutral(who)}: ${neutral(m.text)}${attached}`;
   });
-  const link = `${origin}/chat/c/${await continueToken(thread.id, identity.id)}`;
+  const link = `${origin}/chat/c/${await continueToken(thread.id, identity.id, 30, to)}`;
   const body = `Here is a copy of your chat with ${teamName}.\n\n${lines.join('\n\n')}\n\nContinue the conversation: ${link}`;
   const message = await sendEmail(db, me, origin, {accountId: account.id, to: [to], subject: `Your chat with ${teamName}`, body, layout: 'branded', threadId: thread.id, contactId: thread.contactId, companyId: thread.companyId, dealId: thread.dealId});
   await threadEvent(db, thread.id, {type: 'transcript', to}, me.id);

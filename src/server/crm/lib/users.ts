@@ -38,6 +38,8 @@ export function publicUser(user: Member & {email?: string | null}, view: {meId: 
   const accountOwner = isOwnerAddress(email);
   return {
     id: user.id,
+    /** The member's site account (`users.id`), so Settings → Team can offer that account's sign-in actions; null for a pending invite. */
+    accountId: user.userId,
     email: accountOwner ? '' : view.owner || user.id === view.meId ? email : maskEmail(email),
     accountOwner,
     name: user.name,

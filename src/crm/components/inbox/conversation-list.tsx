@@ -79,7 +79,7 @@ export function ConversationList({
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-slate-400" />
             <Input size="sm" value={filters.q} onChange={(e) => onFilters({q: e.target.value})} placeholder="Search conversations…" aria-label="Search conversations" className="pr-7 pl-8" />
             {filters.q && (
-              <button type="button" className="absolute top-1/2 right-1.5 -translate-y-1/2 cursor-pointer rounded p-0.5 text-slate-400 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={() => onFilters({q: ''})} aria-label="Clear search">
+              <button type="button" className="absolute top-1/2 right-1.5 -translate-y-1/2 cursor-pointer rounded p-0.5 text-muted-foreground hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={() => onFilters({q: ''})} aria-label="Clear search">
                 <X className="size-3.5" />
               </button>
             )}

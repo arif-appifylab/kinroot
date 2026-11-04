@@ -46,7 +46,7 @@ export function SavedViews({entity, presets, current, onApply}: {entity: EntityT
                 disabled={remove.isPending}
                 aria-busy={(remove.isPending && remove.variables === v.id) || undefined}
                 onClick={async () => (await confirm({title: `Delete the view "${v.name}"?`, description: 'The records stay; only this saved filter is removed.', confirmLabel: 'Delete', destructive: true})) && remove.mutate(v.id)}
-                className="absolute -top-1.5 -right-1.5 flex size-5 cursor-pointer items-center justify-center rounded-full bg-card text-slate-400 opacity-0 shadow-soft transition-opacity outline-none group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed pointer-coarse:opacity-100"
+                className="absolute -top-1.5 -right-1.5 flex size-5 cursor-pointer items-center justify-center rounded-full bg-card text-muted-foreground opacity-0 shadow-soft transition-opacity outline-none group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed pointer-coarse:opacity-100"
               >
                 <Trash2 className="size-3" />
               </button>
@@ -62,7 +62,7 @@ export function SavedViews({entity, presets, current, onApply}: {entity: EntityT
           pending={save.isPending}
           pendingLabel="Saving…"
           onClick={async () => {
-            const name = await prompt({title: 'Name this view', label: 'View name', placeholder: 'e.g. My hot leads', confirmLabel: 'Continue'});
+            const name = await prompt({title: 'Name this view', label: 'View name', placeholder: 'e.g. My hot leads', confirmLabel: 'Continue', required: 'Give the view a name.', maxLength: 60});
             if (name) save.mutate({name, shared: isAdmin && (await confirm({title: 'Share this view with the whole team?', confirmLabel: 'Share', cancelLabel: 'Just me'}))});
           }}
         >

@@ -45,7 +45,7 @@ function Bubble({m, color, last}: {m: VisitorMessage; color: string; last: boole
         {m.text && <MessageText text={m.text} linkClassName={mine ? 'text-white' : 'text-slate-900'} />}
         <MessageFiles files={m.files} tone={mine ? 'dark' : 'light'} />
       </div>
-      <span className="mt-0.5 flex items-center gap-1 px-1 text-[10px] text-slate-400">
+      <span className="mt-0.5 flex items-center gap-1 px-1 text-[10px] text-muted-foreground">
         {m.via === 'email' && <Mail className="size-3" aria-label="by email" />}
         {time(m.at)}
         {mine && last && (m.seen ? <span className="inline-flex items-center gap-0.5"><CheckCheck className="size-3" /> Seen</span> : <Check className="size-3" aria-label="Sent" />)}
@@ -145,7 +145,7 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
   const status = !cfg ? '' : cfg.away ? (cfg.awayReason === 'hours' && cfg.opensAt ? `We're away · back ${new Date(cfg.opensAt).toLocaleString(undefined, {weekday: 'short', hour: 'numeric', minute: '2-digit'})}` : "We're away right now") : cfg.replyTime;
 
   if (!cfg && chat.loading) {
-    return <div className={cn('light-scope flex h-full items-center justify-center bg-white text-slate-400', className)}><Loader2 className="size-5 animate-spin" aria-label="Loading chat" /></div>;
+    return <div className={cn('light-scope flex h-full items-center justify-center bg-white text-muted-foreground', className)}><Loader2 className="size-5 animate-spin" aria-label="Loading chat" /></div>;
   }
   if (!cfg || !cfg.enabled || !cfg.allowed) {
     return (
@@ -189,7 +189,7 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
             {[0, 150, 300].map((d) => <span key={d} className="size-1.5 animate-bounce rounded-full bg-slate-400" style={{animationDelay: `${d}ms`}} />)}
           </li>
         )}
-        {conv?.status === 'CLOSED' && <li className="mx-2 text-center text-xs text-slate-400">This conversation was closed. Write again any time to reopen it.</li>}
+        {conv?.status === 'CLOSED' && <li className="mx-2 text-center text-xs text-muted-foreground">This conversation was closed. Write again any time to reopen it.</li>}
       </ol>
 
       {/* Away, and we don't know how to reach them: ask for an email. */}
@@ -275,8 +275,8 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
           <ul className="mb-2 flex flex-wrap gap-1.5" aria-label="Attachments">
             {files.map((f) => (
               <li key={f.id} className="flex items-center gap-1 rounded-lg bg-slate-100 py-1 pr-1 pl-2 text-xs text-slate-700">
-                <span className="max-w-36 truncate">{f.name}</span> <span className="text-slate-400">{fileSize(f.size)}</span>
-                <button type="button" className="cursor-pointer rounded p-0.5 text-slate-400 hover:text-rose-600" aria-label={`Remove ${f.name}`} onClick={() => setFiles((x) => x.filter((y) => y.id !== f.id))}><X className="size-3" /></button>
+                <span className="max-w-36 truncate">{f.name}</span> <span className="text-muted-foreground">{fileSize(f.size)}</span>
+                <button type="button" className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-rose-600" aria-label={`Remove ${f.name}`} onClick={() => setFiles((x) => x.filter((y) => y.id !== f.id))}><X className="size-3" /></button>
               </li>
             ))}
           </ul>
@@ -316,14 +316,14 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
             className="max-h-[120px] min-h-[36px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm leading-relaxed outline-none placeholder:text-slate-400"
           />
           <input ref={fileInput} type="file" multiple className="sr-only" tabIndex={-1} aria-hidden onChange={(e) => attach(e.target.files)} accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.txt,.csv,.zip" />
-          <button type="button" disabled={preview || uploading || files.length >= 5} aria-busy={uploading || undefined} onClick={() => fileInput.current?.click()} className="cursor-pointer rounded-lg p-2 text-slate-400 outline-none hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-[var(--chat)]/30 disabled:cursor-not-allowed disabled:opacity-50" aria-label={uploading ? 'Uploading…' : 'Attach a file (up to 5 MB)'}>
+          <button type="button" disabled={preview || uploading || files.length >= 5} aria-busy={uploading || undefined} onClick={() => fileInput.current?.click()} className="cursor-pointer rounded-lg p-2 text-muted-foreground outline-none hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-[var(--chat)]/30 disabled:cursor-not-allowed disabled:opacity-50" aria-label={uploading ? 'Uploading…' : 'Attach a file (up to 5 MB)'}>
             {uploading ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
           </button>
           <button type="submit" disabled={!canSend} aria-busy={chat.sending || undefined} className="cursor-pointer rounded-lg p-2 text-white transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-[var(--chat)]/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40" style={{background: color}} aria-label={chat.sending ? 'Sending…' : 'Send'}>
             {chat.sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
           </button>
         </div>
-        <p className="mt-1.5 text-center text-[10px] text-slate-400">Enter to send · Shift+Enter for a new line</p>
+        <p className="mt-1.5 text-center text-[10px] text-muted-foreground">Enter to send · Shift+Enter for a new line</p>
       </form>
     </div>
   );

@@ -12,7 +12,7 @@ import {FormError, FormField, FormNotice, PasswordChecks, PasswordInput, Pending
 const describedBy = (...ids: (string | undefined)[]) => ids.filter(Boolean).join(' ') || undefined;
 
 /**
- * Settings → Security › Password. With a password: change it (`POST /site-api/auth/change-password`,
+ * Settings → Your account › Password. With a password: change it (`POST /site-api/auth/change-password`,
  * other devices are signed out). Without one (an account that signs in with emailed codes):
  * a link to choose one (`POST /site-api/auth/forgot-password`, the reset page sets it).
  */

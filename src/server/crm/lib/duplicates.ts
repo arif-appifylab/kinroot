@@ -64,6 +64,9 @@ function trigrams(s: string) {
   return out;
 }
 
+/** A record's name trigrams, made when a comparison needs them (a scan drops them after each group). */
+const gramsOf = (k: {name: string; grams?: Set<string>}) => (k.grams ??= trigrams(k.name));
+
 function similarity(a: Set<string>, b: Set<string>) {
   if (!a.size || !b.size) return 0;
   let shared = 0;
@@ -74,21 +77,21 @@ function similarity(a: Set<string>, b: Set<string>) {
 // ─── Keys & scoring ───
 
 type ContactInput = {id?: string; firstName?: string | null; lastName?: string | null; email?: string | null; phone?: string | null; companyIds?: string[]};
-type ContactKeys = {id: string; name: string; first: string; last: string; grams: Set<string>; emailKey: string | null; domain: string | null; phoneKey: string | null; companyIds: string[]};
+type ContactKeys = {id: string; name: string; first: string; last: string; grams?: Set<string>; emailKey: string | null; domain: string | null; phoneKey: string | null; companyIds: string[]};
 
 function contactKeys(c: ContactInput): ContactKeys {
   const first = normName(c.firstName);
   const last = normName(c.lastName);
   const name = [first, last].filter(Boolean).join(' ');
   const emailKey = normEmail(c.email);
-  return {id: c.id ?? '', name, first, last, grams: trigrams(name), emailKey, domain: emailKey?.split('@')[1] ?? null, phoneKey: phoneKey(c.phone), companyIds: c.companyIds ?? []};
+  return {id: c.id ?? '', name, first, last, emailKey, domain: emailKey?.split('@')[1] ?? null, phoneKey: phoneKey(c.phone), companyIds: c.companyIds ?? []};
 }
 
 function scoreContacts(a: ContactKeys, b: ContactKeys): Match | null {
   const reasons: string[] = [];
   let score = 0;
   const hit = (reason: string, s: number) => (reasons.push(reason), (score = Math.max(score, s)));
-  const sim = !a.name || !b.name ? 0 : a.name === b.name ? 1 : similarity(a.grams, b.grams);
+  const sim = !a.name || !b.name ? 0 : a.name === b.name ? 1 : similarity(gramsOf(a), gramsOf(b));
   const fullNames = !!a.last && !!b.last;
   const sameCompany = a.companyIds.some((id) => b.companyIds.includes(id));
   const sameDomain = !!a.domain && a.domain === b.domain && !FREE_MAIL.has(a.domain);
@@ -108,11 +111,11 @@ function scoreContacts(a: ContactKeys, b: ContactKeys): Match | null {
 }
 
 type CompanyInput = {id?: string; name?: string | null; domain?: string | null; website?: string | null};
-type CompanyKeys = {id: string; name: string; grams: Set<string>; domain: string | null};
+type CompanyKeys = {id: string; name: string; grams?: Set<string>; domain: string | null};
 
 function companyKeys(c: CompanyInput): CompanyKeys {
   const name = normCompany(c.name);
-  return {id: c.id ?? '', name, grams: trigrams(name), domain: normDomain(c.domain) ?? normDomain(c.website)};
+  return {id: c.id ?? '', name, domain: normDomain(c.domain) ?? normDomain(c.website)};
 }
 
 function scoreCompanies(a: CompanyKeys, b: CompanyKeys): Match | null {
@@ -122,7 +125,7 @@ function scoreCompanies(a: CompanyKeys, b: CompanyKeys): Match | null {
   const conflict = !!a.domain && !!b.domain && a.domain !== b.domain;
   if (a.domain && a.domain === b.domain) hit('domain', 95);
   if (a.name && a.name === b.name) hit('company_name', conflict ? 50 : 85);
-  else if (!conflict && a.name && b.name && similarity(a.grams, b.grams) >= 0.75) hit('similar_company_name', 60);
+  else if (!conflict && a.name && b.name && similarity(gramsOf(a), gramsOf(b)) >= 0.75) hit('similar_company_name', 60);
   return reasons.length ? {score: Math.min(99, score + 3 * (reasons.length - 1)), reasons} : null;
 }
 
@@ -166,14 +169,27 @@ const MAX_BLOCK = 400;
 
 // ─── Syncing pairs ───
 
-/** Writes found pairs. Open pairs in `scope` that were not found again are removed; dismissed ones stay dismissed. */
-async function syncPairs(db: Db, entity: DupEntity, found: Found, scope: {ids?: string[]}) {
-  const where: Prisma.DuplicatePairWhereInput = {entity, ...(scope.ids ? {OR: [{aId: {in: scope.ids}}, {bId: {in: scope.ids}}]} : {})};
-  const existing = await db.duplicatePair.findMany({where, select: {id: true, aId: true, bId: true, status: true, score: true, reasons: true}});
+/**
+ * Writes found pairs. Open pairs in `scope` that were not found again are removed (never with
+ * `keep`: a scan cut short); dismissed ones stay dismissed.
+ */
+async function syncPairs(db: Db, entity: DupEntity, found: Found, scope: {ids?: string[]; keep?: boolean}) {
+  const select = {id: true, aId: true, bId: true, status: true, score: true, reasons: true} as const;
+  let existing: Prisma.DuplicatePairGetPayload<{select: typeof select}>[];
+  if (!scope.ids) existing = await db.duplicatePair.findMany({where: {entity}, select});
+  else {
+    // In chunks: a scan's scope can hold thousands of ids (each one a bound parameter).
+    const byId = new Map<string, (typeof existing)[number]>();
+    for (let k = 0; k < scope.ids.length; k += LOAD_CHUNK) {
+      const chunk = scope.ids.slice(k, k + LOAD_CHUNK);
+      for (const p of await db.duplicatePair.findMany({where: {entity, OR: [{aId: {in: chunk}}, {bId: {in: chunk}}]}, select})) byId.set(p.id, p);
+    }
+    existing = [...byId.values()];
+  }
   const byKey = new Map(existing.map((p) => [`${p.aId}|${p.bId}`, p]));
   const create = [...found.entries()].filter(([k]) => !byKey.has(k)).map(([, m]) => ({entity, aId: m.aId, bId: m.bId, score: m.score, reasons: m.reasons}));
   if (create.length) await db.duplicatePair.createMany({data: create, skipDuplicates: true});
-  const stale = existing.filter((p) => p.status === 'open' && !found.has(`${p.aId}|${p.bId}`)).map((p) => p.id);
+  const stale = scope.keep ? [] : existing.filter((p) => p.status === 'open' && !found.has(`${p.aId}|${p.bId}`)).map((p) => p.id);
   if (stale.length) await db.duplicatePair.deleteMany({where: {id: {in: stale}}});
   let updated = 0;
   for (const p of existing) {
@@ -240,23 +256,34 @@ async function candidateGroups(db: Db, entity: DupEntity): Promise<string[][]> {
   return rows.map((r) => r.ids.split(','));
 }
 
-/** Scores every pair inside each group (each pair once). */
-function pairsFromGroups<K extends {id: string}>(groups: string[][], byId: Map<string, K>, score: (a: K, b: K) => Match | null): Found {
-  const seen = new Set<string>();
+/** Pairs one scan scores, and matches it keeps, at most: past either the scan is partial (AUDIT-2 M-12). */
+export const SCAN_LIMITS = {pairs: 2_000_000, found: 20_000};
+
+/**
+ * Scores the pairs inside each group. Only matches are kept (a pair met again in another group is
+ * scored again rather than remembered), name trigrams are dropped after each group, and the scan
+ * stops at SCAN_LIMITS: memory stays bounded however many contacts there are.
+ */
+function pairsFromGroups<K extends {id: string; grams?: Set<string>}>(groups: string[][], byId: Map<string, K>, score: (a: K, b: K) => Match | null, limits = SCAN_LIMITS): {found: Found; partial: boolean} {
   const found: Found = new Map();
+  let scored = 0;
   for (const group of groups) {
     const list = group.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
-    for (let i = 0; i < list.length; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        const key = pairKey(list[i]!.id, list[j]!.id);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const m = score(list[i]!, list[j]!);
-        if (m) found.set(key, {...m, aId: key.split('|')[0]!, bId: key.split('|')[1]!});
+    try {
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          const key = pairKey(list[i]!.id, list[j]!.id);
+          if (found.has(key)) continue;
+          if (++scored > limits.pairs || found.size >= limits.found) return {found, partial: true};
+          const m = score(list[i]!, list[j]!);
+          if (m) found.set(key, {...m, aId: key.split('|')[0]!, bId: key.split('|')[1]!});
+        }
       }
+    } finally {
+      for (const k of list) k.grams = undefined;
     }
   }
-  return found;
+  return {found, partial: false};
 }
 
 /**
@@ -264,21 +291,27 @@ function pairsFromGroups<K extends {id: string}>(groups: string[][], byId: Map<s
  * (`candidateGroups`), only their records are loaded and scored. Also drops dismissed pairs whose
  * records are gone for good. A scan cut short by its caps keeps the open pairs it did not see.
  */
-export async function scanDuplicates(db: Db, entity: DupEntity) {
+export async function scanDuplicates(db: Db, entity: DupEntity, limits = SCAN_LIMITS) {
   const groups = await candidateGroups(db, entity);
   const ids = [...new Set(groups.flat())].slice(0, MAX_RECORDS);
-  const partial = groups.length >= MAX_GROUPS || ids.length >= MAX_RECORDS;
-  const found: Found = new Map();
+  let partial = groups.length >= MAX_GROUPS || ids.length >= MAX_RECORDS;
+  let found: Found;
   if (entity === 'contact') {
     const byId = new Map<string, ContactKeys>();
     for (let k = 0; k < ids.length; k += LOAD_CHUNK) for (const r of await loadContacts(db, {id: {in: ids.slice(k, k + LOAD_CHUNK)}})) byId.set(r.id, r);
-    for (const [key, m] of pairsFromGroups(groups, byId, scoreContacts)) found.set(key, m);
+    const r = pairsFromGroups(groups, byId, scoreContacts, limits);
+    found = r.found;
+    partial ||= r.partial;
   } else {
     const byId = new Map<string, CompanyKeys>();
     for (let k = 0; k < ids.length; k += LOAD_CHUNK) for (const r of await loadCompanies(db, {id: {in: ids.slice(k, k + LOAD_CHUNK)}})) byId.set(r.id, r);
-    for (const [key, m] of pairsFromGroups(groups, byId, scoreCompanies)) found.set(key, m);
+    const r = pairsFromGroups(groups, byId, scoreCompanies, limits);
+    found = r.found;
+    partial ||= r.partial;
   }
-  const result = partial ? await syncPairs(db, entity, found, {ids}) : await syncPairs(db, entity, found, {});
+  // Cut short: write what was found, remove nothing (the pairs it did not reach stay as they are).
+  const scopeIds = [...new Set([...found.values()].flatMap((m) => [m.aId, m.bId]))];
+  const result = partial ? await syncPairs(db, entity, found, {ids: scopeIds, keep: true}) : await syncPairs(db, entity, found, {});
   // Dismissed pairs of merged / purged records (binned ones stay, they may come back).
   if (entity === 'contact') {
     await db.$executeRaw`
@@ -370,22 +403,33 @@ export async function scheduleDuplicateScans(db: Db) {
 /** `c.id` not one of `ids` (bound one by one: the live driver can't bind an array parameter). */
 const notIn = (ids: string[]) => (ids.length ? Prisma.sql`NOT (c.id IN (${Prisma.join(ids)}))` : Prisma.sql`TRUE`);
 
-/** Ids of records that share a match key with `input` (cheap SQL pre-filter; scoring happens in JS). */
+/**
+ * Ids of records that share a match key with `input` (cheap SQL pre-filter; scoring happens in JS).
+ * One indexed branch per key (AUDIT-2 L-13: the "possible duplicate" hint ran a scan of every
+ * contact per keystroke pause): the email and phone keys have expression indexes
+ * (crm_duplicate_hint_indexes), names and the work domain use the trigram indexes with an ILIKE that
+ * has no wildcard but the domain's, a shared company the ContactCompany index. Each branch stops at
+ * 300 rows.
+ */
 async function contactCandidates(db: Db, k: ContactKeys, exclude: string[]) {
   const f0 = k.first.slice(0, 1);
-  const sameCompany = k.companyIds.length ? Prisma.sql`cc."companyId" IN (${Prisma.join(k.companyIds)})` : Prisma.sql`FALSE`;
+  const branches: Prisma.Sql[] = [];
+  if (k.emailKey) branches.push(Prisma.sql`SELECT c.id FROM "Contact" c WHERE ${emailKeySql(Prisma.raw('c.email'))} = ${k.emailKey} LIMIT 300`);
+  // The last 10 digits equal a 7+ digit key only when the phone has 7+ digits itself.
+  if (k.phoneKey) branches.push(Prisma.sql`SELECT c.id FROM "Contact" c WHERE right(regexp_replace(c.phone, '\\D', '', 'g'), 10) = ${k.phoneKey} LIMIT 300`);
+  // Normalised names hold only a-z, 0-9 and spaces: no LIKE wildcards, so ILIKE is an equality the trigram index serves.
+  if (k.last) branches.push(Prisma.sql`SELECT c.id FROM "Contact" c WHERE c."lastName" ILIKE ${k.last} LIMIT 300`);
+  else if (k.first) branches.push(Prisma.sql`SELECT c.id FROM "Contact" c WHERE c."firstName" ILIKE ${k.first} LIMIT 300`);
+  if (f0 && k.companyIds.length) {
+    branches.push(Prisma.sql`SELECT c.id FROM "ContactCompany" cc JOIN "Contact" c ON c.id = cc."contactId" WHERE cc."companyId" IN (${Prisma.join(k.companyIds)}) AND lower(left(c."firstName", 1)) = ${f0} LIMIT 300`);
+  }
+  if (f0 && k.domain && /^[a-z0-9.-]+$/.test(k.domain)) {
+    branches.push(Prisma.sql`SELECT c.id FROM "Contact" c WHERE c.email ILIKE ${`%@${k.domain}`} AND lower(split_part(c.email, '@', 2)) = ${k.domain} AND lower(left(c."firstName", 1)) = ${f0} LIMIT 300`);
+  }
+  if (!branches.length) return [];
   const rows = await db.$queryRaw<{id: string}[]>`
-    SELECT c.id FROM "Contact" c
-    WHERE ${notIn(exclude)} AND (
-      (${k.emailKey}::text IS NOT NULL AND c.email IS NOT NULL AND ${emailKeySql(Prisma.raw('c.email'))} = ${k.emailKey})
-      OR (${k.phoneKey}::text IS NOT NULL AND length(regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g')) >= 7 AND right(regexp_replace(c.phone, '\\D', '', 'g'), 10) = ${k.phoneKey})
-      OR (${k.last}::text <> '' AND lower(c."lastName") = ${k.last})
-      OR (${k.last}::text = '' AND lower(c."firstName") = ${k.first})
-      OR (${f0}::text <> '' AND lower(left(c."firstName", 1)) = ${f0} AND (
-        EXISTS (SELECT 1 FROM "ContactCompany" cc WHERE cc."contactId" = c.id AND ${sameCompany})
-        OR (${k.domain}::text IS NOT NULL AND lower(split_part(c.email, '@', 2)) = ${k.domain})
-      ))
-    )
+    SELECT DISTINCT c.id FROM (${Prisma.join(branches.map((b) => Prisma.sql`(${b})`), ' UNION ALL ')}) c
+    WHERE ${notIn(exclude)}
     LIMIT 300`;
   return rows.map((r) => r.id);
 }

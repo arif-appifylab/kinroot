@@ -4,7 +4,7 @@ import {z} from 'zod';
 
 import type {Prisma} from '../../../generated/prisma/client';
 import type {AppContext, AppEnv} from '../kit/guards';
-import {intParam, notFound, ownerScope, valid} from '../lib/http';
+import {intParam, notFound, ownerScope, shownLink, valid} from '../lib/http';
 import {userSelect} from '../lib/users';
 
 const GROUPS: Record<string, string[]> = {
@@ -67,7 +67,8 @@ export const timeline = new Hono<AppEnv>()
   async (c) => {
     const db = c.var.db;
     const q = c.req.valid('query');
-    let where = await feedWhere(c, q);
+    const [feed, scope] = await Promise.all([feedWhere(c, q), ownerScope(c)]);
+    let where = feed;
     if (q.group !== 'all') where = {AND: [where, {type: {in: GROUPS[q.group]}}]};
     if (q.before) where = {AND: [where, {createdAt: {lt: new Date(q.before)}}]};
     if (q.q) where = {AND: [where, {OR: [{title: {contains: q.q, mode: 'insensitive'}}, {text: {contains: q.q, mode: 'insensitive'}}]}]};
@@ -76,8 +77,8 @@ export const timeline = new Hono<AppEnv>()
       where,
       include: {
         actor: {select: userSelect},
-        contact: {select: {id: true, firstName: true, lastName: true}},
-        deal: {select: {id: true, title: true}},
+        contact: {select: {id: true, firstName: true, lastName: true, ownerId: true}},
+        deal: {select: {id: true, title: true, ownerId: true}},
         _count: {select: {comments: true}},
       },
       orderBy: {createdAt: 'desc'},
@@ -96,7 +97,8 @@ export const timeline = new Hono<AppEnv>()
     const byId = new Map(messages.map((m) => [m.id, {...m, text: m.text?.slice(0, 600) ?? null}]));
 
     return c.json({
-      rows: page.map((a) => ({...a, email: a.refId ? byId.get(a.refId) ?? null : null})),
+      // An entry's other record (a deal on a contact's feed) shows only when this person may open it (AUDIT-2 L-2).
+      rows: page.map((a) => ({...a, contact: shownLink(a.contact, scope), deal: shownLink(a.deal, scope), email: a.refId ? byId.get(a.refId) ?? null : null})),
       nextCursor: rows.length > q.take ? page[page.length - 1]!.createdAt.toISOString() : null,
     });
   },
