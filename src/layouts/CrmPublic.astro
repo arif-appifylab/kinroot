@@ -76,5 +76,11 @@ const structured = seo ? [...(path === '/' ? [siteJsonLd({name, logo}, descripti
   </head>
   <body class="bg-background text-foreground">
     <slot />
+    <script>
+      // The thin bar in the brand colour while the next page loads (src/lib/page-progress.ts).
+      import {installPageProgress} from '../lib/page-progress';
+
+      installPageProgress();
+    </script>
   </body>
 </html>

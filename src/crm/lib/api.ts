@@ -43,10 +43,10 @@ function readFields(fields: unknown): Record<string, string> {
   return out;
 }
 
-async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, query?: Query, extra?: Record<string, string>): Promise<T> {
   const res = await siteFetch(`${CRM_API}${path}${qs(query)}`, {
     method,
-    headers: body !== undefined ? {'content-type': 'application/json'} : undefined,
+    headers: body !== undefined || extra ? {...(body !== undefined ? {'content-type': 'application/json'} : {}), ...extra} : undefined,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   // Kinroot routes answer `{error: "<words>"}`; the template's guards `{error: "<code>", message: "<words>"}`.
@@ -60,7 +60,8 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
 
 export const api = {
   get: <T>(path: string, query?: Query) => request<T>('GET', path, undefined, query),
-  post: <T>(path: string, body: unknown = {}) => request<T>('POST', path, body),
+  /** `headers`: extra request headers, e.g. a public write's `idempotency-key` (lib/attempt.ts). */
+  post: <T>(path: string, body: unknown = {}, headers?: Record<string, string>) => request<T>('POST', path, body, undefined, headers),
   put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),

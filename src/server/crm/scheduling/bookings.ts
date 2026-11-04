@@ -14,6 +14,7 @@ import {rememberOption} from '../lib/settings';
 import {createInteraction, refreshInteractionActivity} from '../routes/interactions';
 import {hostsFor, linkSlots, pickHost} from './links';
 import {numbers} from '../lib/json-list';
+import {lockFor, runOnce, type Once} from '../lib/once';
 
 // ─── Signed manage links (/book/manage/:token) ──────────────────────────────
 
@@ -103,13 +104,32 @@ export async function claimSlot(db: Db, link: BookingLink, start: Date, duration
   return opts.onlyHostId ?? (await pickHost(db, link, slot.hostIds));
 }
 
+/** A CONFIRMED booking of this host overlapping [start, end) (other than `exceptId`), checked under the host's lock. */
+async function hostBusy(tx: Prisma.TransactionClient, hostId: string, start: Date, end: Date, exceptId?: string) {
+  const clash = await tx.booking.findFirst({
+    where: {hostId, status: 'CONFIRMED', startAt: {lt: end}, endAt: {gt: start}, ...(exceptId ? {id: {not: exceptId}} : {})},
+    select: {id: true},
+  });
+  return !!clash;
+}
+
+/**
+ * The database decides who gets a time (docs/agent/orders-and-stock.md): one host's bookings are
+ * written one at a time, under a lock held until the transaction ends, so two visitors (or two
+ * reschedules) can never both get overlapping times with the same host.
+ */
+const lockHost = (tx: Prisma.TransactionClient, hostId: string) => lockFor(tx, `booking-host:${hostId}`);
+
 /**
  * Books a slot: re-checks availability, picks the host (round robin on team
  * links), creates / updates the contact, the MEETING interaction (written to
  * the host's calendar, with a Meet / Teams link for video), the timeline
  * entry, the event, the host notification, confirmation emails and reminders.
+ *
+ * With `once` (the public booking page's idempotency key), the same attempt sent again books
+ * nothing more: it answers the first booking's id with `replayed: true` and none of the above runs.
  */
-export async function createBooking(db: Db, link: BookingLink, input: BookInput) {
+export async function createBooking(db: Db, link: BookingLink, input: BookInput, once: Once | null = null): Promise<{id: string; replayed: boolean}> {
   if (!link.active) throw new HTTPException(403, {message: 'This booking link is turned off.'});
   // Forms ask their own questions; the link's apply to its booking page.
   const q = questionsOf(link.questions);
@@ -124,48 +144,42 @@ export async function createBooking(db: Db, link: BookingLink, input: BookInput)
   if (!hostId || !host) throw new HTTPException(409, {message: SLOT_TAKEN});
   const end = new Date(start.getTime() + input.duration * 60_000);
 
+  const title = `${link.name}: ${host.name} & ${input.name.trim()}`.slice(0, 300);
+  // Only the clash check and the insert run under the host's lock; everything else comes after,
+  // the contact too (found or made from the address once, by the request that booked).
+  const made: {row?: Booking} = {};
+  const {value, replayed} = await runOnce(db, once, async (tx) => {
+    await lockHost(tx, hostId);
+    if (await hostBusy(tx, hostId, start, end)) throw new HTTPException(409, {message: SLOT_TAKEN});
+    const row = await tx.booking.create({
+      data: {
+        linkId: link.id,
+        hostId,
+        title,
+        startAt: start,
+        endAt: end,
+        timezone: isTimeZone(input.timezone) ? input.timezone : link.timezone,
+        name: input.name.trim().slice(0, 200),
+        email: input.email.trim().toLowerCase(),
+        phone: input.phone?.trim() || null,
+        company: input.company?.trim() || null,
+        notes: input.notes?.trim() || null,
+        locationType: link.locationType,
+        location: bookingLocation(link, input),
+        source: input.source,
+        meta: {...input.meta, origin: input.origin},
+      },
+    });
+    made.row = row;
+    return {id: row.id};
+  });
+  if (replayed || !made.row) return {id: value.id, replayed: true};
+  let booking: Booking = made.row;
+
   const resolved = input.contactId ? await db.contact.findUnique({where: {id: input.contactId}}) : null;
   const {contact, companyId, isNew} = resolved
     ? {contact: resolved, companyId: (await db.contactCompany.findFirst({where: {contactId: resolved.id}, orderBy: {isPrimary: 'desc'}}))?.companyId ?? null, isNew: false}
     : await upsertContact(db, link, hostId, input);
-
-  const title = `${link.name}: ${host.name} & ${input.name.trim()}`.slice(0, 300);
-  let booking = await db.booking.create({
-    data: {
-      linkId: link.id,
-      hostId,
-      contactId: contact.id,
-      title,
-      startAt: start,
-      endAt: end,
-      timezone: isTimeZone(input.timezone) ? input.timezone : link.timezone,
-      name: input.name.trim().slice(0, 200),
-      email: input.email.trim().toLowerCase(),
-      phone: input.phone?.trim() || null,
-      company: input.company?.trim() || null,
-      notes: input.notes?.trim() || null,
-      locationType: link.locationType,
-      location: bookingLocation(link, input),
-      source: input.source,
-      meta: {...input.meta, origin: input.origin},
-    },
-  });
-
-  // Two visitors can submit the same slot at once: the earlier booking wins.
-  const clash = await db.booking.findFirst({
-    where: {
-      hostId,
-      status: 'CONFIRMED',
-      startAt: {lt: end},
-      endAt: {gt: start},
-      OR: [{createdAt: {lt: booking.createdAt}}, {createdAt: booking.createdAt, id: {lt: booking.id}}],
-    },
-    select: {id: true},
-  });
-  if (clash) {
-    await db.booking.delete({where: {id: booking.id}});
-    throw new HTTPException(409, {message: SLOT_TAKEN});
-  }
 
   const openDeal = await db.deal.findFirst({where: {status: 'OPEN', contacts: {some: {contactId: contact.id}}}, orderBy: {lastActivityAt: 'desc'}, select: {id: true}});
   const details = [
@@ -189,7 +203,7 @@ export async function createBooking(db: Db, link: BookingLink, input: BookInput)
     dealId: openDeal?.id ?? null,
     authorId: hostId,
   });
-  booking = await db.booking.update({where: {id: booking.id}, data: {interactionId: interaction.id, location: interaction.location}});
+  booking = await db.booking.update({where: {id: booking.id}, data: {contactId: contact.id, interactionId: interaction.id, location: interaction.location}});
   await db.bookingLink.update({where: {id: link.id}, data: {bookingCount: {increment: 1}}});
 
   if (isNew) await emit(db, 'contact.created', {recordId: contact.id, data: contact});
@@ -201,7 +215,7 @@ export async function createBooking(db: Db, link: BookingLink, input: BookInput)
     link: recordLink.contact(contact.id),
   });
   await afterChange(db, booking, 'booked');
-  return booking;
+  return {id: booking.id, replayed: false};
 }
 
 const eventData = (b: Booking, link: Pick<BookingLink, 'id' | 'name'> | null) => ({
@@ -247,9 +261,19 @@ export async function rescheduleBooking(db: Db, booking: Booking & {link: Bookin
   await claimSlot(db, booking.link, start, duration, {onlyHostId: booking.hostId, exclude: booking});
   const from = booking.startAt;
   const history = [...(((booking.meta as Record<string, unknown>).history as unknown[]) ?? []), {from: from.toISOString(), to: start.toISOString(), by: input.by, at: new Date().toISOString()}];
-  const updated = await db.booking.update({
-    where: {id: booking.id},
-    data: {startAt: start, endAt: new Date(start.getTime() + duration * 60_000), meta: {...(booking.meta as object), history} as Prisma.InputJsonValue},
+  const end = new Date(start.getTime() + duration * 60_000);
+  // The same lock as booking: a reschedule and a booking (or two reschedules) never land on one time.
+  const updated = await db.$transaction(async (tx) => {
+    if (booking.hostId) {
+      await lockHost(tx, booking.hostId);
+      if (await hostBusy(tx, booking.hostId, start, end, booking.id)) throw new HTTPException(409, {message: SLOT_TAKEN});
+    }
+    const {count} = await tx.booking.updateMany({
+      where: {id: booking.id, status: 'CONFIRMED'},
+      data: {startAt: start, endAt: end, meta: {...(booking.meta as object), history} as Prisma.InputJsonValue},
+    });
+    if (!count) throw new HTTPException(409, {message: 'This meeting was canceled.'});
+    return tx.booking.findUniqueOrThrow({where: {id: booking.id}});
   });
   if (updated.interactionId) {
     let interaction = await db.interaction.update({where: {id: updated.interactionId}, data: {occurredAt: start, durationMin: duration, outcome: 'Scheduled'}});

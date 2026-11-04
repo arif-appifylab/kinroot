@@ -37,6 +37,7 @@ export async function refreshCalendars(db: Db, conn: CalendarConnection) {
 
 /** Busy times are another service's data: kept 2 minutes per host and range (nothing clears them; a new booking is checked against the database too). */
 const BUSY_TTL_S = 120;
+const DAY_MS = 86_400_000;
 
 /**
  * Busy blocks from every connected calendar of a user. A calendar that can't
@@ -45,6 +46,15 @@ const BUSY_TTL_S = 120;
  * the same week on every visit, and each miss is a live Google / Microsoft call.
  */
 export async function calendarBusy(db: Db, userId: string, from: Date, to: Date): Promise<Interval[]> {
+  // Keyed by whole UTC days, never the exact range: booking pages start their range at "now", and a
+  // visitor picks it, so exact times would make a new key on every request and never hit.
+  const dayFrom = Math.floor(from.getTime() / DAY_MS) * DAY_MS;
+  const dayTo = Math.ceil(to.getTime() / DAY_MS) * DAY_MS;
+  const busy = await busyForDays(db, userId, new Date(dayFrom), new Date(dayTo));
+  return busy.filter((b) => b.end > from.getTime() && b.start < to.getTime());
+}
+
+function busyForDays(db: Db, userId: string, from: Date, to: Date): Promise<Interval[]> {
   return cache.getOrSet(`crm:cal-busy:${userId}:${from.getTime()}:${to.getTime()}`, BUSY_TTL_S, async () => {
     const conns = await db.calendarConnection.findMany({where: {userId}});
     const out: Interval[] = [];

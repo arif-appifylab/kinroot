@@ -9,6 +9,7 @@ import {Field, Input, NativeSelect} from '@/components/ui/form';
 import {is, useFormState} from '@/components/ui/form-state';
 import {IconBadge} from '@/components/ui/misc';
 import {api} from '@/lib/api';
+import {sendAttempt} from '@/lib/attempt';
 import type {Brand} from '@/lib/brand';
 import {useBrand} from '@/lib/use-brand';
 import type {PortalConfig} from '../../server/crm/routes/support-public';
@@ -56,14 +57,17 @@ function SupportHome({config}: {config: PortalConfig}) {
     setError(null);
     try {
       const {description, ...rest} = form;
-      const r = await api.post<{signedIn: boolean; number?: number}>('/public/support/tickets', {
+      const payload = {
         ...rest,
         descriptionHtml: description,
         name: form.name || undefined,
         email: session ? undefined : form.email,
         category: form.category || undefined,
-        startedAt: startedAt.current,
-      });
+      };
+      // One key per request sent: a retry after a lost answer opens no second request.
+      const r = await sendAttempt(['support', payload], (headers) =>
+        api.post<{signedIn: boolean; number?: number}>('/public/support/tickets', {...payload, startedAt: startedAt.current}, headers),
+      );
       if (r.signedIn && r.number) window.location.assign(`/support/tickets/${r.number}`);
       else setDone(true);
     } catch (e) {

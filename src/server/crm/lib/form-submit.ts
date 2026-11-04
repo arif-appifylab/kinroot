@@ -1,6 +1,6 @@
 import {HTTPException} from 'hono/http-exception';
 
-import type {Contact, Form, LifecycleStage, Prisma} from '../../../generated/prisma/client';
+import type {Contact, Form, FormSubmission, LifecycleStage, Prisma} from '../../../generated/prisma/client';
 import {
   activeFields,
   answerText,
@@ -30,6 +30,7 @@ import {createTicket} from './tickets';
 import {formConversation} from '../inbox/forms';
 import {bookFormSlots, checkFormSlots} from '../scheduling/form-booking';
 import {strings} from './json-list';
+import {lockFor, runOnce, type Once} from './once';
 
 export const formSettings = (form: Pick<Form, 'settings'>): FormSettings => ({...defaultSettings(), ...(form.settings as Partial<FormSettings>)});
 export const formFields = (form: Pick<Form, 'fields'>) => (form.fields ?? []) as FormField[];
@@ -50,6 +51,9 @@ export function closedReason(form: Form): string | null {
 export const fileToken = (id: string) => sign(`formfile:${id}`);
 
 // ─── Submit ─────────────────────────────────────────────────────────────────
+
+/** The ending a response was shown (kept on its idempotency answer), while the form still has it. */
+export const endingOf = (settings: FormSettings, id: string | null | undefined) => (id ? settings.endings.find((e) => e.id === id) ?? null : null);
 
 export type SubmitInput = {
   answers: Record<string, unknown>;
@@ -114,7 +118,7 @@ async function cleanValue(db: Db, f: FormField, raw: unknown): Promise<AnswerVal
  * fields, contact create/update (dedupe by email), company link, optional
  * deal, timeline + events + notifications, and queues the emails.
  */
-export async function submitForm(db: Db, form: Form, input: SubmitInput) {
+export async function submitForm(db: Db, form: Form, input: SubmitInput, once: Once | null = null) {
   const fields = formFields(form);
   const settings = formSettings(form);
 
@@ -173,10 +177,29 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput) {
   // Booking slots are checked before anything is written.
   const bookings = await checkFormSlots(db, active, answers, email);
 
-  if (settings.onePerContact && email) {
-    const dupe = await db.formSubmission.findFirst({where: {formId: form.id, email}, select: {id: true}});
-    if (dupe) throw new HTTPException(409, {message: "You've already responded to this form."});
-  }
+  // The response is saved first, once per attempt (`once`: the browser's idempotency key): a
+  // repeat of this attempt answers the first one's ending and does nothing below.
+  const ending = pickEnding(settings, fields, answers);
+  const made: {row?: FormSubmission} = {};
+  const {value, replayed} = await runOnce(db, once, async (tx) => {
+    if (settings.onePerContact && email) {
+      // One response per address, decided under a lock: two submits at once can't both pass.
+      await lockFor(tx, `form-once:${form.id}:${email}`);
+      const dupe = await tx.formSubmission.findFirst({where: {formId: form.id, email}, select: {id: true}});
+      if (dupe) throw new HTTPException(409, {message: "You've already responded to this form."});
+    }
+    made.row = await tx.formSubmission.create({
+      data: {
+        formId: form.id,
+        answers: stored as unknown as Prisma.InputJsonValue,
+        meta: {...input.meta, userAgent: input.userAgent?.slice(0, 300), endingId: ending.id, origin: input.origin} as Prisma.InputJsonValue,
+        email,
+      },
+    });
+    return {id: made.row.id, endingId: ending.id};
+  });
+  if (replayed || !made.row) return {spam: false as const, replayed: true, submissionId: value.id, ending: endingOf(settings, value.endingId) ?? ending};
+  let submission = made.row;
 
   // Owner for new records: fixed user or round-robin.
   let ownerId: string | null = null;
@@ -304,17 +327,7 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput) {
     });
   }
 
-  const ending = pickEnding(settings, fields, answers);
-  const submission = await db.formSubmission.create({
-    data: {
-      formId: form.id,
-      answers: stored as unknown as Prisma.InputJsonValue,
-      meta: {...input.meta, userAgent: input.userAgent?.slice(0, 300), endingId: ending.id, origin: input.origin} as Prisma.InputJsonValue,
-      email,
-      contactId: contact?.id,
-      dealId,
-    },
-  });
+  if (contact || dealId) submission = await db.formSubmission.update({where: {id: submission.id}, data: {contactId: contact?.id, dealId}});
 
   if (contact && settings.listIds?.length) {
     for (const listId of settings.listIds) await addToList(db, listId, [contact.id], {source: 'form'});
@@ -359,5 +372,5 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput) {
     await enqueue(db, 'form.after_submit', {submissionId: submission.id});
     kickJobs();
   }
-  return {spam: false as const, submission, ending};
+  return {spam: false as const, replayed: false, submissionId: submission.id, ending};
 }

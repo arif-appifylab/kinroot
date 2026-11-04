@@ -128,6 +128,16 @@ export type CreateTicketInput = {
 
 /** Creates a ticket with its SLA deadlines, timeline entry, event and notifications. */
 export async function createTicket(db: Db, input: CreateTicketInput) {
+  const prepared = await prepareTicket(db, input);
+  return ticketCreated(db, await db.ticket.create({data: prepared.data}), input, prepared.settings);
+}
+
+/**
+ * What `createTicket` writes, worked out first (the settings and the contact's company are read
+ * here), so a caller can insert it inside its own transaction (`tx.ticket.create({data})`, the
+ * public support form's idempotent write) and run `ticketCreated` after it.
+ */
+export async function prepareTicket(db: Db, input: CreateTicketInput) {
   const settings = await getTicketSettings(db);
   const at = input.at ?? new Date();
   const priority = input.priority ?? 'NORMAL';
@@ -135,26 +145,30 @@ export async function createTicket(db: Db, input: CreateTicketInput) {
   if (!companyId && input.contactId) {
     companyId = (await db.contactCompany.findFirst({where: {contactId: input.contactId}, orderBy: {isPrimary: 'desc'}, select: {companyId: true}}))?.companyId ?? null;
   }
-  const ticket = await db.ticket.create({
-    data: {
-      subject: input.subject.trim().slice(0, 300) || '(no subject)',
-      description: input.description?.slice(0, 50_000) || null,
-      descriptionHtml: input.descriptionHtml || null,
-      priority,
-      category: input.category || null,
-      queue: input.queue || null,
-      source: input.source,
-      tags: input.tags ?? [],
-      assigneeId: input.assigneeId || null,
-      contactId: input.contactId || null,
-      companyId,
-      dealId: input.dealId || null,
-      emailThreadId: input.emailThreadId || null,
-      createdAt: at,
-      lastMessageAt: at,
-      ...slaDueDates(settings, priority, at),
-    },
-  });
+  const data = {
+    subject: input.subject.trim().slice(0, 300) || '(no subject)',
+    description: input.description?.slice(0, 50_000) || null,
+    descriptionHtml: input.descriptionHtml || null,
+    priority,
+    category: input.category || null,
+    queue: input.queue || null,
+    source: input.source,
+    tags: input.tags ?? [],
+    assigneeId: input.assigneeId || null,
+    contactId: input.contactId || null,
+    companyId,
+    dealId: input.dealId || null,
+    emailThreadId: input.emailThreadId || null,
+    createdAt: at,
+    lastMessageAt: at,
+    ...slaDueDates(settings, priority, at),
+  } satisfies Prisma.TicketUncheckedCreateInput;
+  return {data, settings};
+}
+
+/** A new ticket's SLA timers, timeline entry, event and notifications (once, after it is saved). */
+export async function ticketCreated(db: Db, ticket: Ticket, input: CreateTicketInput, settings: TicketSettings) {
+  const at = ticket.createdAt;
   await scheduleSla(db, ticket);
   await logActivity(db, {
     type: 'ticket_created',

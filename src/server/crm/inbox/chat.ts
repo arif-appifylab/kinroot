@@ -29,7 +29,7 @@ import {getSettings} from '../lib/settings';
 import {stripQuoted} from '../lib/ticket-mail';
 import {sendEmail} from '../email/service';
 import {publicFileUrl} from '../routes/files';
-import {filesFor, identityLabel, linkChannelContact, receiveChannelMessage, refreshChannelActivity, sendChannelMessage} from './channel-messages';
+import {filesFor, identityLabel, inboundMessageData, linkChannelContact, receiveChannelMessage, refreshChannelActivity, sendChannelMessage} from './channel-messages';
 import {conversationLink, eventData, threadEvent} from './conversations';
 import {CHAT_ONLINE_CACHE_KEY, getInboxSettings, hasTeamAccess} from './settings';
 import {cache} from '../../../platform/cache';
@@ -106,15 +106,20 @@ export async function fromContinueToken(token: string) {
 /** Uploaded before the message is sent: the file waits as "chat_pending", bound to the visitor. */
 export const chatFileToken = (fileId: string, identityId: string) => sign(`chatfile:${fileId}:${identityId}`);
 
-/** Verifies the visitor's upload tokens and claims those files for the message. */
-export async function claimFiles(db: Db, identityId: string, files: {id: string; token: string}[]) {
+/** Verifies the visitor's upload tokens: the ids of their files still waiting to be sent (nothing claimed). */
+export async function pendingFiles(db: Db | Prisma.TransactionClient, identityId: string, files: {id: string; token: string}[]) {
   const ok: string[] = [];
   for (const f of files.slice(0, 5)) {
     if (await verifySignature(`chatfile:${f.id}:${identityId}`, f.token)) ok.push(f.id);
   }
   if (!ok.length) return [];
   const pending = await db.file.findMany({where: {id: {in: ok}, purpose: 'chat_pending'}, select: {id: true}});
-  const ids = pending.map((p) => p.id);
+  return pending.map((p) => p.id);
+}
+
+/** Verifies the visitor's upload tokens and claims those files for the message. */
+export async function claimFiles(db: Db | Prisma.TransactionClient, identityId: string, files: {id: string; token: string}[]) {
+  const ids = await pendingFiles(db, identityId, files);
   if (ids.length) await db.file.updateMany({where: {id: {in: ids}}, data: {purpose: 'chat'}});
   return ids;
 }
@@ -283,31 +288,82 @@ async function awayNotice(db: Db, thread: EmailThread, s: ChatSettings, identity
   await sendChannelMessage(db, thread, {text: `${s.offlineMessage}\n${ask}`.trim(), senderId: null, kind: 'auto'});
 }
 
-export type StartInput = {identity: ChannelIdentity; text: string; fileIds: string[]; page: string | null};
+/** Where a new conversation goes, read before it is written: the chat mailbox, and the known contact's company and open deal. */
+export async function chatPlacement(db: Db, s: ChatSettings, contactId: string | null) {
+  const [account, records] = await Promise.all([chatAccount(db, s), contactRecords(db, contactId)]);
+  return {accountId: account?.id ?? null, contactId, ...records};
+}
 
-/** A visitor's first message: a new team-inbox conversation, routed and assigned like any other. */
-export async function startChat(db: Db, s: ChatSettings, input: StartInput) {
-  const identity = input.identity;
-  const account = await chatAccount(db, s);
-  const contactId = identity.contactId;
+/** A conversation's company and deal from its contact: their primary company and latest open deal. */
+async function contactRecords(db: Db, contactId: string | null) {
   const [company, deal] = contactId
     ? await Promise.all([
         db.contactCompany.findFirst({where: {contactId}, orderBy: {isPrimary: 'desc'}, select: {companyId: true}}),
         db.deal.findFirst({where: {status: 'OPEN', contacts: {some: {contactId}}}, orderBy: {lastActivityAt: 'desc'}, select: {id: true}}),
       ])
     : [null, null];
-  const thread = await db.emailThread.create({
+  return {companyId: company?.companyId ?? null, dealId: deal?.id ?? null};
+}
+
+export type OpenChatInput = {
+  /** The returning visitor; null makes a new one. */
+  identity: Pick<ChannelIdentity, 'id' | 'contactId'> | null;
+  text: string;
+  /** The visitor's upload tokens: their files are claimed here. */
+  files: {id: string; token: string}[];
+  page: string | null;
+};
+
+/**
+ * A website chat's first write, in the caller's transaction (the start's idempotent write): the
+ * visitor when new, the conversation, and the first message with its files. Only ids come back;
+ * the routing, notices and events follow in `chatOpened`.
+ */
+export async function openChat(tx: Prisma.TransactionClient, place: Awaited<ReturnType<typeof chatPlacement>>, input: OpenChatInput) {
+  const identity = input.identity ?? (await tx.channelIdentity.create({data: {channel: 'chat', externalId: randomToken(12)}, select: {id: true, contactId: true}}));
+  // A new visitor has no files: an upload makes the visitor first, and its token is bound to them.
+  const fileIds = input.identity ? await claimFiles(tx, identity.id, input.files) : [];
+  if (!input.text && !fileIds.length) throw new HTTPException(400, {message: 'Write a message first'});
+  const thread = await tx.emailThread.create({
     data: {
-      subject: excerpt(input.text, 80) || (input.fileIds.length ? 'Sent a file' : 'Website chat'),
+      subject: excerpt(input.text, 80) || (fileIds.length ? 'Sent a file' : 'Website chat'),
       channel: 'chat',
-      accountId: account?.id,
+      accountId: place.accountId,
       identityId: identity.id,
-      contactId,
-      companyId: company?.companyId,
-      dealId: deal?.id,
+      contactId: place.contactId,
+      companyId: place.companyId,
+      dealId: place.dealId,
     },
   });
-  const received = await receiveChannelMessage(db, thread, identity, {text: input.text, fileIds: input.fileIds, data: {page: input.page}});
+  const message = await tx.channelMessage.create({
+    data: inboundMessageData(thread, identity, {text: input.text, fileIds, data: {page: input.page}}, new Date()),
+    select: {id: true},
+  });
+  return {identityId: identity.id, threadId: thread.id, messageId: message.id};
+}
+
+/** A visitor's first message, once saved (`openChat`): routed and assigned like any other conversation, with its notices and events. */
+export async function chatOpened(db: Db, s: ChatSettings, opened: {threadId: string; messageId: string}, identity: ChannelIdentity, input: {page: string | null}) {
+  let [thread, message] = await Promise.all([
+    db.emailThread.findUniqueOrThrow({where: {id: opened.threadId}}),
+    db.channelMessage.findUniqueOrThrow({where: {id: opened.messageId}}),
+  ]);
+  // Who the visitor said they are (the pre-chat answers) is saved after the conversation: it goes
+  // to that contact, with their company and open deal, as if they had been known from the start.
+  const contactId = identity.contactId;
+  if (contactId && (thread.contactId !== contactId || !thread.dealId)) {
+    const records = await contactRecords(db, contactId);
+    const moved = thread.contactId !== contactId;
+    if (moved || records.dealId) {
+      thread = await db.emailThread.update({
+        where: {id: thread.id},
+        data: {contactId, companyId: moved ? records.companyId : (thread.companyId ?? records.companyId), dealId: moved ? records.dealId : (thread.dealId ?? records.dealId)},
+      });
+      if (message.contactId !== contactId) message = await db.channelMessage.update({where: {id: message.id}, data: {contactId}});
+    }
+  }
+  const text = message.text;
+  const received = await receiveChannelMessage(db, thread, identity, {text, fileIds: strings(message.fileIds), data: {page: input.page}}, undefined, message);
   const availability = await chatAvailability(db, s);
   if (availability.away) await awayNotice(db, received.thread, s, identity);
   await refreshChannelActivity(db, thread.id);
@@ -317,7 +373,7 @@ export async function startChat(db: Db, s: ChatSettings, input: StartInput) {
     data: eventData(t, {visitor: {name: identity.name, email: identity.email}, page: input.page, away: availability.away, spam: received.spam}),
   });
   if (!received.spam && t.contactId) {
-    await notifyWatchers(db, {contactId: t.contactId, dealId: t.dealId}, {type: 'chat', title: (name) => `${name} started a website chat`, body: input.text.slice(0, 300), link: conversationLink(t.id), except: t.assigneeId ? [t.assigneeId] : []});
+    await notifyWatchers(db, {contactId: t.contactId, dealId: t.dealId}, {type: 'chat', title: (name) => `${name} started a website chat`, body: text.slice(0, 300), link: conversationLink(t.id), except: t.assigneeId ? [t.assigneeId] : []});
   }
   return t;
 }

@@ -2,11 +2,12 @@ import {Hono} from 'hono';
 import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
-import {toPublicForm, type PublicForm} from '@/lib/forms';
+import {pickEnding, toPublicForm, type Ending, type PublicForm} from '@/lib/forms';
 import {publicOrigin} from '../kit/config';
 import type {Db} from '../kit/db';
 import type {AppEnv} from '../kit/guards';
-import {closedReason, fileToken, formFields, formSettings, submitForm} from '../lib/form-submit';
+import {closedReason, endingOf, fileToken, formFields, formSettings, submitForm} from '../lib/form-submit';
+import {onceOf, orEarlier} from '../lib/once';
 import {ipKey, rateLimit} from '../lib/rate-limit';
 import {notFound, valid} from '../lib/http';
 import {checkUpload, completeUpload, startUpload, uploadBody} from '../lib/uploads';
@@ -99,16 +100,33 @@ export const formsPublic = new Hono<AppEnv>()
       const meta = Object.fromEntries(
         Object.entries(body.meta).filter(([k]) => ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'referrer', 'page'].includes(k)),
       );
-      const result = await submitForm(db, form, {
-        answers: body.answers,
-        meta,
-        honeypot: body.hp,
-        startedAt: body.startedAt,
-        ip: ip((n) => c.req.header(n)),
-        userAgent: c.req.header('user-agent') ?? null,
-        origin: publicOrigin(c.req.raw),
-      });
-      const {title, message, redirectUrl} = result.ending;
+      // The browser's key for this attempt: a retry after a lost answer saves nothing twice and
+      // answers the same ending. Older pages send none and are saved as before, unprotected.
+      const once = onceOf(c.req.raw, `form:${form.id}`, {answers: body.answers, meta});
+      let ending: Pick<Ending, 'title' | 'message' | 'redirectUrl'>;
+      try {
+        const result = await submitForm(
+          db,
+          form,
+          {
+            answers: body.answers,
+            meta,
+            honeypot: body.hp,
+            startedAt: body.startedAt,
+            ip: ip((n) => c.req.header(n)),
+            userAgent: c.req.header('user-agent') ?? null,
+            origin: publicOrigin(c.req.raw),
+          },
+          once,
+        );
+        ending = result.ending;
+      } catch (error) {
+        // "Already responded", "that time is taken"… by this very attempt, sent before: its answer.
+        const first = await orEarlier<{id: string; endingId: string}>(db, once, error);
+        const settings = formSettings(form);
+        ending = endingOf(settings, first.endingId) ?? pickEnding(settings, formFields(form), {});
+      }
+      const {title, message, redirectUrl} = ending;
       return c.json({ok: true, ending: {title, message, redirectUrl: redirectUrl || null}});
     },
   );

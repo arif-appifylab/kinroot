@@ -7,6 +7,7 @@ import {publicOrigin} from '../kit/config';
 import type {Db} from '../kit/db';
 import type {AppEnv} from '../kit/guards';
 import {notFound, valid} from '../lib/http';
+import {orEarlier, onceOf} from '../lib/once';
 import {connectionLimits, rateLimit} from '../lib/rate-limit';
 import {bookingFromToken, cancelBooking, createBooking, manageToken, publicBooking, rescheduleBooking, type PublicBooking} from '../scheduling/bookings';
 import {linkByPath, linkSlots, toPublicLink} from '../scheduling/links';
@@ -75,8 +76,8 @@ export const bookingPublic = new Hono<AppEnv>()
   .post(
     '/booking/book',
     valid('json', z.object({
-      linkId: z.string(),
-      start: z.string(),
+      linkId: z.string().max(40),
+      start: z.string().max(40),
       duration: z.number().int().min(5).max(480),
       timezone: z.string().max(80),
       name: z.string().trim().min(1, 'is required').max(200),
@@ -93,14 +94,25 @@ export const bookingPublic = new Hono<AppEnv>()
       const body = c.req.valid('json');
       // Honeypot filled or an inhumanly fast submit.
       if (body.hp || (body.startedAt && Date.now() - body.startedAt < 1500)) throw new HTTPException(400, {message: 'Please try again.'});
-      // It sends an invitation to the address typed in: bounded per connection (docs/agent/security.md A06).
-      await rateLimit(db, await connectionLimits((n) => c.req.header(n), 'booking:book', 5, 20), 'You have booked several meetings in a short time. Please wait a while and try again.');
-      const link = await db.bookingLink.findUnique({where: {id: body.linkId}});
-      if (!link) throw notFound('Booking link');
+      // One key per booking attempt, the same on every retry (docs/agent/orders-and-stock.md): a
+      // retry after a lost answer gets the same booking, never a second one.
+      const once = onceOf(c.req.raw, `booking:${body.linkId}`, {start: body.start, duration: body.duration, email: body.email.trim().toLowerCase()});
+      if (!once) throw new HTTPException(400, {message: 'This booking could not be sent safely. Please reload the page and try again.'});
       const origin = publicOrigin(c.req.raw);
-      const booking = await createBooking(db, link, {...body, origin});
-      const full = (await bookingFromToken(db, await manageToken(booking.id)))!;
-      return c.json({booking: await publicBooking(db, full, origin), token: await manageToken(booking.id)}, 201);
+      let id: string;
+      try {
+        // It sends an invitation to the address typed in: bounded per connection (docs/agent/security.md A06).
+        await rateLimit(db, await connectionLimits((n) => c.req.header(n), 'booking:book', 5, 20), 'You have booked several meetings in a short time. Please wait a while and try again.');
+        const link = await db.bookingLink.findUnique({where: {id: body.linkId}});
+        if (!link) throw notFound('Booking link');
+        id = (await createBooking(db, link, {...body, origin}, once)).id;
+      } catch (error) {
+        // "That time is taken" by this very attempt, sent before: its booking, as the first answer gave it.
+        id = (await orEarlier<{id: string}>(db, once, error)).id;
+      }
+      const full = await db.booking.findUnique({where: {id}, include: {link: true, host: true}});
+      if (!full) throw notFound('Booking');
+      return c.json({booking: await publicBooking(db, full, origin), token: await manageToken(id)}, 201);
     },
   )
 

@@ -2,6 +2,7 @@ import {useCallback, useEffect, useRef, useState} from 'react';
 
 import type {PublicChatConfig, VisitorConversation, VisitorMessage, VisitorSession} from '@/lib/chat';
 import {siteFetch} from '../../../platform/browser';
+import {sendAttempt} from '@/lib/attempt';
 import {putFile, type UploadGrant} from '../../../platform/files-browser';
 
 /**
@@ -42,8 +43,8 @@ export class ChatError extends Error {
  * Not the app's `api` client: a visitor is never sent to sign in. `siteFetch` carries the site's
  * CSRF token, which every write to the Site API needs (the visitor's chat runs on this site).
  */
-async function call<T>(path: string, body: unknown): Promise<T> {
-  const res = await siteFetch(`/site-api/crm/public/chat${path}`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+async function call<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
+  const res = await siteFetch(`/site-api/crm/public/chat${path}`, {method: 'POST', headers: {'content-type': 'application/json', ...headers}, body: JSON.stringify(body)});
   const data = (await res.json().catch(() => ({}))) as {error?: string};
   if (!res.ok) throw new ChatError(data.error ?? `Something went wrong (${res.status})`, res.status);
   return data as T;
@@ -242,7 +243,9 @@ export function useVisitorChat({meta, open, continueToken}: {meta: PageMeta; ope
     setSending(true);
     setError(null);
     try {
-      const r = await call<{session: VisitorSession}>('/start', {...body(), token: tokenRef.current, text: input.text, files: input.files.map((f) => ({id: f.id, token: f.token})), name: input.name || null, email: input.email || null, hp: input.hp, startedAt: input.startedAt});
+      const sent = {token: tokenRef.current, text: input.text, files: input.files.map((f) => ({id: f.id, token: f.token})), name: input.name || null, email: input.email || null};
+      // One key per first message sent: a retry after a lost answer starts no second conversation.
+      const r = await sendAttempt(['chat-start', sent], (headers) => call<{session: VisitorSession}>('/start', {...body(), ...sent, hp: input.hp, startedAt: input.startedAt}, headers));
       adopt(r.session);
       return true;
     } catch (e) {

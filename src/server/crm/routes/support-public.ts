@@ -13,14 +13,18 @@ import {notify} from '../lib/notify';
 import {richBody, richHtml} from '../lib/rich-text';
 import {
   contactForEmail,
-  createTicket,
   customerReply,
   getTicketSettings,
+  prepareTicket,
   sendPortalLink,
   ticketEvent,
+  ticketCreated,
   ticketFromCsatToken,
   ticketLink,
 } from '../lib/tickets';
+import {onceOf, runOnce} from '../lib/once';
+import {sign} from '../kit/crypto';
+import type {Ticket} from '../../../generated/prisma/client';
 import {publicFileUrl} from './files';
 import {strings} from '../lib/json-list';
 
@@ -134,20 +138,41 @@ export const supportPublic = new Hono<AppEnv>()
       const email = session?.email ?? body.email;
       if (!email) throw new HTTPException(400, {message: 'Enter your email address'});
       const settings = await getTicketSettings(db);
-      const contact = session?.contact ?? (await contactForEmail(db, email, body.name));
-      const ticket = await createTicket(db, {
+      const input = {
         subject: body.subject,
         description: desc.text,
         descriptionHtml: desc.html,
         category: body.category && settings.categories.includes(body.category) ? body.category : null,
-        source: 'PORTAL',
-        contactId: contact.id,
+        source: 'PORTAL' as const,
+      };
+      // One request per attempt (the browser's idempotency key, scoped to the sender's address,
+      // kept as a keyed hash): a retry after a lost answer opens no second request, makes no second
+      // contact and sends no second email. Older pages send no key and are saved as before.
+      const once = onceOf(c.req.raw, `support:${await sign(`support:${email.trim().toLowerCase()}`)}`, {
+        subject: body.subject,
+        description: body.description,
+        descriptionHtml: body.descriptionHtml ?? null,
+        category: body.category ?? null,
+        name: body.name ?? null,
       });
-      // Signed-in customers see it right away; everyone gets a confirmation by email.
-      await sendPortalLink(db, contact.id, publicOrigin(c.req.raw), ticket);
+      // The request is saved first; its contact (found or made from the address) is linked right after.
+      const prepared = await prepareTicket(db, input);
+      const made: {row?: Ticket} = {};
+      const {value} = await runOnce(db, once, async (tx) => {
+        made.row = await tx.ticket.create({data: prepared.data});
+        return {id: made.row.id, number: made.row.number};
+      });
+      if (made.row) {
+        const contact = session?.contact ?? (await contactForEmail(db, email, body.name));
+        const companyId = (await db.contactCompany.findFirst({where: {contactId: contact.id}, orderBy: {isPrimary: 'desc'}, select: {companyId: true}}))?.companyId ?? null;
+        const saved = await db.ticket.update({where: {id: made.row.id}, data: {contactId: contact.id, companyId}});
+        const ticket = await ticketCreated(db, saved, {...input, contactId: contact.id}, prepared.settings);
+        // Signed-in customers see it right away; everyone gets a confirmation by email.
+        await sendPortalLink(db, contact.id, publicOrigin(c.req.raw), ticket);
+      }
       // Signed in with a confirmed address: the request is theirs to see now (its contact has that address).
       const signedIn = !!session;
-      return c.json({ok: true, signedIn, number: signedIn ? ticket.number : undefined}, 201);
+      return c.json({ok: true, signedIn, number: signedIn ? value.number : undefined}, 201);
     },
   )
 

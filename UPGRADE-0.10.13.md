@@ -44,8 +44,8 @@ upgraded before any other work. Nothing reaches visitors until a Publish, and th
 | [x] | U-15 | **No `String[]` columns** (new database rule): Prisma's live driver mishandles them: writes fail with `malformed array literal`, reads crash. Kinroot has **22**: tags on contacts, companies, deals and tickets; email `to`/`cc`/`bcc`; file ids on messages, ticket messages and the recycle bin; custom field options; webhook events; goal kinds; booking hosts; calendar ids; duplicate reasons; import headers; export columns; report schedule users / emails / delivered; meeting attendees. Move each to `Json` (opaque lists) or a related table (tags, which are filtered and grouped), with a data-keeping migration, and update every query that uses them (segments, filters, reports' tag grouping, automations and scoring on tags, imports / exports, bulk tag). Also stop binding JS arrays as `::text[]` parameters in raw SQL (use `Prisma.join`). | **The CRM would break on the live site** wherever these are written or read. Our local Postgres doesn't show it. | L |
 | [ ] | U-16 | **Bookings: once, and never twice** (`orders-and-stock.md`): the database refuses two bookings of the same host at overlapping times (a constraint or a short lock, not a read-then-write), and the booking form sends an idempotency key so a double click or retry books once. A test books the same slot many times at once. | Today two visitors can book the same slot at the same moment, and a double click can book twice. | M |
 | [ ] | U-17 | **Repeatable public submissions** (support request, form response, chat start): an idempotency key from the browser so a retry after a lost connection doesn't create a second one (the new database connection never re-sends a write, so the browser retries). | Duplicate tickets, responses or chats. | S–M |
-| [ ] | U-18 | **Page progress bar** (0.10.12): the template's `src/lib/page-progress.ts` (the thin bar in the site's colour while the next page loads) in Kinroot's router and public pages. Optional in the guide; the UI rules now say it's built in and not to add another. | Same feel as the template, in Kinroot's colours. | S |
-| [ ] | U-19 | **Caching guidance** (every query is now billed, a cache read isn't): review Kinroot's caches (brand, chat settings, website, and the settings caches the audit adds) against `cache.md` "How caches go wrong", and check every write clears them. | Aligns with audit P2-21 / P2-26. | S |
+| [x] | U-18 | **Page progress bar** (0.10.12): the template's `src/lib/page-progress.ts` (the thin bar in the site's colour while the next page loads) in Kinroot's router and public pages. Optional in the guide; the UI rules now say it's built in and not to add another. | Same feel as the template, in Kinroot's colours. | S |
+| [x] | U-19 | **Caching guidance** (every query is now billed, a cache read isn't): review Kinroot's caches (brand, chat settings, website, and the settings caches the audit adds) against `cache.md` "How caches go wrong", and check every write clears them. | Aligns with audit P2-21 / P2-26. | S |
 
 ## How U-10 to U-14 were done
 - **U-10**: `src/server/crm/lib/owner-account.ts`. On the server the owner's `User.email` is a stand-in
@@ -67,6 +67,17 @@ upgraded before any other work. Nothing reaches visitors until a Publish, and th
   place by `20261104090000_no_string_arrays` (data kept); tags have GIN indexes. Raw SQL binds lists one
   value at a time (`IN (…)`), and `tests/no-array-columns.test.ts` stops either from coming back. The API
   still sends and takes plain lists. Bulk tag / untag is one statement (P2-23, tags part).
+
+- **U-18**: the template's `page-progress.ts`, in Kinroot's brand colour (`--primary`): the CRM's router
+  (`CrmApp.tsx`) and every public page (`CrmPublic.astro`).
+- **U-19**: the eight Site Cache keys checked against `cache.md` › How caches go wrong. Two fixes:
+  - `crm:cal-busy:*` was keyed by the exact range, which starts at "now" and comes from the visitor, so it
+    almost never hit and visitors could mint keys: now keyed by whole UTC days and filtered per request.
+  - `crm:public-website` was cleared only by the settings route; `ensureWebsiteDefaults` (setup) saved
+    without clearing it. The clear is now inside `saveWebsiteSettings`.
+  Kept as they are: `crm:settings` and `crm:brand` (a day, cleared by every save), `crm:inbox-settings`,
+  chat settings (10 min, cleared on save), chat "agent online" (60 s), scoring and ticket settings (cleared
+  on save), the public website (5 min; forms and links it names show within 5 minutes).
 
 ## Not needed for Kinroot
 - **List pages** (`src/lib/list-page.ts`, 0.10.13): for long public lists (jobs, products). Kinroot has no public lists, and its CRM lists keep their page numbers (your decision today).

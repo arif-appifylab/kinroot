@@ -1,4 +1,5 @@
 import type {Prisma} from '../../../generated/prisma/client';
+import {cache} from '../../../platform/cache';
 import {defaultSettings, FORM_TEMPLATES, slugify} from '@/lib/forms';
 import {defaultAvailability, defaultQuestions} from '@/lib/scheduling';
 import {DEFAULT_WEBSITE, type PublicWebsite, type WebsiteSettings} from '@/lib/website';
@@ -17,9 +18,18 @@ export async function getWebsiteSettings(db: Db): Promise<WebsiteSettings> {
   return {...DEFAULT_WEBSITE, ...((row?.value ?? {}) as Partial<WebsiteSettings>)};
 }
 
+/**
+ * The public website's answer (`GET /public/website`), kept 5 minutes: read by every public page,
+ * cleared on every save here. It also shows forms and booking links by name, which their own screens
+ * change without clearing it: that is the 5 minutes' leeway.
+ */
+export const WEBSITE_CACHE_KEY = 'crm:public-website';
+
 export async function saveWebsiteSettings(db: Db, next: WebsiteSettings) {
   const value = next as unknown as Prisma.InputJsonValue;
   await db.setting.upsert({where: {key: KEY}, create: {key: KEY, value}, update: {value}});
+  // Every save path clears it (the settings screen, and `ensureWebsiteDefaults` at setup).
+  await cache.del(WEBSITE_CACHE_KEY);
   return next;
 }
 

@@ -3,6 +3,7 @@ import {ArrowLeft, CalendarCheck2, CalendarPlus, Clock, Download, Loader2, MapPi
 import {useRef, useState, type ReactNode} from 'react';
 
 import {api} from '@/lib/api';
+import {sendAttempt} from '@/lib/attempt';
 import {durationLabel, whenIn, type LocationType, type PublicBookingLink} from '@/lib/scheduling';
 import {cn} from '@/lib/utils';
 
@@ -172,7 +173,8 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
     setBusy(true);
     setError(null);
     try {
-      const r = await api.post<{booking: BookedMeeting; token: string}>('/public/booking/book', {
+      // One key per attempt at this time: a retry after a lost answer gets the same booking, never a second.
+      const r = await sendAttempt(['booking', link.id, start, duration], (headers) => api.post<{booking: BookedMeeting; token: string}>('/public/booking/book', {
         linkId: link.id,
         start,
         duration,
@@ -185,7 +187,7 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
         source: window.location.pathname.startsWith('/book/') && !/[?&]embed=1/.test(window.location.search) ? 'page' : 'widget',
         hp,
         startedAt: startedAt.current,
-      });
+      }, headers));
       f.reset();
       setBooked(r);
       setStep('done');

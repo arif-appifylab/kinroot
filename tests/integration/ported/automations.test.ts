@@ -1,5 +1,7 @@
 // Ported from Kinroot's scripts/test-automations.mjs
 // Covers automations end to end: event triggers per module, conditions, if / else, every step, waits, date and inactivity triggers, manual and segment runs, dry runs, loops, re-enrollment, retries, history, permissions.
+import {randomUUID} from 'node:crypto';
+
 import {afterAll, beforeAll, describe, expect, it} from 'vitest';
 
 import {automationTick} from '../../../src/server/crm/lib/automations';
@@ -282,7 +284,8 @@ describe.skipIf(!DATABASE_URL)('Ported: automations (integration, real Postgres)
     const slots = must<{slots: string[]}>(await owner.get(api(`/public/booking/slots?linkId=${link.id}&duration=30&from=${encodeURIComponent(new Date().toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 21 * DAY).toISOString())}`)), 'slots').slots;
     expect(slots.length).toBeGreaterThan(0);
     const visitor = new Browser(app, '198.51.100.32');
-    must(await visitor.post(api('/public/booking/book'), {linkId: link.id, start: slots[0], duration: 30, timezone: 'UTC', name: 'Booker Tester', email: `booker@${MAIL}`, startedAt: Date.now() - 10_000}), 'book');
+    // Bookings carry the widget's idempotency key (docs/agent/orders-and-stock.md).
+    must(await visitor.request('POST', api('/public/booking/book'), {linkId: link.id, start: slots[0], duration: 30, timezone: 'UTC', name: 'Booker Tester', email: `booker@${MAIL}`, startedAt: Date.now() - 10_000}, {'idempotency-key': randomUUID()}), 'book');
     expect((await db.deal.findUniqueOrThrow({where: {id: bookerDeal.id}})).stageId).toBe(stageC.id);
     const moved = await db.activity.findFirst({where: {dealId: bookerDeal.id, type: 'stage_changed'}, orderBy: {createdAt: 'desc'}});
     expect((moved?.data as {automation?: {id?: string}})?.automation?.id).toBe(a10.id);

@@ -7,10 +7,13 @@ import {CHAT_LIMITS, CHAT_UPLOAD_TYPES, hostOf, type ChatSettings, type VisitorS
 import {publicOrigin} from '../kit/config';
 import type {AppContext, AppEnv} from '../kit/guards';
 import {notFound, valid} from '../lib/http';
+import {onceOf, orEarlier, runOnce} from '../lib/once';
 import {ipKey, rateLimit} from '../lib/rate-limit';
 import {
   chatAvailability,
   chatFileToken,
+  chatOpened,
+  chatPlacement,
   claimFiles,
   currentConversation,
   embedAllowed,
@@ -19,8 +22,9 @@ import {
   identifyVisitor,
   identityFromToken,
   newVisitor,
+  openChat,
+  pendingFiles,
   publicChatConfig,
-  startChat,
   touchVisitor,
   visitorIdFromToken,
   visitorMessage,
@@ -188,12 +192,41 @@ export const chatPublic = new Hono<AppEnv>()
       if (body.token && !identity) throw new HTTPException(401, {message: 'Your chat session expired. Reload the page to start again.'});
       await rateLimit(db, await limits(c, identity, 'start'), 'You have started several chats in a short time. Please wait a while and try again.');
       if (bot(body.hp, body.startedAt)) throw new HTTPException(400, {message: 'Please try again'});
-      identity = identity ? await touchVisitor(db, identity, visitorMeta(c, body.meta), {force: true}) : await newVisitor(db, visitorMeta(c, body.meta));
-      if (body.name || body.email) identity = await identifyVisitor(db, identity, {name: body.name, email: body.email || null});
-      const fileIds = await claimFiles(db, identity.id, body.files);
-      if (!body.text.trim() && !fileIds.length) throw nothing();
-      await startChat(db, s, {identity, text: body.text.trim(), fileIds, page: body.meta.page ?? null});
-      return c.json({session: await session(c, identity)}, 201);
+      const m = visitorMeta(c, body.meta);
+      const text = body.text.trim();
+      const page = body.meta.page ?? null;
+      const who = {name: body.name, email: body.email || null};
+      // The widget's key for this attempt: a retry after a lost answer starts no second conversation
+      // and answers the same visitor (a new visitor's token is signed again from the saved visitor,
+      // never stored). Scoped to the visitor; a new one has nothing else to name. Older widgets send
+      // no key and start as before.
+      const once = onceOf(c.req.raw, identity ? `chat:${identity.id}` : 'chat:new', {text, files: body.files.map((f) => f.id), ...who, page});
+      let opened: {identityId: string; threadId: string; messageId: string};
+      let first = false;
+      try {
+        if (identity) {
+          identity = await touchVisitor(db, identity, m, {force: true});
+          if (!text && !(await pendingFiles(db, identity.id, body.files)).length) throw nothing();
+        } else if (!text) throw nothing(); // a new visitor has no files yet
+        const place = await chatPlacement(db, s, identity?.contactId ?? null);
+        const visitor = identity;
+        const done = await runOnce(db, once, (tx) => openChat(tx, place, {identity: visitor, text, files: body.files, page}));
+        opened = done.value;
+        first = !done.replayed;
+      } catch (error) {
+        // "Write a message first" because this very attempt already sent its files: its conversation.
+        opened = await orEarlier<typeof opened>(db, once, error);
+      }
+      let visitor = identity?.id === opened.identityId ? identity : await db.channelIdentity.findFirst({where: {id: opened.identityId, channel: 'chat'}});
+      if (!visitor) throw expired();
+      if (first) {
+        // Once, by the request that started it: where a new visitor is, and who they said they are
+        // (the contact is matched or made here, so a repeat never makes a second one).
+        if (!identity) visitor = await touchVisitor(db, visitor, m, {force: true});
+        if (who.name || who.email) visitor = await identifyVisitor(db, visitor, who);
+        await chatOpened(db, s, opened, visitor, {page});
+      }
+      return c.json({session: await session(c, visitor)}, 201);
     },
   )
 

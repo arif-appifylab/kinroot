@@ -347,3 +347,32 @@ body[data-scroll-locked] {
   overflow: hidden !important;
   overscroll-behavior: contain;
 }
+
+/* The thin bar while the next page or screen loads (src/lib/page-progress.ts), in the brand colour. */
+.page-progress {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 9999;
+  height: 3px;
+  background: var(--primary);
+  opacity: 0;
+  pointer-events: none;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease;
+}
+[dir='rtl'] .page-progress {
+  transform-origin: 100% 50%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-progress {
+    transition: none;
+  }
+}
+@media print {
+  .page-progress {
+    display: none;
+  }
+}

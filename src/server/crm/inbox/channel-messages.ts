@@ -37,24 +37,32 @@ const fromAddress = (i: Pick<ChannelIdentity, 'email'>) => i.email ?? '';
 
 export type ReceiveInput = {text: string; fileIds?: string[]; data?: Prisma.InputJsonObject; externalId?: string | null; at?: Date};
 
-export async function receiveChannelMessage(db: Db, thread: EmailThread, identity: ChannelIdentity, input: ReceiveInput, ctx?: InboxContext) {
-  const at = input.at ?? new Date();
+/** The row of a message from outside (`receiveChannelMessage` writes it; a caller may write it first, in its own transaction). */
+export const inboundMessageData = (
+  thread: Pick<EmailThread, 'id' | 'channel' | 'contactId'>,
+  identity: Pick<ChannelIdentity, 'id' | 'contactId'>,
+  input: ReceiveInput,
+  at: Date,
+) =>
+  ({
+    threadId: thread.id,
+    channel: thread.channel,
+    direction: 'INBOUND',
+    status: 'RECEIVED',
+    text: input.text,
+    fileIds: input.fileIds ?? [],
+    identityId: identity.id,
+    contactId: identity.contactId ?? thread.contactId,
+    externalId: input.externalId ?? null,
+    data: input.data ?? {},
+    createdAt: at,
+  }) satisfies Prisma.ChannelMessageUncheckedCreateInput;
+
+/** `stored`: the message is already saved (a website chat's first message, written with its conversation); only the rest runs. */
+export async function receiveChannelMessage(db: Db, thread: EmailThread, identity: ChannelIdentity, input: ReceiveInput, ctx?: InboxContext, stored?: ChannelMessage) {
+  const at = stored?.createdAt ?? input.at ?? new Date();
   const waiting = !!thread.waitingSince; // a reply nobody answered yet: the assignee already knows
-  const message = await db.channelMessage.create({
-    data: {
-      threadId: thread.id,
-      channel: thread.channel,
-      direction: 'INBOUND',
-      status: 'RECEIVED',
-      text: input.text,
-      fileIds: input.fileIds ?? [],
-      identityId: identity.id,
-      contactId: identity.contactId ?? thread.contactId,
-      externalId: input.externalId ?? null,
-      data: input.data ?? {},
-      createdAt: at,
-    },
-  });
+  const message = stored ?? (await db.channelMessage.create({data: inboundMessageData(thread, identity, input, at)}));
   const updated = await db.emailThread.update({where: {id: thread.id}, data: {lastMessageAt: at, unread: true, contactTypingAt: null}});
   const routed = await onInbound(db, updated, {fromEmail: fromAddress(identity), sentAt: at, blocked: !!identity.blockedAt}, ctx);
   // The assignee hears about a new turn in the conversation (not every line typed while they are answering).

@@ -20,6 +20,7 @@ import {BookingSlotField} from '../booking/slot-field';
 import {Button} from '../ui/button';
 import {Checkbox, Input, NativeSelect, Textarea} from '../ui/form';
 import {siteFetch} from '../../../platform/browser';
+import {sendAttempt} from '@/lib/attempt';
 import {putFile, type UploadGrant} from '../../../platform/files-browser';
 
 type Uploaded = {id: string; name: string; size: number; token?: string};
@@ -425,13 +426,17 @@ export function FormRenderer({
     if (ref) meta.referrer = ref.slice(0, 1000);
     const payload = Object.fromEntries(all.map((f) => [f.id, answers[f.id] ?? null]));
     try {
-      const res = await siteFetch(`/site-api/crm/public/forms/${form.slug}/submit`, {
-        method: 'POST',
-        headers: {'content-type': 'application/json'},
-        body: JSON.stringify({answers: payload, meta, hp, startedAt: startedAt.current}),
+      // One key per response sent: a retry after a lost answer saves nothing twice.
+      const data = await sendAttempt(['form', form.slug, payload, meta], async (headers) => {
+        const res = await siteFetch(`/site-api/crm/public/forms/${form.slug}/submit`, {
+          method: 'POST',
+          headers: {'content-type': 'application/json', ...headers},
+          body: JSON.stringify({answers: payload, meta, hp, startedAt: startedAt.current}),
+        });
+        const body = (await res.json().catch(() => ({}))) as {ending?: Ending; error?: string};
+        if (!res.ok || !body.ending) throw Object.assign(new Error(body.error ?? 'Something went wrong. Please try again.'), {status: res.status});
+        return body as {ending: Ending};
       });
-      const data = (await res.json().catch(() => ({}))) as {ending?: Ending; error?: string};
-      if (!res.ok || !data.ending) throw new Error(data.error ?? 'Something went wrong. Please try again.');
       setEnding(data.ending);
       setStatus('done');
       onSubmitted?.(data.ending);

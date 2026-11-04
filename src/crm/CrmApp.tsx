@@ -3,6 +3,7 @@ import {createRouter, RouterProvider} from '@tanstack/react-router';
 import {Loader2} from 'lucide-react';
 import {useEffect, useState} from 'react';
 
+import {finishProgress, installPageProgress, startProgress} from '../lib/page-progress';
 import {siteFetch} from '../platform/browser';
 import {routeTree} from './routeTree.gen';
 
@@ -24,6 +25,14 @@ const router = createRouter({
   scrollRestoration: true,
   defaultPreload: 'intent',
 });
+
+// The thin bar in the brand colour while the next screen loads (src/lib/page-progress.ts): a
+// screen whose data is already cached finishes before the bar's 150 ms delay, so it never flashes.
+installPageProgress();
+router.subscribe('onBeforeLoad', (event) => {
+  if (event.pathChanged) startProgress();
+});
+router.subscribe('onResolved', finishProgress);
 
 declare module '@tanstack/react-router' {
   interface Register {
