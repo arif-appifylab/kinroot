@@ -453,21 +453,21 @@ enum LifecycleStage {
 
 model Company {
   id             String    @id @default(cuid())
-  name           String
-  domain         String?
-  industry       String?
-  size           String?
-  type           String? // Prospect, Partner, Reseller, Vendor, Other…
+  name           String @db.VarChar(200)
+  domain         String? @db.VarChar(253)
+  industry       String? @db.VarChar(100)
+  size           String? @db.VarChar(50)
+  type           String? @db.VarChar(100) // Prospect, Partner, Reseller, Vendor, Other…
   employees      Int?
   annualRevenue  Float?
-  timezone       String?
+  timezone       String? @db.VarChar(100)
   website        String? @db.VarChar(2000)
-  phone          String?
-  address        String?
-  city           String?
-  state          String?
-  postalCode     String?
-  country        String?
+  phone          String? @db.VarChar(50)
+  address        String? @db.VarChar(300)
+  city           String? @db.VarChar(100)
+  state          String? @db.VarChar(100)
+  postalCode     String? @db.VarChar(30)
+  country        String? @db.VarChar(100)
   linkedin       String? @db.VarChar(2000)
   description    String?
   tags           Json  @default("[]")
@@ -495,23 +495,27 @@ model Company {
   @@index([createdAt(sort: Desc), id(sort: Desc)]) // list default order, newest first (P2-24)
   @@index([lastActivityAt]) // sort by last activity; "no activity for N days" automation trigger (P2-24)
   @@index([tags(ops: JsonbPathOps)], type: Gin) // tag filters (@> containment)
+  // Trigram indexes for search (⌘K and the lists' `q`: ILIKE '%term%'; migration 20261104120000_crm_search_trigram)
+  @@index([name(ops: raw("gin_trgm_ops"))], type: Gin, map: "Company_name_trgm_idx")
+  @@index([domain(ops: raw("gin_trgm_ops"))], type: Gin, map: "Company_domain_trgm_idx")
+  @@index([industry(ops: raw("gin_trgm_ops"))], type: Gin, map: "Company_industry_trgm_idx")
 }
 
 model Contact {
   id             String         @id @default(cuid())
-  firstName      String
-  lastName       String?
-  email          String?
-  phone          String?
-  title          String?
+  firstName      String @db.VarChar(100)
+  lastName       String? @db.VarChar(100)
+  email          String? @db.VarChar(254)
+  phone          String? @db.VarChar(50)
+  title          String? @db.VarChar(200)
   linkedin       String? @db.VarChar(2000)
   lifecycleStage LifecycleStage @default(LEAD)
-  leadStatus     String?
-  buyingRole     String?
+  leadStatus     String? @db.VarChar(100)
+  buyingRole     String? @db.VarChar(100)
   emailOptOut    Boolean        @default(false)
-  city           String?
-  country        String?
-  source         String?
+  city           String? @db.VarChar(100)
+  country        String? @db.VarChar(100)
+  source         String? @db.VarChar(100)
   tags           Json       @default("[]")
   custom         Json           @default("{}")
   ownerId        String?
@@ -552,6 +556,12 @@ model Contact {
   @@index([createdAt(sort: Desc), id(sort: Desc)]) // list default order, newest first (P2-24)
   @@index([lastActivityAt]) // sort by last activity; "no activity for N days" automation trigger (P2-24)
   @@index([tags(ops: JsonbPathOps)], type: Gin) // tag filters (@> containment)
+  // Trigram indexes for search (⌘K and the lists' `q`: ILIKE '%term%'; migration 20261104120000_crm_search_trigram)
+  @@index([firstName(ops: raw("gin_trgm_ops"))], type: Gin, map: "Contact_firstName_trgm_idx")
+  @@index([lastName(ops: raw("gin_trgm_ops"))], type: Gin, map: "Contact_lastName_trgm_idx")
+  @@index([email(ops: raw("gin_trgm_ops"))], type: Gin, map: "Contact_email_trgm_idx")
+  @@index([phone(ops: raw("gin_trgm_ops"))], type: Gin, map: "Contact_phone_trgm_idx")
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "Contact_title_trgm_idx")
 }
 
 model ContactCompany {
@@ -604,7 +614,7 @@ enum DealStatus {
 
 model Deal {
   id                String     @id @default(cuid())
-  title             String
+  title             String @db.VarChar(200)
   value             Float      @default(0)
   currency          String     @default("USD")
   pipelineId        String
@@ -612,7 +622,7 @@ model Deal {
   stageId           String
   stage             Stage      @relation(fields: [stageId], references: [id], onDelete: Restrict)
   status            DealStatus @default(OPEN)
-  lostReason        String?
+  lostReason        String? @db.VarChar(200)
   expectedCloseDate DateTime?
   closedAt          DateTime?
   position          Float      @default(0) // order inside a kanban column
@@ -622,8 +632,8 @@ model Deal {
   owner             Member?    @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   tags              Json   @default("[]")
   custom            Json       @default("{}")
-  type              String? // New business | Existing business
-  priority          String? // Low | Medium | High
+  type              String? @db.VarChar(100) // New business | Existing business
+  priority          String? @db.VarChar(50) // Low | Medium | High
   stageEnteredAt    DateTime   @default(now())
   lastActivityAt    DateTime   @default(now())
   createdAt         DateTime   @default(now())
@@ -649,6 +659,8 @@ model Deal {
   @@index([createdAt(sort: Desc), id(sort: Desc)]) // list default order, newest first (P2-24)
   @@index([lastActivityAt]) // sort by last activity; "no activity for N days" automation trigger (P2-24)
   @@index([tags(ops: JsonbPathOps)], type: Gin) // tag filters (@> containment)
+  // Trigram indexes for search (⌘K and the lists' `q`: ILIKE '%term%'; migration 20261104120000_crm_search_trigram)
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "Deal_title_trgm_idx")
 }
 
 // Every company on a deal. Deal.companyId mirrors the primary one.
@@ -708,6 +720,8 @@ model Note {
   @@index([contactId])
   @@index([companyId])
   @@index([dealId])
+  // Trigram indexes for search (⌘K and the lists' `q`: ILIKE '%term%'; migration 20261104120000_crm_search_trigram)
+  @@index([body(ops: raw("gin_trgm_ops"))], type: Gin, map: "Note_body_trgm_idx")
 }
 
 enum TaskType {
@@ -1427,8 +1441,8 @@ enum FormStatus {
 // so a form is edited and published as one document.
 model Form {
   id               String     @id @default(cuid())
-  name             String
-  slug             String     @unique
+  name             String @db.VarChar(120)
+  slug             String @db.VarChar(60) @unique
   status           FormStatus @default(DRAFT)
   fields           Json       @default("[]")
   settings         Json       @default("{}")
@@ -1639,6 +1653,8 @@ model Ticket {
   @@index([dealId])
   @@index([lastMessageAt])
   @@index([tags(ops: JsonbPathOps)], type: Gin) // tag filters (@> containment)
+  // Trigram indexes for search (⌘K and the lists' `q`: ILIKE '%term%'; migration 20261104120000_crm_search_trigram)
+  @@index([subject(ops: raw("gin_trgm_ops"))], type: Gin, map: "Ticket_subject_trgm_idx")
 }
 
 // The ticket thread: public replies (emailed), internal notes and events
@@ -1697,7 +1713,7 @@ model BookingLink {
   userId       String? // owner (personal) or creator (team)
   user         Member?  @relation(fields: [userId], references: [id], onDelete: SetNull)
   hostIds      Json @default("[]") // team links: users in the rotation
-  slug         String
+  slug         String @db.VarChar(60)
   name         String @db.VarChar(120)
   description  String?
   durations    Json    @default("[30]") // minutes; the first one is preselected

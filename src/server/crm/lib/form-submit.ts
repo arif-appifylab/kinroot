@@ -31,7 +31,8 @@ import {createTicket} from './tickets';
 import {formConversation} from '../inbox/forms';
 import {bookFormSlots, checkFormSlots} from '../scheduling/form-booking';
 import {strings} from './json-list';
-import {httpUrl} from './http';
+import {clip, COMPANY_LIMITS, CONTACT_LIMITS, cut, DEAL_LIMITS} from '@/lib/record-limits';
+import {fieldError, httpUrl} from './http';
 import {lockFor, runOnce, type Once} from './once';
 
 export const formSettings = (form: Pick<Form, 'settings'>): FormSettings => ({...defaultSettings(), ...(form.settings as Partial<FormSettings>)});
@@ -141,7 +142,7 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput, once: O
   for (const f of active) {
     if (f.type === 'hidden') continue;
     const error = validateField(f, answers[f.id]);
-    if (error) throw new HTTPException(400, {message: `${f.label}: ${error}`});
+    if (error) throw fieldError(f.id, error, 400, `${f.label}: ${error}`);
   }
   const stored: StoredAnswer[] = active.filter((f) => !isEmpty(answers[f.id])).map((f) => ({fieldId: f.id, label: f.label, type: f.type, value: answers[f.id]!}));
 
@@ -179,6 +180,9 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput, once: O
       else if (entity === 'deal' && prop === 'value' && !Number.isNaN(Number(v))) dealValue = Number(v);
     }
   }
+  // Answers can be longer than the contact's and company's columns (a long "Job title" answer): cut to them.
+  Object.assign(contactData, clip(contactData, CONTACT_LIMITS));
+  Object.assign(company, clip(company, COMPANY_LIMITS));
   const email = (contactData.email as string | undefined) ?? null;
   // Booking slots are checked before anything is written.
   const bookings = await checkFormSlots(db, active, answers, email);
@@ -245,12 +249,12 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput, once: O
         await logActivity(db, {type: 'field_changed', title: `Updated from ${form.name}`, contactId: contact.id, data: {changes, source: {kind: 'form', name: form.name}} as Prisma.InputJsonValue});
       }
     } else {
-      const source = settings.contactSource?.trim() || `Form: ${form.name}`;
+      const source = cut(settings.contactSource?.trim() || `Form: ${form.name}`, CONTACT_LIMITS.source);
       const customValue = Object.keys(custom).length ? await cleanCustom(db, 'CONTACT', custom).catch(() => undefined) : undefined;
       contact = await db.contact.create({
         data: {
           ...(contactData as Prisma.ContactUncheckedCreateInput),
-          firstName: (contactData.firstName as string | undefined) || email?.split('@')[0] || 'Unknown',
+          firstName: cut((contactData.firstName as string | undefined) || email?.split('@')[0] || 'Unknown', CONTACT_LIMITS.firstName),
           source,
           tags,
           lifecycleStage: stage ?? 'LEAD',
@@ -269,7 +273,7 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput, once: O
   if (contact) {
     const name = company.name as string | undefined;
     const website = company.website as string | undefined;
-    const domain = website ? website.replace(/^https?:\/\//i, '').replace(/^www\./, '').split('/')[0]!.toLowerCase() : workDomain(email);
+    const domain = cut(website ? website.replace(/^https?:\/\//i, '').replace(/^www\./, '').split('/')[0]!.toLowerCase() : workDomain(email), COMPANY_LIMITS.domain);
     let found = name
       ? await db.company.findFirst({where: {name: {equals: name, mode: 'insensitive'}}, select: {id: true}})
       : domain
@@ -302,7 +306,7 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput, once: O
       const title = mergeFields(settings.createDeal.title || `${form.name}: {{contact.full_name}}`, ctx).trim() || form.name;
       const deal = await db.deal.create({
         data: {
-          title: title.slice(0, 200),
+          title: cut(title, DEAL_LIMITS.title),
           value: dealValue ?? 0,
           pipelineId: pipeline.id,
           stageId,

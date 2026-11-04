@@ -1,6 +1,7 @@
 import type {Db} from '../kit/db';
 import {logActivity} from './activity';
 import {getSettings} from './settings';
+import {COMPANY_LIMITS, cut} from '@/lib/record-limits';
 
 /** Personal mailbox providers never identify an employer. */
 const FREE_DOMAINS = new Set([
@@ -33,7 +34,7 @@ export async function associateByDomain(db: Db, contactId: string, actorId?: str
   let company = await db.company.findFirst({where: {domain}, select: {id: true, name: true}});
   if (!company && settings.autoCreateCompanies) {
     company = await db.company.create({
-      data: {name: nameFromDomain(domain), domain, website: `https://${domain}`, ownerId: contact.ownerId, lastActivityAt: new Date()},
+      data: {name: cut(nameFromDomain(domain), COMPANY_LIMITS.name), domain: cut(domain, COMPANY_LIMITS.domain), website: `https://${domain}`.slice(0, 2000), ownerId: contact.ownerId, lastActivityAt: new Date()},
       select: {id: true, name: true},
     });
     await logActivity(db, {type: 'company_created', title: `Company created from ${domain}`, actorId, companyId: company.id});

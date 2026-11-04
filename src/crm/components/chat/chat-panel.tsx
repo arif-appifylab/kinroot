@@ -261,8 +261,8 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 onBlur={details.blur('email')}
-                aria-invalid={details.invalid('email') || undefined}
-                aria-describedby={details.invalid('email') ? `${uid}-email-error` : undefined}
+                aria-invalid={details.invalid('email') || chat.errorField === 'email' || undefined}
+                aria-describedby={details.invalid('email') ? `${uid}-email-error` : chat.errorField === 'email' ? `${uid}-chat-error` : undefined}
                 placeholder="you@example.com"
                 maxLength={200}
                 className={fieldClass}
@@ -282,7 +282,7 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
           </ul>
         )}
         {chat.error && (
-          <p role="alert" className="mb-2 flex items-start gap-2 rounded-lg bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
+          <p id={`${uid}-chat-error`} role="alert" className="mb-2 flex items-start gap-2 rounded-lg bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
             <span className="flex-1">{chat.error}</span>
             <button type="button" onClick={chat.clearError} aria-label="Dismiss" className="cursor-pointer"><X className="size-3.5" /></button>
           </p>
@@ -298,6 +298,8 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
             value={text}
             maxLength={5000}
             disabled={preview}
+            aria-invalid={chat.errorField === 'text' || undefined}
+            aria-describedby={chat.errorField === 'text' ? `${uid}-chat-error` : undefined}
             placeholder={conv ? 'Write a message…' : 'Ask us anything…'}
             onChange={(e) => {
               setText(e.target.value);

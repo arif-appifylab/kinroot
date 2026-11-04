@@ -18,6 +18,7 @@ import type {User} from '../kit/guards';
 import type {EventType} from '@/lib/events';
 import {ENTITY_OF, UNIT_MS, WEEKDAY_SHORT, type AssigneeMode, type AutoObject, type Step, type Target} from '@/lib/automations';
 import {addDays, isTimeZone, localDate, weekdayOf, whenIn, zonedTime} from '@/lib/scheduling';
+import {clip, COMPANY_LIMITS, CONTACT_LIMITS, cut, DEAL_LIMITS} from '@/lib/record-limits';
 import {PRIORITY, STATUS, TICKET_PRIORITIES, TICKET_STATUSES} from '@/lib/tickets';
 import {config, CRM_APP} from '../kit/config';
 import {encryptJson, decryptJson, randomToken} from '../kit/crypto';
@@ -145,6 +146,8 @@ async function updateRecord(ctx: StepCtx, target: Exclude<Target, 'ticket'>, bef
     if (k.startsWith('custom.')) customPatch[k.slice(7)] = v;
     else plain[k] = v;
   }
+  // "Update field" text (merge fields filled in, up to 2000) is cut to the column's length.
+  Object.assign(plain, clip(plain, target === 'contact' ? CONTACT_LIMITS : target === 'company' ? COMPANY_LIMITS : DEAL_LIMITS));
   const custom = Object.keys(customPatch).length ? await cleanCustom(db, ENTITY_OF[target], customPatch, before.custom) : undefined;
   const data = {...plain, ...(custom ? {custom: custom as Prisma.InputJsonValue} : {})};
   const link = target === 'contact' ? {contactId: before.id} : target === 'company' ? {companyId: before.id} : {dealId: before.id};
@@ -393,7 +396,7 @@ const EXECUTORS: Record<Step['type'], Executor> = {
     const m = await textCtx(ctx);
     const stage = step.stageId ? await ctx.db.stage.findUnique({where: {id: step.stageId}, include: {pipeline: true}}) : null;
     if (!stage || stage.pipelineId !== step.pipelineId) throw new StepError('That pipeline or stage no longer exists');
-    const title = fill(step.title, m).trim().slice(0, 200) || 'New deal';
+    const title = cut(fill(step.title, m).trim(), DEAL_LIMITS.title) || 'New deal';
     const owner = await userById(ctx.db, assigneeId(ctx, step.assignee, step.userId));
     const {contact, company} = ctx.records;
     const value = Math.max(0, Number(step.value ?? 0) || 0);

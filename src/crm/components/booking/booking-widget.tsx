@@ -2,7 +2,7 @@ import {useQuery} from '@tanstack/react-query';
 import {ArrowLeft, CalendarCheck2, CalendarPlus, Clock, Download, Loader2, MapPin, Phone, Video} from 'lucide-react';
 import {useRef, useState, type ReactNode} from 'react';
 
-import {api} from '@/lib/api';
+import {api, ApiError} from '@/lib/api';
 import {sendAttempt} from '@/lib/attempt';
 import {durationLabel, whenIn, type LocationType, type PublicBookingLink} from '@/lib/scheduling';
 import {cn} from '@/lib/utils';
@@ -83,7 +83,8 @@ export function CalendarButtons({booking}: {booking: BookedMeeting}) {
   );
 }
 
-function LinkHeader({link, duration, onDuration}: {link: PublicBookingLink; duration: number; onDuration: (d: number) => void}) {
+/** `error`: the server's words about the duration (`fields.duration`), shown under the choices. */
+function LinkHeader({link, duration, onDuration, error}: {link: PublicBookingLink; duration: number; onDuration: (d: number) => void; error?: string | null}) {
   const Icon = LOCATION_ICONS[link.locationType] ?? MapPin;
   return (
     <div className="min-w-0">
@@ -97,7 +98,7 @@ function LinkHeader({link, duration, onDuration}: {link: PublicBookingLink; dura
         <span className="flex items-center gap-2"><Icon className="size-4 text-slate-400" /> {link.locationLabel}</span>
       </div>
       {link.durations.length > 1 && (
-        <div className="mt-4 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Duration">
+        <div className="mt-4 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Duration" aria-invalid={error ? true : undefined} aria-describedby={error ? 'bk-duration-error' : undefined}>
           {link.durations.map((d) => (
             <button
               key={d}
@@ -112,6 +113,7 @@ function LinkHeader({link, duration, onDuration}: {link: PublicBookingLink; dura
           ))}
         </div>
       )}
+      {error && link.durations.length > 1 && <p id="bk-duration-error" role="alert" className="mt-2 text-xs font-medium text-destructive">{error}</p>}
       {link.description && <p className="mt-4 text-sm whitespace-pre-wrap text-muted-foreground">{link.description}</p>}
     </div>
   );
@@ -157,6 +159,7 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
   const [hp, setHp] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [durationError, setDurationError] = useState<string | null>(null);
   const [booked, setBooked] = useState<{booking: BookedMeeting; token: string} | null>(null);
   const startedAt = useRef(Date.now());
   const qs = link.questions;
@@ -172,6 +175,7 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
     if (!start || !tz) return;
     setBusy(true);
     setError(null);
+    setDurationError(null);
     try {
       // One key per attempt at this time: a retry after a lost answer gets the same booking, never a second.
       const r = await sendAttempt(['booking', link.id, start, duration], (headers) => api.post<{booking: BookedMeeting; token: string}>('/public/booking/book', {
@@ -194,6 +198,15 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
       onBooked?.(r.booking);
     } catch (e) {
       if (f.fail(e)) return;
+      const fields = e instanceof ApiError ? e.fields : {};
+      // The duration or the time (`fields.duration` / `fields.start`) is picked on the calendar step: back there.
+      if (fields.duration || fields.start) {
+        if (fields.duration && link.durations.length > 1) setDurationError(fields.duration);
+        else setError((e as Error).message);
+        setStart(null);
+        setStep('pick');
+        return;
+      }
       setError((e as Error).message);
       // The slot was taken meanwhile: back to the calendar.
       if (/no longer available/.test((e as Error).message)) {
@@ -226,7 +239,7 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
 
   return (
     <div className={cn('grid grid-cols-1 gap-6 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-8', className)}>
-      <LinkHeader link={link} duration={duration} onDuration={(d) => (setDuration(d), setStart(null))} />
+      <LinkHeader link={link} duration={duration} error={durationError} onDuration={(d) => (setDuration(d), setStart(null), setDurationError(null))} />
       <div className="min-w-0 border-slate-100 lg:border-l lg:pl-8">
         {error && <p role="alert" className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{error}</p>}
         {step === 'pick' && (

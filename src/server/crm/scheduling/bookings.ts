@@ -9,6 +9,7 @@ import {logActivity} from '../lib/activity';
 import {associateByDomain} from '../lib/domains';
 import {emit} from '../lib/events';
 import {fieldError} from '../lib/http';
+import {clip, COMPANY_LIMITS, CONTACT_LIMITS, cut} from '@/lib/record-limits';
 import {enqueue} from '../lib/jobs';
 import {notify, recordLink} from '../lib/notify';
 import {rememberOption} from '../lib/settings';
@@ -73,12 +74,13 @@ async function upsertContact(db: Db, link: BookingLink, hostId: string, input: B
   if (found) {
     contact = await db.contact.update({
       where: {id: found.id},
-      data: {phone: found.phone ?? input.phone ?? undefined, ownerId: found.ownerId ?? hostId},
+      data: {phone: found.phone ?? cut(input.phone, CONTACT_LIMITS.phone) ?? undefined, ownerId: found.ownerId ?? hostId},
     });
   } else {
     const source = `Booking: ${link.name}`.slice(0, 100);
     contact = await db.contact.create({
-      data: {firstName: firstName || email.split('@')[0]!, lastName: rest.join(' ') || null, email, phone: input.phone ?? null, source, ownerId: hostId, lastActivityAt: new Date()},
+      // The name is split from one field (up to 200): each part within its column.
+      data: clip({firstName: firstName || email.split('@')[0]!, lastName: rest.join(' ') || null, email, phone: input.phone ?? null, source, ownerId: hostId, lastActivityAt: new Date()}, CONTACT_LIMITS),
     });
     await rememberOption(db, 'sources', source);
     await logActivity(db, {type: 'contact_created', title: `Contact created from ${link.name} booking`, contactId: contact.id});
@@ -88,7 +90,7 @@ async function upsertContact(db: Db, link: BookingLink, hostId: string, input: B
   if (name) {
     const company =
       (await db.company.findFirst({where: {name: {equals: name, mode: 'insensitive'}}, select: {id: true}})) ??
-      (await db.company.create({data: {name, ownerId: contact.ownerId, lastActivityAt: new Date()}, select: {id: true}}));
+      (await db.company.create({data: {name: cut(name, COMPANY_LIMITS.name), ownerId: contact.ownerId, lastActivityAt: new Date()}, select: {id: true}}));
     const links = await db.contactCompany.findMany({where: {contactId: contact.id}, select: {companyId: true}});
     if (!links.some((l) => l.companyId === company.id)) await db.contactCompany.create({data: {contactId: contact.id, companyId: company.id, isPrimary: links.length === 0}});
     companyId = company.id;
@@ -100,8 +102,8 @@ async function upsertContact(db: Db, link: BookingLink, hostId: string, input: B
 
 /** Checks a requested time against the link's live availability and picks the host. */
 export async function claimSlot(db: Db, link: BookingLink, start: Date, duration: number, opts: {onlyHostId?: string | null; exclude?: Booking | null} = {}) {
-  if (!numbers(link.durations).includes(duration)) throw new HTTPException(400, {message: 'Pick one of the offered durations'});
-  if (Number.isNaN(start.getTime())) throw new HTTPException(400, {message: 'Pick a time'});
+  if (!numbers(link.durations).includes(duration)) throw fieldError('duration', 'Pick one of the offered durations');
+  if (Number.isNaN(start.getTime())) throw fieldError('start', 'Pick a time');
   const slots = await linkSlots(db, link, {from: start, to: new Date(start.getTime() + 60_000), duration, onlyHostId: opts.onlyHostId, exclude: opts.exclude});
   const slot = slots.find((s) => s.start === start.getTime());
   if (!slot) throw new HTTPException(409, {message: SLOT_TAKEN});

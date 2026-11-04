@@ -17,6 +17,7 @@ import {Button} from './ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from './ui/dialog';
 import {Field, Input, NativeSelect, Textarea} from './ui/form';
 import {is, useFormState} from './ui/form-state';
+import {COMPANY_LIMITS, CONTACT_LIMITS, DEAL_LIMITS} from '@/lib/record-limits';
 
 // ─── Global "create" controller so any screen (or ⌘K) can open a form ───
 
@@ -60,13 +61,14 @@ export function CreateProvider({children}: {children: ReactNode}) {
   );
 }
 
-function CustomFieldsSection({entity, value, onChange}: {entity: EntityType; value: Record<string, unknown>; onChange: (v: Record<string, unknown>) => void}) {
+/** `errorOf` gives the server's words for one value (`custom.<key>`, `f.nested`). */
+function CustomFieldsSection({entity, value, onChange, errorOf}: {entity: EntityType; value: Record<string, unknown>; onChange: (v: Record<string, unknown>) => void; errorOf?: (name: string) => string | undefined}) {
   const fields = useFields(entity);
   if (!fields.data?.length) return null;
   return (
     <div className="grid grid-cols-1 gap-4 border-t border-slate-100 pt-4 sm:grid-cols-2">
       {fields.data.map((f) => (
-        <Field key={f.id} label={f.label} htmlFor={`cf-${f.key}`}>
+        <Field key={f.id} label={f.label} htmlFor={`cf-${f.key}`} error={errorOf?.(`custom.${f.key}`)}>
           <CustomFieldInput field={f} value={value[f.key]} onChange={(v) => onChange({...value, [f.key]: v})} />
         </Field>
       ))}
@@ -138,7 +140,7 @@ function DealDialog({defaults, onClose}: {defaults?: DealDefaults; onClose: () =
   );
 
   const f = useFormState(form, {
-    title: [is.required('Give the deal a name.'), is.maxLength(200)],
+    title: [is.required('Give the deal a name.'), is.maxLength(DEAL_LIMITS.title)],
     value: [is.number({min: 0, max: 1e12, message: 'Enter an amount of 0 or more, like 2500.'})],
   });
 
@@ -179,7 +181,7 @@ function DealDialog({defaults, onClose}: {defaults?: DealDefaults; onClose: () =
       <Field label="People" htmlFor="d-people">
         <ContactsPicker id="d-people" value={form.contacts} onChange={(contacts) => setForm({...form, contacts})} />
       </Field>
-      <CustomFieldsSection entity="DEAL" value={form.custom} onChange={(custom) => setForm({...form, custom})} />
+      <CustomFieldsSection entity="DEAL" value={form.custom} onChange={(custom) => setForm({...form, custom})} errorOf={f.nested} />
     </FormDialog>
   );
 }
@@ -215,8 +217,11 @@ function ContactDialog({defaults, onClose}: {defaults?: ContactDefaults; onClose
   );
 
   const f = useFormState(form, {
-    firstName: [is.required('Enter a first name.'), is.maxLength(100)],
-    email: [is.email()],
+    firstName: [is.required('Enter a first name.'), is.maxLength(CONTACT_LIMITS.firstName)],
+    lastName: [is.maxLength(CONTACT_LIMITS.lastName)],
+    email: [is.email(), is.maxLength(CONTACT_LIMITS.email)],
+    phone: [is.maxLength(CONTACT_LIMITS.phone)],
+    title: [is.maxLength(CONTACT_LIMITS.title)],
   });
 
   return (
@@ -226,17 +231,17 @@ function ContactDialog({defaults, onClose}: {defaults?: ContactDefaults; onClose
           <Input id="c-first" autoFocus value={form.firstName} onChange={set('firstName')} onBlur={f.blur('firstName')} />
         </Field>
         <Field label="Last name" htmlFor="c-last" error={f.error('lastName')}>
-          <Input id="c-last" value={form.lastName} onChange={set('lastName')} />
+          <Input id="c-last" value={form.lastName} onChange={set('lastName')} onBlur={f.blur('lastName')} />
         </Field>
         <Field label="Email" htmlFor="c-email" error={f.error('email')}>
           <Input id="c-email" type="email" value={form.email} onChange={set('email')} onBlur={f.blur('email')} placeholder="name@company.com" />
         </Field>
-        <Field label="Phone" htmlFor="c-phone">
-          <Input id="c-phone" type="tel" value={form.phone} onChange={set('phone')} />
+        <Field label="Phone" htmlFor="c-phone" error={f.error('phone')}>
+          <Input id="c-phone" type="tel" value={form.phone} onChange={set('phone')} onBlur={f.blur('phone')} />
         </Field>
         <DuplicateHint className="sm:col-span-2" input={{entity: 'contact', firstName: form.firstName, lastName: form.lastName, email: form.email, phone: form.phone, companyId: form.company?.id ?? null}} onOpen={onClose} />
-        <Field label="Job title" htmlFor="c-title">
-          <Input id="c-title" value={form.title} onChange={set('title')} />
+        <Field label="Job title" htmlFor="c-title" error={f.error('title')}>
+          <Input id="c-title" value={form.title} onChange={set('title')} onBlur={f.blur('title')} />
         </Field>
         <Field label="Company" htmlFor="c-company">
           <CompanyPicker id="c-company" value={form.company} onChange={(company) => setForm({...form, company})} />
@@ -259,7 +264,7 @@ function ContactDialog({defaults, onClose}: {defaults?: ContactDefaults; onClose
           <TagInput id="c-tags" entity="CONTACT" value={form.tags} onChange={(tags) => setForm({...form, tags})} />
         </Field>
       </div>
-      <CustomFieldsSection entity="CONTACT" value={form.custom} onChange={(custom) => setForm({...form, custom})} />
+      <CustomFieldsSection entity="CONTACT" value={form.custom} onChange={(custom) => setForm({...form, custom})} errorOf={f.nested} />
     </FormDialog>
   );
 }
@@ -313,7 +318,13 @@ function CompanyDialog({onClose}: {onClose: () => void}) {
     },
   );
   const f = useFormState(form, {
-    name: [is.required('Enter the company name.'), is.maxLength(200)],
+    name: [is.required('Enter the company name.'), is.maxLength(COMPANY_LIMITS.name)],
+    domain: [is.maxLength(COMPANY_LIMITS.domain)],
+    phone: [is.maxLength(COMPANY_LIMITS.phone)],
+    city: [is.maxLength(COMPANY_LIMITS.city)],
+    state: [is.maxLength(COMPANY_LIMITS.state)],
+    postalCode: [is.maxLength(COMPANY_LIMITS.postalCode)],
+    country: [is.maxLength(COMPANY_LIMITS.country)],
     employees: [is.number({min: 0, max: 10_000_000, integer: true, message: 'Use a whole number of 0 or more, like 50.'})],
     annualRevenue: [is.number({min: 0, max: 1e13, message: 'Enter an amount of 0 or more, like 250000.'})],
     linkedin: [is.url('Enter the full LinkedIn address, like https://linkedin.com/company/acme.')],
@@ -322,7 +333,7 @@ function CompanyDialog({onClose}: {onClose: () => void}) {
     <FormDialog title="New company" description="Existing contacts with an email at this domain are linked automatically." onClose={onClose} form={f.form(() => create.mutate(undefined, {onError: f.fail}))} busy={create.isPending} submitLabel="Create company" pendingLabel="Creating…">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Company domain" htmlFor="co-domain" error={f.error('domain')}>
-          <Input id="co-domain" autoFocus value={form.domain} onChange={onDomain} placeholder="acme.com" />
+          <Input id="co-domain" autoFocus value={form.domain} onChange={onDomain} onBlur={f.blur('domain')} placeholder="acme.com" />
         </Field>
         <Field label="Company name" htmlFor="co-name" error={f.error('name')}>
           <Input id="co-name" value={form.name} onChange={set('name')} onBlur={f.blur('name')} />
@@ -337,13 +348,13 @@ function CompanyDialog({onClose}: {onClose: () => void}) {
         <Field label="Type" htmlFor="co-type">
           <CreatableSelect id="co-type" noun="type" placeholder="Prospect, partner…" value={form.type} options={settings.data?.settings.companyTypes ?? []} onChange={(v) => setForm({...form, type: v as string | null})} onCreate={() => {}} />
         </Field>
-        <Field label="Phone number" htmlFor="co-phone">
-          <Input id="co-phone" type="tel" value={form.phone} onChange={set('phone')} />
+        <Field label="Phone number" htmlFor="co-phone" error={f.error('phone')}>
+          <Input id="co-phone" type="tel" value={form.phone} onChange={set('phone')} onBlur={f.blur('phone')} />
         </Field>
-        <Field label="City" htmlFor="co-city"><Input id="co-city" value={form.city} onChange={set('city')} /></Field>
-        <Field label="State / region" htmlFor="co-state"><Input id="co-state" value={form.state} onChange={set('state')} /></Field>
-        <Field label="Postal code" htmlFor="co-zip"><Input id="co-zip" value={form.postalCode} onChange={set('postalCode')} /></Field>
-        <Field label="Country" htmlFor="co-country"><Input id="co-country" value={form.country} onChange={set('country')} /></Field>
+        <Field label="City" htmlFor="co-city" error={f.error('city')}><Input id="co-city" value={form.city} onChange={set('city')} onBlur={f.blur('city')} /></Field>
+        <Field label="State / region" htmlFor="co-state" error={f.error('state')}><Input id="co-state" value={form.state} onChange={set('state')} onBlur={f.blur('state')} /></Field>
+        <Field label="Postal code" htmlFor="co-zip" error={f.error('postalCode')}><Input id="co-zip" value={form.postalCode} onChange={set('postalCode')} onBlur={f.blur('postalCode')} /></Field>
+        <Field label="Country" htmlFor="co-country" error={f.error('country')}><Input id="co-country" value={form.country} onChange={set('country')} onBlur={f.blur('country')} /></Field>
         <Field label="Number of employees" htmlFor="co-emp" error={f.error('employees')}><Input id="co-emp" type="number" inputMode="numeric" value={form.employees} onChange={set('employees')} onBlur={f.blur('employees')} /></Field>
         <Field label={`Annual revenue (${settings.data?.settings.currency ?? 'USD'})`} htmlFor="co-rev" error={f.error('annualRevenue')}><Input id="co-rev" type="number" inputMode="decimal" step="any" value={form.annualRevenue} onChange={set('annualRevenue')} onBlur={f.blur('annualRevenue')} /></Field>
         <Field label="Time zone" htmlFor="co-tz">
@@ -355,7 +366,7 @@ function CompanyDialog({onClose}: {onClose: () => void}) {
           <TagInput id="co-tags" entity="COMPANY" value={form.tags} onChange={(tags) => setForm({...form, tags})} />
         </Field>
       </div>
-      <CustomFieldsSection entity="COMPANY" value={form.custom} onChange={(custom) => setForm({...form, custom})} />
+      <CustomFieldsSection entity="COMPANY" value={form.custom} onChange={(custom) => setForm({...form, custom})} errorOf={f.nested} />
     </FormDialog>
   );
 }

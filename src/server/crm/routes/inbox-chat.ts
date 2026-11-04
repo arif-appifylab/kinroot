@@ -9,7 +9,7 @@ import {publicOrigin} from '../kit/config';
 import {currentUser, requireRole, type AppEnv} from '../kit/guards';
 import {diff} from '../lib/activity';
 import {audit} from '../lib/audit';
-import {notFound, valid} from '../lib/http';
+import {fieldError, notFound, valid} from '../lib/http';
 import {mergeFields} from '../email/render';
 import {sendChannelMessage} from '../inbox/channel-messages';
 import {getChatSettings, queueVisitorEmail, saveChatSettings, sendTranscript} from '../inbox/chat';
@@ -56,7 +56,7 @@ export const inboxChat = new Hono<AppEnv>()
     const input = c.req.valid('json');
     const {thread: t} = await loadConversation(c, c.req.param('id'));
     if (!isMessageChannel(t.channel)) throw new HTTPException(400, {message: 'This is an email conversation: reply by email'});
-    if (!input.text.trim() && !input.fileIds.length) throw new HTTPException(400, {message: 'Write a message first'});
+    if (!input.text.trim() && !input.fileIds.length) throw fieldError('text', 'Write a message first');
     const files = input.fileIds.length ? await db.file.findMany({where: {id: {in: input.fileIds}, purpose: 'chat_pending', uploadedById: me.id}, select: {id: true}}) : [];
     if (files.length) await db.file.updateMany({where: {id: {in: files.map((f) => f.id)}}, data: {purpose: 'chat'}});
     // Saved replies may use merge fields ({{contact.first_name}}…), filled here like on emails.

@@ -6,7 +6,7 @@ import type {ChannelIdentity} from '../../../generated/prisma/client';
 import {CHAT_LIMITS, CHAT_UPLOAD_TYPES, hostOf, type ChatSettings, type VisitorSession} from '@/lib/chat';
 import {publicOrigin} from '../kit/config';
 import type {AppContext, AppEnv} from '../kit/guards';
-import {notFound, valid} from '../lib/http';
+import {fieldError, notFound, valid} from '../lib/http';
 import {onceOf, orEarlier, runOnce} from '../lib/once';
 import {ipKey, rateLimit} from '../lib/rate-limit';
 import {
@@ -79,7 +79,7 @@ const visitorMeta = (c: AppContext, m: z.infer<typeof meta>): VisitorMeta => ({
   userAgent: c.req.header('user-agent') ?? null,
 });
 
-const nothing = () => new HTTPException(400, {message: 'Write a message first'});
+const nothing = () => fieldError('text', 'Write a message first');
 
 /** The chat must be on, and the embedding site on the allow-list. */
 async function requireChat(c: AppContext, m: {page?: string | null; ancestor?: string | null}) {
@@ -183,10 +183,10 @@ export const chatPublic = new Hono<AppEnv>()
       const db = c.var.db;
       const body = c.req.valid('json');
       const s = await requireChat(c, body.meta);
-      if (!body.text.trim() && !body.files.length) throw new HTTPException(400, {message: 'Write a message first'});
+      if (!body.text.trim() && !body.files.length) throw nothing();
       if (s.preChat === 'required' && !body.email) {
         const known = body.token ? await identityFromToken(db, body.token) : null;
-        if (!known?.email) throw new HTTPException(400, {message: 'Enter your email address to start the chat'});
+        if (!known?.email) throw fieldError('email', 'Enter your email address to start the chat');
       }
       let identity = body.token ? await identityFromToken(db, body.token) : null;
       if (body.token && !identity) throw new HTTPException(401, {message: 'Your chat session expired. Reload the page to start again.'});
@@ -236,7 +236,7 @@ export const chatPublic = new Hono<AppEnv>()
     const s = await requireChat(c, body.meta);
     const identity = await requireVisitor(c, body.token);
     const thread = await visitorConversation(c, identity, body.conversationId);
-    if (!body.text.trim() && !body.files.length) throw new HTTPException(400, {message: 'Write a message first'});
+    if (!body.text.trim() && !body.files.length) throw nothing();
     await rateLimit(db, await limits(c, identity, 'message'), 'You are sending messages very quickly. Please wait a moment.');
     const fileIds = await claimFiles(db, identity.id, body.files);
     if (!body.text.trim() && !fileIds.length) throw nothing();

@@ -7,6 +7,7 @@ import type {OAuthCreds} from './providers';
 import {ingestMessage, type IncomingMessage} from './service';
 import {fetchOut} from '../kit/outbound';
 import {enqueue} from '../lib/jobs';
+import {logMailboxError, mailboxErrorText, MailboxCallError} from './errors';
 
 const MAX_PER_RUN = 40; // keeps one run well inside a Worker's request budget
 const FIRST_SYNC_DAYS = 14;
@@ -31,11 +32,12 @@ async function syncGmail(db: Db, account: EmailAccount, creds: OAuthCreds, deadl
   const since = account.lastSyncedAt ?? new Date(Date.now() - FIRST_SYNC_DAYS * 86400_000);
   const q = `after:${Math.floor(since.getTime() / 1000) - 60} -in:chats -in:spam -in:trash`;
   const auth = {authorization: `Bearer ${creds.accessToken}`};
-  const list = (await (await fetchOut(`https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${MAX_PER_RUN}&q=${encodeURIComponent(q)}`, {headers: auth})).json()) as {
+  const listRes = await fetchOut(`https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=${MAX_PER_RUN}&q=${encodeURIComponent(q)}`, {headers: auth});
+  const list = (await listRes.json()) as {
     messages?: {id: string; threadId: string}[];
-    error?: {message: string};
+    error?: {message: string; code?: number};
   };
-  if (list.error) throw new Error(`Gmail: ${list.error.message}`);
+  if (list.error || !listRes.ok) throw new MailboxCallError(`Gmail: ${list.error?.message ?? listRes.statusText}`, listRes.ok ? (list.error?.code ?? 400) : listRes.status);
 
   let stored = 0;
   let newest = since;
@@ -104,11 +106,12 @@ async function syncOutlook(db: Db, account: EmailAccount, creds: OAuthCreds, dea
     $top: String(MAX_PER_RUN),
     $select: 'id,conversationId,subject,internetMessageId,receivedDateTime,from,toRecipients,ccRecipients,body',
   });
-  const res = (await (await fetchOut(`https://graph.microsoft.com/v1.0/me/messages?${params}`, {headers: {authorization: `Bearer ${creds.accessToken}`}})).json()) as {
+  const graphRes = await fetchOut(`https://graph.microsoft.com/v1.0/me/messages?${params}`, {headers: {authorization: `Bearer ${creds.accessToken}`}});
+  const res = (await graphRes.json()) as {
     value?: GraphMessage[];
     error?: {message: string};
   };
-  if (res.error) throw new Error(`Microsoft Graph: ${res.error.message}`);
+  if (res.error || !graphRes.ok) throw new MailboxCallError(`Microsoft Graph: ${res.error?.message ?? graphRes.statusText}`, graphRes.ok ? 400 : graphRes.status);
 
   const addr = (a: {emailAddress: {address: string; name: string}}) => ({email: a.emailAddress.address.toLowerCase(), name: a.emailAddress.name});
   let stored = 0;
@@ -149,8 +152,11 @@ async function syncAccount(db: Db, account: EmailAccount, {deadline = Date.now()
     await db.emailAccount.update({where: {id: account.id}, data: {lastSyncedAt: r.newest, status: 'CONNECTED', lastError: null}});
     return {stored: r.stored, more: r.more};
   } catch (e) {
-    await db.emailAccount.update({where: {id: account.id}, data: {status: 'ERROR', lastError: (e as Error).message.slice(0, 500)}});
-    return {stored: 0, error: (e as Error).message};
+    // The provider's text only in the log; the account shows it in words.
+    logMailboxError(`sync ${account.provider}`, e);
+    const error = mailboxErrorText(e);
+    await db.emailAccount.update({where: {id: account.id}, data: {status: 'ERROR', lastError: error}});
+    return {stored: 0, error};
   }
 }
 

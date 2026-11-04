@@ -433,8 +433,8 @@ export function FormRenderer({
           headers: {'content-type': 'application/json', ...headers},
           body: JSON.stringify({answers: payload, meta, hp, startedAt: startedAt.current}),
         });
-        const body = (await res.json().catch(() => ({}))) as {ending?: Ending; error?: string};
-        if (!res.ok || !body.ending) throw Object.assign(new Error(body.error ?? 'Something went wrong. Please try again.'), {status: res.status});
+        const body = (await res.json().catch(() => ({}))) as {ending?: Ending; error?: string; fields?: Record<string, string>};
+        if (!res.ok || !body.ending) throw Object.assign(new Error(body.error ?? 'Something went wrong. Please try again.'), {status: res.status, fields: body.fields});
         return body as {ending: Ending};
       });
       setEnding(data.ending);
@@ -452,8 +452,16 @@ export function FormRenderer({
         }, 900);
       }
     } catch (e) {
-      setSubmitError((e as Error).message);
       setStatus('idle');
+      // An answer the server refused (`fields`, keyed by question id): its words go under that
+      // question, on its step, and focus moves there.
+      const fields = Object.fromEntries(Object.entries((e as {fields?: Record<string, string>}).fields ?? {}).filter(([id]) => all.some((f) => f.id === id)));
+      const first = Object.keys(fields)[0];
+      if (!first) return setSubmitError((e as Error).message);
+      setErrors(fields);
+      const at = steps.findIndex((st) => st.fields.some((f) => f.id === first));
+      if (at >= 0) setIndex(at);
+      setTimeout(() => document.getElementById(`fld_${first}`)?.focus());
     }
   }
 

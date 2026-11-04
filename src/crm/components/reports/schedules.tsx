@@ -307,25 +307,25 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
           </Field>
           <div className="grid grid-cols-2 gap-4">
             {draft.frequency === 'weekly' && (
-              <Field label="On">
-                <NativeSelect value={draft.weekday} onChange={(e) => set({weekday: Number(e.target.value)})}>
+              <Field label="On" htmlFor="schedule-weekday" error={f.error('weekday')}>
+                <NativeSelect id="schedule-weekday" value={draft.weekday} onChange={(e) => set({weekday: Number(e.target.value)})}>
                   {WEEKDAY_ORDER.map((d) => <option key={d} value={d}>{WEEKDAYS[d]}</option>)}
                 </NativeSelect>
               </Field>
             )}
             {draft.frequency === 'monthly' && (
-              <Field label="On day" hint={draft.monthDay > 28 ? 'Shorter months send on their last day.' : undefined}>
-                <NativeSelect value={draft.monthDay} onChange={(e) => set({monthDay: Number(e.target.value)})}>
+              <Field label="On day" htmlFor="schedule-month-day" hint={draft.monthDay > 28 ? 'Shorter months send on their last day.' : undefined} error={f.error('monthDay')}>
+                <NativeSelect id="schedule-month-day" value={draft.monthDay} onChange={(e) => set({monthDay: Number(e.target.value)})}>
                   {Array.from({length: 31}, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d}</option>)}
                   <option value={-1}>Last day of the month</option>
                 </NativeSelect>
               </Field>
             )}
-            <Field label="At" htmlFor="schedule-time">
+            <Field label="At" htmlFor="schedule-time" error={f.error('time')}>
               <Input id="schedule-time" type="time" value={draft.time} onChange={(e) => e.target.value && set({time: e.target.value.slice(0, 5)})} />
             </Field>
-            <Field label="Time zone" className={draft.frequency === 'daily' ? undefined : 'col-span-2'}>
-              <NativeSelect value={draft.timezone} onChange={(e) => set({timezone: e.target.value})}>
+            <Field label="Time zone" htmlFor="schedule-timezone" className={draft.frequency === 'daily' ? undefined : 'col-span-2'} error={f.error('timezone')}>
+              <NativeSelect id="schedule-timezone" value={draft.timezone} onChange={(e) => set({timezone: e.target.value})}>
                 {zoneOptions.map((z) => <option key={z} value={z}>{z.replace(/_/g, ' ')}</option>)}
               </NativeSelect>
             </Field>

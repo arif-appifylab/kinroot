@@ -29,6 +29,7 @@ import {ago, BUYING_ROLES, fullName, LEAD_STATUSES, LIFECYCLE, money, shortDate}
 import {keys, recordKeys, useApiMutation, useFields, useMe, useSettings} from '@/lib/queries';
 import type {CompanyLite, ContactDetail, ContactLite} from '@/lib/types';
 import {cn} from '@/lib/utils';
+import {CONTACT_LIMITS} from '@/lib/record-limits';
 
 export const Route = createFileRoute('/_app/contacts/$contactId')({
   head: () => ({meta: [{title: pageTitle('Contact')}]}),
@@ -137,14 +138,14 @@ function ContactPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_300px]">
         <div className="grid min-w-0 grid-cols-1 content-start gap-6">
           <PropertyCard title="About">
-            <TextProperty label="First name" field="firstName" value={c.firstName} onSave={(v) => v && save.mutate({firstName: v})} />
-            <TextProperty label="Last name" field="lastName" value={c.lastName} onSave={(v) => save.mutate({lastName: v})} />
-            <TextProperty label="Email" field="email" type="email" value={c.email} href={c.email ? `mailto:${c.email}` : undefined} onSave={(v) => save.mutate({email: v ?? ''})} />
-            <TextProperty label="Phone" field="phone" type="tel" value={c.phone} href={c.phone ? `tel:${c.phone}` : undefined} onSave={(v) => save.mutate({phone: v})} />
-            <TextProperty label="Job title" field="title" value={c.title} onSave={(v) => save.mutate({title: v})} />
+            <TextProperty label="First name" field="firstName" maxLength={CONTACT_LIMITS.firstName} value={c.firstName} onSave={(v) => v && save.mutate({firstName: v})} />
+            <TextProperty label="Last name" field="lastName" maxLength={CONTACT_LIMITS.lastName} value={c.lastName} onSave={(v) => save.mutate({lastName: v})} />
+            <TextProperty label="Email" field="email" maxLength={CONTACT_LIMITS.email} type="email" value={c.email} href={c.email ? `mailto:${c.email}` : undefined} onSave={(v) => save.mutate({email: v ?? ''})} />
+            <TextProperty label="Phone" field="phone" maxLength={CONTACT_LIMITS.phone} type="tel" value={c.phone} href={c.phone ? `tel:${c.phone}` : undefined} onSave={(v) => save.mutate({phone: v})} />
+            <TextProperty label="Job title" field="title" maxLength={CONTACT_LIMITS.title} value={c.title} onSave={(v) => save.mutate({title: v})} />
             <TextProperty label="LinkedIn" field="linkedin" value={c.linkedin} href={c.linkedin ?? undefined} onSave={(v) => save.mutate({linkedin: v})} />
-            <TextProperty label="City" field="city" value={c.city} onSave={(v) => save.mutate({city: v})} />
-            <TextProperty label="Country" field="country" value={c.country} onSave={(v) => save.mutate({country: v})} />
+            <TextProperty label="City" field="city" maxLength={CONTACT_LIMITS.city} value={c.city} onSave={(v) => save.mutate({city: v})} />
+            <TextProperty label="Country" field="country" maxLength={CONTACT_LIMITS.country} value={c.country} onSave={(v) => save.mutate({country: v})} />
             <SelectProperty
               label="Lifecycle" field="lifecycleStage"
               value={c.lifecycleStage}

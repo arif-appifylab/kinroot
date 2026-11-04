@@ -7,6 +7,8 @@ import {RichText} from '@/components/rich-text';
 import {CustomerStatus, PortalNav, SignInPrompt, usePortal, type PortalSession} from '@/components/tickets/portal';
 import {PublicPage} from './public-page';
 import {Button} from '@/components/ui/button';
+import {Field} from '@/components/ui/form';
+import {useFormState} from '@/components/ui/form-state';
 import {Avatar} from '@/components/ui/misc';
 import {api} from '@/lib/api';
 import type {Brand} from '@/lib/brand';
@@ -42,6 +44,8 @@ function PortalTicketPage({number}: {number: string}) {
   const [body, setBody] = useState('');
   const [busy, setBusy] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // The server's "write a message first" (`fields.html`) shows under the editor.
+  const f = useFormState({html: body});
 
   if (error) return <PublicCard><p className="text-sm font-medium text-destructive">{error}</p></PublicCard>;
   if (!data) return <PublicCard className="flex justify-center"><Loader2 className="size-5 animate-spin text-primary" /></PublicCard>;
@@ -67,7 +71,7 @@ function PortalTicketPage({number}: {number: string}) {
       setData({...data!, ticket: r.ticket});
       setBody('');
     } catch (e) {
-      setSendError((e as Error).message);
+      if (!f.fail(e)) setSendError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -124,7 +128,8 @@ function PortalTicketPage({number}: {number: string}) {
             This request is closed. <a href="/support/" className="font-semibold text-primary hover:underline">Open a new one</a> if you need more help.
           </p>
         ) : (
-          <form noValidate onSubmit={(e) => (e.preventDefault(), !isEmptyHtml(body) && !busy && reply())} className="mt-6 grid gap-2.5">
+          <form ref={f.ref} noValidate onSubmit={(e) => (e.preventDefault(), !isEmptyHtml(body) && !busy && reply())} className="mt-6 grid gap-2.5">
+            <Field error={f.error('html')}>
             <RichEditor
               variant="text"
               compact
@@ -135,6 +140,7 @@ function PortalTicketPage({number}: {number: string}) {
               ariaLabel="Your reply"
               placeholder={ticket.status === 'RESOLVED' ? 'Still need help? Reply and we will reopen your request.' : 'Write a reply…'}
             />
+            </Field>
             {sendError && <p role="alert" className="text-sm font-medium text-destructive">{sendError}</p>}
             <div className="flex justify-end">
               <Button type="submit" disabled={isEmptyHtml(body)} pending={busy} pendingLabel="Sending…"><Send /> Send reply</Button>

@@ -14,6 +14,7 @@ import {getSettings} from '../lib/settings';
 import {userSelect} from '../lib/users';
 import {emailBrand, getEmailDesign, saveEmailDesign} from '../email/design';
 import {accountCredentials, authorizeUrl, exchangeCode, oauthClient, type OAuthKind} from '../email/oauth';
+import {logMailboxError, mailboxErrorText, MailboxSetupError} from '../email/errors';
 import {PROVIDER_INFO, secretsPresent, verifyCredentials, type Credentials} from '../email/providers';
 import {htmlToText} from '../email/render';
 import {receiveInbound} from '../email/replies';
@@ -116,8 +117,9 @@ export const emailRoutes = new Hono<AppEnv>()
     try {
       await verifyCredentials(provider, creds as Credentials);
     } catch (e) {
+      logMailboxError(`verify ${provider}`, e);
       status = 'ERROR';
-      lastError = (e as Error).message;
+      lastError = mailboxErrorText(e);
     }
     const userId = meta.shared ? null : me.id;
     const hasDefault = await c.var.db.emailAccount.count({where: {userId, isDefault: true}});
@@ -190,7 +192,8 @@ export const emailRoutes = new Hono<AppEnv>()
       return c.json({ok: true, detail});
     } catch (e) {
       if (e instanceof HTTPException) throw e;
-      const message = (e as Error).message;
+      logMailboxError(`test ${account.provider}`, e);
+      const message = mailboxErrorText(e);
       await c.var.db.emailAccount.update({where: {id: account.id}, data: {status: 'ERROR', lastError: message}});
       return c.json({ok: false, detail: message});
     }
@@ -260,7 +263,8 @@ export const emailRoutes = new Hono<AppEnv>()
     const me = currentUser(c);
     const kind = c.req.param('kind') as OAuthKind;
     const back = (msg: string, ok = false) => c.redirect(`${CRM_APP}/settings/email?${ok ? 'connected' : 'error'}=${encodeURIComponent(msg)}`);
-    if (c.req.query('error')) return back(c.req.query('error_description') ?? c.req.query('error')!);
+    // The provider's own text stays out of the page (and the address bar): words instead.
+    if (c.req.query('error')) return back(c.req.query('error') === 'access_denied' ? 'The mailbox was not connected: access was not allowed.' : 'The email provider did not connect the mailbox. Please try again.');
 
     const [k, userId, shared, exp, sig] = (c.req.query('state') ?? '').split('.');
     const payload = `${k}.${userId}.${shared}.${exp}`;
@@ -298,7 +302,8 @@ export const emailRoutes = new Hono<AppEnv>()
       await audit(c.var.db, c, {action: 'email_account.connected', entity: 'email_account', label: address, meta: {provider, shared: !owner, oauth: true, reconnected: !!existing}});
       return back(`${address} connected`, true);
     } catch (e) {
-      return back((e as Error).message);
+      logMailboxError(`connect ${kind}`, e);
+      return back(e instanceof MailboxSetupError ? e.message : 'The mailbox could not be connected. Please try again.');
     }
   })
 
@@ -321,7 +326,7 @@ export const emailRoutes = new Hono<AppEnv>()
     const db = c.var.db;
     const me = currentUser(c);
     const input = c.req.valid('json');
-    if (!input.body && !input.html) throw new HTTPException(400, {message: 'Write a message first'});
+    if (!input.body && !input.html) throw fieldError('html', 'Write a message first');
     // Only into a conversation, and about records, this person may see (404 otherwise, as everywhere).
     const scope = await inboxScope(db, me);
     const owner = scope.owner;

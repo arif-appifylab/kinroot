@@ -8,6 +8,8 @@ import type {ConversationDetail} from '@/lib/types';
 import {cn} from '@/lib/utils';
 
 import {EmailPreview, RichEditor} from '../email-editor';
+import {Field} from '../ui/form';
+import {useFormState} from '../ui/form-state';
 import {MentionField} from '../mentions';
 import {Button} from '../ui/button';
 import {Card} from '../ui/card';
@@ -53,6 +55,8 @@ export function ReplyComposer({detail, mode, onMode, focusKey}: {detail: Convers
   });
   const addComment = useApiMutation(() => api.post(`/inbox/conversations/${t.id}/comments`, {body: comment}), {invalidate, success: 'Comment added', onSuccess: () => setComment('')});
 
+  // The server's "write a reply first" (`fields.html`) shows under the editor.
+  const f = useFormState({html});
   const account = (t.account && accounts.data?.find((a) => a.id === t.account!.id)) ?? accounts.data?.find((a) => a.isDefault) ?? accounts.data?.[0];
   const empty = isEmptyHtml(html);
   const canReply = detail.canReply && t.channel !== 'ticket';
@@ -96,7 +100,9 @@ export function ReplyComposer({detail, mode, onMode, focusKey}: {detail: Convers
         ) : canReply ? (
           <>
             {detail.sidebar.contact?.emailOptOut && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">This contact opted out of email, so replies can't be sent.</p>}
-            <RichEditor value={html} onChange={setHtml} compact placeholder="Write your reply… merge fields from the toolbar; your signature is added." ariaLabel="Reply" />
+            <Field error={f.error('html')}>
+              <RichEditor value={html} onChange={setHtml} compact placeholder="Write your reply… merge fields from the toolbar; your signature is added." ariaLabel="Reply" />
+            </Field>
           </>
         ) : (
           <p className="rounded-lg bg-slate-50 px-3 py-3 text-sm text-muted-foreground">
@@ -132,9 +138,9 @@ export function ReplyComposer({detail, mode, onMode, focusKey}: {detail: Convers
               canReply && (
                 <>
                   {t.status === 'OPEN' && (
-                    <Button type="button" variant="secondary" size="sm" onClick={() => send.mutate(true)} disabled={empty || send.isPending || detail.sidebar.contact?.emailOptOut} pending={send.isPending && send.variables === true} pendingLabel="Sending…">Send & close</Button>
+                    <Button type="button" variant="secondary" size="sm" onClick={() => send.mutate(true, {onError: f.fail})} disabled={empty || send.isPending || detail.sidebar.contact?.emailOptOut} pending={send.isPending && send.variables === true} pendingLabel="Sending…">Send & close</Button>
                   )}
-                  <Button type="button" size="sm" onClick={() => send.mutate(false)} disabled={empty || send.isPending || detail.sidebar.contact?.emailOptOut} pending={send.isPending && send.variables === false} pendingLabel="Sending…">
+                  <Button type="button" size="sm" onClick={() => send.mutate(false, {onError: f.fail})} disabled={empty || send.isPending || detail.sidebar.contact?.emailOptOut} pending={send.isPending && send.variables === false} pendingLabel="Sending…">
                     <Send /> Send
                   </Button>
                 </>

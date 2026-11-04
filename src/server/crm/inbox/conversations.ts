@@ -6,6 +6,7 @@ import type {Db} from '../kit/db';
 import type {AppContext} from '../kit/guards';
 import {audit, auditMany} from '../lib/audit';
 import {emit} from '../lib/events';
+import {fieldError} from '../lib/http';
 import {enqueue} from '../lib/jobs';
 import {notify} from '../lib/notify';
 import {moveToBin} from '../lib/recycle-bin';
@@ -94,7 +95,7 @@ export async function reopenConversation(db: Db, before: EmailThread, who: Who, 
 
 /** Leaves the open views until `until`; the `inbox.wake` job (and the job runner's tick) bring it back. */
 export async function snoozeConversation(db: Db, before: EmailThread, until: Date, who: Who) {
-  if (until.getTime() <= Date.now() + 30_000) throw new HTTPException(400, {message: 'Pick a time in the future'});
+  if (until.getTime() <= Date.now() + 30_000) throw fieldError('until', 'Pick a time in the future');
   const open = before.status === 'CLOSED' ? await reopenConversation(db, before, who) : before;
   const t = await db.emailThread.update({where: {id: open.id}, data: {snoozedUntil: until}});
   await threadEvent(db, t.id, {type: 'snoozed', until: until.toISOString()}, who.actor?.id);

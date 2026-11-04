@@ -207,7 +207,7 @@ export const supportPublic = new Hono<AppEnv>()
     if (ticket.status === 'CLOSED') throw new HTTPException(400, {message: 'This request is closed. Please open a new one.'});
     const input = c.req.valid('json');
     const reply = richBody({html: input.html, text: input.body});
-    if (!reply.text) throw new HTTPException(400, {message: 'Write a message first'});
+    if (!reply.text) throw fieldError('html', 'Write a message first');
     await customerReply(db, ticket, {
       body: reply.text,
       html: reply.html,

@@ -1,7 +1,6 @@
-import {HTTPException} from 'hono/http-exception';
-
 import type {EntityType} from '../../../generated/prisma/client';
 import type {Db} from '../kit/db';
+import {fieldError} from './http';
 import {strings} from './json-list';
 
 /** Keeps only defined custom fields, coerces by type, merges onto existing values. */
@@ -25,7 +24,7 @@ export async function cleanCustom(
       case 'NUMBER':
       case 'CURRENCY': {
         const n = Number(raw);
-        if (Number.isNaN(n)) throw new HTTPException(400, {message: `${def.label} must be a number`});
+        if (Number.isNaN(n)) throw fieldError(`custom.${def.key}`, `${def.label} must be a number`);
         out[def.key] = n;
         break;
       }
@@ -36,7 +35,7 @@ export async function cleanCustom(
         out[def.key] = (Array.isArray(raw) ? raw : [raw]).map(String).filter((v) => strings(def.options).includes(v));
         break;
       case 'SELECT':
-        if (!strings(def.options).includes(String(raw))) throw new HTTPException(400, {message: `${def.label}: unknown option`});
+        if (!strings(def.options).includes(String(raw))) throw fieldError(`custom.${def.key}`, `${def.label}: pick one of its options`);
         out[def.key] = String(raw);
         break;
       default:

@@ -28,6 +28,7 @@ import {api} from '@/lib/api';
 import {ago, COMPANY_SIZES, fullName, LIFECYCLE, money, shortDate, timeZones} from '@/lib/format';
 import {keys, recordKeys, useApiMutation, useFields, useMe, useSettings} from '@/lib/queries';
 import type {CompanyDetail} from '@/lib/types';
+import {COMPANY_LIMITS} from '@/lib/record-limits';
 
 /** The page gets the 50 most recent contacts and deals; totals come counted (capped at 1000). */
 type CompanyPageData = CompanyDetail & {contactCount: number; dealCount: number; openValue: number; wonValue: number};
@@ -134,20 +135,20 @@ function CompanyPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_300px]">
         <div className="grid min-w-0 grid-cols-1 content-start gap-6">
           <PropertyCard title="About">
-            <TextProperty label="Name" field="name" value={c.name} onSave={(v) => v && save.mutate({name: v})} />
-            <TextProperty label="Domain" field="domain" value={c.domain} onSave={(v) => save.mutate({domain: v})} />
+            <TextProperty label="Name" field="name" maxLength={COMPANY_LIMITS.name} value={c.name} onSave={(v) => v && save.mutate({name: v})} />
+            <TextProperty label="Domain" field="domain" maxLength={COMPANY_LIMITS.domain} value={c.domain} onSave={(v) => save.mutate({domain: v})} />
             <TextProperty label="Website" field="website" value={c.website} href={c.website ?? undefined} onSave={(v) => save.mutate({website: v})} />
             <ChoiceProperty label="Industry" field="industry" noun="industry" creatable value={c.industry} options={settings.data?.settings.industries ?? []} onSave={(v) => save.mutate({industry: v})} />
             <ChoiceProperty label="Type" field="type" noun="type" creatable value={c.type} options={settings.data?.settings.companyTypes ?? []} onSave={(v) => save.mutate({type: v})} />
             <NumberProperty label="Employees" field="employees" value={c.employees} onSave={(v) => save.mutate({employees: v})} />
             <ChoiceProperty label="Size" field="size" value={c.size} options={COMPANY_SIZES} onSave={(v) => save.mutate({size: v})} />
             <NumberProperty label="Annual revenue" field="annualRevenue" value={c.annualRevenue} format={(n) => money(n, currency)} onSave={(v) => save.mutate({annualRevenue: v})} />
-            <TextProperty label="Phone" field="phone" value={c.phone} href={c.phone ? `tel:${c.phone}` : undefined} onSave={(v) => save.mutate({phone: v})} />
-            <TextProperty label="Address" field="address" value={c.address} onSave={(v) => save.mutate({address: v})} />
-            <TextProperty label="City" field="city" value={c.city} onSave={(v) => save.mutate({city: v})} />
-            <TextProperty label="State / region" field="state" value={c.state} onSave={(v) => save.mutate({state: v})} />
-            <TextProperty label="Postal code" field="postalCode" value={c.postalCode} onSave={(v) => save.mutate({postalCode: v})} />
-            <TextProperty label="Country" field="country" value={c.country} onSave={(v) => save.mutate({country: v})} />
+            <TextProperty label="Phone" field="phone" maxLength={COMPANY_LIMITS.phone} value={c.phone} href={c.phone ? `tel:${c.phone}` : undefined} onSave={(v) => save.mutate({phone: v})} />
+            <TextProperty label="Address" field="address" maxLength={COMPANY_LIMITS.address} value={c.address} onSave={(v) => save.mutate({address: v})} />
+            <TextProperty label="City" field="city" maxLength={COMPANY_LIMITS.city} value={c.city} onSave={(v) => save.mutate({city: v})} />
+            <TextProperty label="State / region" field="state" maxLength={COMPANY_LIMITS.state} value={c.state} onSave={(v) => save.mutate({state: v})} />
+            <TextProperty label="Postal code" field="postalCode" maxLength={COMPANY_LIMITS.postalCode} value={c.postalCode} onSave={(v) => save.mutate({postalCode: v})} />
+            <TextProperty label="Country" field="country" maxLength={COMPANY_LIMITS.country} value={c.country} onSave={(v) => save.mutate({country: v})} />
             <ChoiceProperty label="Time zone" field="timezone" value={c.timezone} options={zones} onSave={(v) => save.mutate({timezone: v})} />
             <TextProperty label="LinkedIn" field="linkedin" value={c.linkedin} href={c.linkedin ?? undefined} onSave={(v) => save.mutate({linkedin: v})} />
             <TextProperty label="Description" field="description" value={c.description} onSave={(v) => save.mutate({description: v})} />

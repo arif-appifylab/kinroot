@@ -17,6 +17,7 @@ import {feedsTeamInbox, inboxContext} from '../inbox/settings';
 import {unsubscribeUrl} from '../lib/unsubscribe';
 import {composeEmail, systemEmailHtml} from './design';
 import {type Address, type Attachment, newMessageId} from './mime';
+import {logMailboxError, mailboxErrorText} from './errors';
 import {accountCredentials} from './oauth';
 import {deliver, isReservedAddress, reachesReserved} from './providers';
 import {addTracking, htmlToText, mergeFields, textToHtml} from './render';
@@ -145,7 +146,9 @@ export async function sendEmail(db: Db, me: Pick<User, 'id' | 'name' | 'role'>, 
     await onOutbound(db, t.id, new Date()); // shared inbox: answered, first response time
     if (account.status !== 'CONNECTED') await db.emailAccount.update({where: {id: account.id}, data: {status: 'CONNECTED', lastError: null}});
   } catch (e) {
-    const error = (e as Error).message.slice(0, 500);
+    // The provider's text only in the log; the message, the account and the answer say it in words.
+    logMailboxError(`send ${account.provider}`, e);
+    const error = mailboxErrorText(e);
     await db.emailMessage.update({where: {id: message.id}, data: {status: 'FAILED', error}});
     await db.emailAccount.update({where: {id: account.id}, data: {status: 'ERROR', lastError: error}});
     throw new HTTPException(502, {message: `Email not sent: ${error}`});

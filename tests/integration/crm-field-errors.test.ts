@@ -1,7 +1,10 @@
+import {randomUUID} from 'node:crypto';
+
 import {afterAll, beforeAll, describe, expect, it} from 'vitest';
 
+import {app} from '../../src/server/app';
 import {owner, resetCrm} from './support/crm';
-import {type Browser, configureEnv, DATABASE_URL, db} from './support/harness';
+import {Browser, configureEnv, DATABASE_URL, db} from './support/harness';
 
 /**
  * Hand-written checks about one input name their field (AUDIT P2-32): the answer keeps its status
@@ -71,4 +74,48 @@ describe.skipIf(!DATABASE_URL)('Kinroot field errors from hand-written checks (i
     const inbox = ok<{settings: Json}>(await own.get(`${API}/inbox/settings`)).settings;
     onField(await put('/inbox/settings', {...inbox, assignment: 'round_robin', roundRobinIds: []}), 400, 'roundRobinIds');
   });
+
+  it('backstops on one input name it too: schedule timing, custom values, empty replies (P2-32)', async () => {
+    // A report email's timing (the drawer's "Next sends" and save use the same checks).
+    onField(await post('/report-schedules/next', {frequency: 'weekly', time: '09:00', timezone: 'Europe/Berlin'}), 400, 'weekday');
+    onField(await post('/report-schedules/next', {frequency: 'monthly', time: '09:00', timezone: 'Europe/Berlin'}), 400, 'monthDay');
+    onField(await post('/report-schedules/next', {frequency: 'daily', time: '09:00', timezone: 'Mars/Olympus'}), 400, 'timezone');
+
+    // A custom field's value lands on that field (`custom.<key>`).
+    const def = ok<{field: {key: string}}>(await post('/fields', {entity: 'CONTACT', label: 'Seats', type: 'NUMBER'}), 201).field;
+    onField(await post('/contacts', {firstName: 'Nina', custom: {[def.key]: 'many'}}), 400, `custom.${def.key}`);
+
+    // Empty replies and messages: the editor's field.
+    onField(await post('/tickets/1/messages', {kind: 'reply', html: '<p></p>'}), 400, 'html');
+    onField(await post('/inbox/conversations/none/reply', {html: ''}), 400, 'html');
+    onField(await post('/email/send', {to: ['someone@example.com'], subject: 'Hi'}), 400, 'html');
+  });
+
+  it('public pages: a refused form answer names its question, a booking its duration (P2-32)', async () => {
+    const visitor = async () => {
+      const v = new Browser(app, `198.51.100.${Math.floor(Math.random() * 200) + 20}`);
+      await v.get('/site-api/auth/csrf');
+      return v;
+    };
+    const form = ok<{form: {id: string}}>(await post('/forms', {name: 'Talk to us', templateId: 'contact'}), 201).form;
+    const fd = ok<{form: {slug: string; fields: {id: string; type: string; required?: boolean}[]}}>(await own.get(`${API}/forms/${form.id}`)).form;
+    ok(await post(`/forms/${form.id}/status`, {status: 'PUBLISHED'}));
+    const emailId = fd.fields.find((f) => f.type === 'email')!.id;
+    const answers: Record<string, unknown> = {[emailId]: 'not-an-address'};
+    for (const f of fd.fields) if (f.required && !(f.id in answers)) answers[f.id] = f.type === 'name' ? {first: 'Ada', last: 'L'} : 'Please call';
+    const sent = await (await visitor()).request('POST', `${API}/public/forms/${fd.slug}/submit`, {answers, startedAt: Date.now() - 10_000}, {'idempotency-key': randomUUID()});
+    expect(sent.status, JSON.stringify(sent.json)).toBe(400);
+    expect(Object.keys(sent.json.fields as Json), 'on the email question').toEqual([emailId]);
+    expect(String(sent.json.error), 'the summary says which question').toMatch(/^Email: /);
+
+    const me = await db.member.findFirstOrThrow({select: {id: true}});
+    const allWeek = Object.fromEntries(['0', '1', '2', '3', '4', '5', '6'].map((d) => [d, [{start: '00:00', end: '24:00'}]]));
+    const link = await db.bookingLink.create({
+      data: {kind: 'personal', userId: me.id, slug: `fe-${randomUUID().slice(0, 6)}`, name: 'Intro call', durations: [30], timezone: 'UTC', availability: {weekly: allWeek, overrides: []}, minNoticeMin: 0, questions: {phone: 'off', company: 'off', notes: 'off'}},
+    });
+    const start = new Date(Date.now() + 86_400_000);
+    start.setUTCHours(10, 0, 0, 0);
+    const booked = await (await visitor()).request('POST', `${API}/public/booking/book`, {linkId: link.id, start: start.toISOString(), duration: 45, timezone: 'UTC', name: 'Bo Oker', email: 'bo@example.com', source: 'page'}, {'idempotency-key': randomUUID()});
+    onField(booked, 400, 'duration');
+  }, 60_000);
 });

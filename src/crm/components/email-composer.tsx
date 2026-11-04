@@ -57,7 +57,7 @@ export function EmailComposer({to: initialTo = [], subject: initialSubject = '',
 
   const uid = useId();
   const f = useFormState(
-    {to, cc, subject, preheader},
+    {to, cc, subject, preheader, html},
     {
       to: [is.required('Add at least one recipient, like name@company.com.'), emailList],
       cc: [(v) => (showCc ? emailList(v) : null)],
@@ -119,7 +119,9 @@ export function EmailComposer({to: initialTo = [], subject: initialSubject = '',
           <Input id={`${uid}-preheader`} aria-label="Preview text" value={preheader} onChange={(e) => setPreheader(e.target.value)} onBlur={f.blur('preheader')} placeholder="Preview text (shown next to the subject in the inbox)" maxLength={300} />
         </Field>
       )}
-      <RichEditor value={html} onChange={setHtml} compact={compact} placeholder="Write your message… add a merge field from the toolbar" />
+      <Field error={f.error('html')}>
+        <RichEditor value={html} onChange={setHtml} compact={compact} placeholder="Write your message… add a merge field from the toolbar" />
+      </Field>
       <div className="flex flex-wrap items-center gap-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

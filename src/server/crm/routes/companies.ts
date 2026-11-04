@@ -9,7 +9,8 @@ import {audit, auditMany} from '../lib/audit';
 import {cleanCustom} from '../lib/custom-fields';
 import {forgetPairs, queueDuplicateCheck} from '../lib/duplicates';
 import {emit, emitMany} from '../lib/events';
-import {custom, fieldError, httpUrl, listQuery, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {custom, fieldError, httpUrl, listQuery, notFound, optStr, optText, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {COMPANY_LIMITS, copyName} from '@/lib/record-limits';
 import {adoptContactsForDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
 import {moveToBin} from '../lib/recycle-bin';
@@ -20,22 +21,23 @@ import {strings} from '../lib/json-list';
 export const normalizeDomain = (v: string | null | undefined) =>
   v ? v.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '') || null : v;
 
+const L = COMPANY_LIMITS;
 export const companyBody = z.object({
-  name: z.string().trim().min(1, 'is required').max(200),
-  domain: optStr.transform(normalizeDomain),
-  industry: optStr,
-  type: optStr,
-  size: optStr,
+  name: z.string().trim().min(1, 'is required').max(L.name, `must be at most ${L.name} characters`),
+  domain: optText(L.domain).transform(normalizeDomain),
+  industry: optText(L.industry),
+  type: optText(L.type),
+  size: optText(L.size),
   employees: z.coerce.number().int().min(0).max(10_000_000).nullish(),
   annualRevenue: z.coerce.number().min(0).max(1e13).nullish(),
-  timezone: optStr,
+  timezone: optText(L.timezone),
   website: httpUrl,
-  phone: optStr,
-  address: optStr,
-  city: optStr,
-  state: optStr,
-  postalCode: optStr,
-  country: optStr,
+  phone: optText(L.phone),
+  address: optText(L.address),
+  city: optText(L.city),
+  state: optText(L.state),
+  postalCode: optText(L.postalCode),
+  country: optText(L.country),
   linkedin: httpUrl,
   description: optStr,
   tags: tags.optional(),
@@ -261,7 +263,7 @@ export const companies = new Hono<AppEnv>()
     if (!src) throw notFound('Company');
     const {id: _id, createdAt: _c, updatedAt: _u, lastActivityAt: _l, domain: _d, ...fields} = src;
     // Domain stays with the original so email-domain matching remains unambiguous.
-    const copy = await c.var.db.company.create({data: {...fields, custom: src.custom as Prisma.InputJsonValue, tags: strings(src.tags), name: `${src.name} (copy)`, lastActivityAt: new Date()}});
+    const copy = await c.var.db.company.create({data: {...fields, custom: src.custom as Prisma.InputJsonValue, tags: strings(src.tags), name: copyName(src.name, L.name), lastActivityAt: new Date()}});
     await logActivity(c.var.db, {type: 'company_created', title: `Cloned from ${src.name}`, actorId: me.id, companyId: copy.id});
     await emit(c.var.db, 'company.created', {recordId: copy.id, actorId: me.id, data: copy});
     await audit(c.var.db, c, {action: 'company.cloned', entity: 'company', recordId: copy.id, label: copy.name, meta: {from: src.id}});

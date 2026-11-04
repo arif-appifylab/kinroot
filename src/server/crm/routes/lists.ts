@@ -182,7 +182,8 @@ export const lists = new Hono<AppEnv>()
     const db = c.var.db;
     const q = c.req.valid('query');
     const list = await findList(c);
-    const where: Prisma.ContactWhereInput = {AND: [await listContactWhere(db, list), contactWhere({q: q.q})], ...(await ownerScope(c))};
+    const scope = await ownerScope(c);
+    const where: Prisma.ContactWhereInput = {AND: [await listContactWhere(db, list), await contactWhere(db, {q: q.q}, scope)], ...scope};
     const [rows, total] = await Promise.all([
       db.contact.findMany({
         where,

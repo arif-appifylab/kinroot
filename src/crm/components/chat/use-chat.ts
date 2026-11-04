@@ -34,7 +34,7 @@ const writeToken = (t: string | null) => {
 };
 
 export class ChatError extends Error {
-  constructor(message: string, public status: number) {
+  constructor(message: string, public status: number, public fields: Record<string, string> = {}) {
     super(message);
   }
 }
@@ -45,8 +45,8 @@ export class ChatError extends Error {
  */
 async function call<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<T> {
   const res = await siteFetch(`/site-api/crm/public/chat${path}`, {method: 'POST', headers: {'content-type': 'application/json', ...headers}, body: JSON.stringify(body)});
-  const data = (await res.json().catch(() => ({}))) as {error?: string};
-  if (!res.ok) throw new ChatError(data.error ?? `Something went wrong (${res.status})`, res.status);
+  const data = (await res.json().catch(() => ({}))) as {error?: string; fields?: Record<string, string>};
+  if (!res.ok) throw new ChatError(data.error ?? `Something went wrong (${res.status})`, res.status, data.fields);
   return data as T;
 }
 
@@ -69,6 +69,8 @@ export type ChatState = {
   session: Omit<VisitorSession, 'conversation'> | null;
   conversation: VisitorConversation | null;
   error: string | null;
+  /** The field `error` is about (`text`, `email`), from the server's `fields`; null when none. */
+  errorField: string | null;
   sending: boolean;
   unread: number;
   start: (input: {text: string; files: UploadedFile[]; name?: string; email?: string; hp?: string; startedAt?: number}) => Promise<boolean>;
@@ -90,7 +92,12 @@ export function useVisitorChat({meta, open, continueToken}: {meta: PageMeta; ope
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<ChatState['session']>(null);
   const [conversation, setConversation] = useState<VisitorConversation | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorText] = useState<string | null>(null);
+  const [errorField, setErrorField] = useState<string | null>(null);
+  const setError = (e: unknown) => {
+    setErrorText(e === null ? null : typeof e === 'string' ? e : (e as Error).message);
+    setErrorField(e instanceof ChatError ? (Object.keys(e.fields)[0] ?? null) : null);
+  };
   const [sending, setSending] = useState(false);
   const [unread, setUnread] = useState(0);
   const metaRef = useRef(meta);
@@ -249,7 +256,7 @@ export function useVisitorChat({meta, open, continueToken}: {meta: PageMeta; ope
       adopt(r.session);
       return true;
     } catch (e) {
-      if (!expired(e)) setError((e as Error).message);
+      if (!expired(e)) setError(e);
       return false;
     } finally {
       setSending(false);
@@ -266,7 +273,7 @@ export function useVisitorChat({meta, open, continueToken}: {meta: PageMeta; ope
       typingAt.current = 0;
       return true;
     } catch (e) {
-      if (!expired(e)) setError((e as Error).message);
+      if (!expired(e)) setError(e);
       return false;
     } finally {
       setSending(false);
@@ -297,7 +304,7 @@ export function useVisitorChat({meta, open, continueToken}: {meta: PageMeta; ope
       }
       return r.file;
     } catch (e) {
-      if (!expired(e)) setError((e as Error).message);
+      if (!expired(e)) setError(e);
       return null;
     }
   };
@@ -312,7 +319,7 @@ export function useVisitorChat({meta, open, continueToken}: {meta: PageMeta; ope
       adopt(r.session);
       return true;
     } catch (e) {
-      if (!expired(e)) setError((e as Error).message);
+      if (!expired(e)) setError(e);
       return false;
     }
   };
@@ -323,6 +330,7 @@ export function useVisitorChat({meta, open, continueToken}: {meta: PageMeta; ope
     session,
     conversation,
     error,
+    errorField,
     sending,
     unread,
     start,

@@ -113,14 +113,23 @@ export function useFormState<V extends Record<string, unknown>>(values: V, rules
     invalid: (name: keyof V) => !!error(name),
     /** True when every rule passes (for a submit button outside a form, say). */
     valid: () => !(Object.keys(rules) as (keyof V)[]).some((name) => check(name)),
+    /** A server error on a nested key (`custom.region`): clears when its top-level value (`custom`) changes. */
+    nested: (name: string): string | undefined => {
+      const top = name.split('.')[0] as keyof V;
+      return server && Object.is(server.at[top], values[top]) ? server.errors[name] : undefined;
+    },
     /** `onBlur` for the field's control: its error shows from now on. */
     blur: (name: keyof V) => () => setTouched((t) => (t[name] ? t : {...t, [name]: true})),
     submit,
     /** Props for the `<form>`: no browser popups, validate all, focus the first wrong field. */
     form: (onValid: () => void) => ({ref, noValidate: true, onSubmit: submit(onValid)}),
-    /** Pass as a mutation's `onError`: puts the server's `422 {fields}` on their fields; true when it did. */
+    /**
+     * Pass as a mutation's `onError`: puts the server's `422 {fields}` on their fields; true when it did.
+     * False when none of them is a field of this form (`start` on a form without it): the caller shows
+     * the words elsewhere instead of losing them.
+     */
     fail: (e: unknown) => {
-      if (!(e instanceof ApiError) || !Object.keys(e.fields).length) return false;
+      if (!(e instanceof ApiError) || !Object.keys(e.fields).some((name) => name.split('.')[0]! in values)) return false;
       // A list item's error (`blockedDomains.2`) also lands on its list's field (`blockedDomains`).
       const errors = {...e.fields};
       for (const [name, message] of Object.entries(e.fields)) errors[name.split('.')[0]!] ??= message;

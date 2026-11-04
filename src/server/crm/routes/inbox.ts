@@ -390,7 +390,7 @@ export const inbox = new Hono<AppEnv>()
     const db = c.var.db;
     const me = currentUser(c);
     const input = c.req.valid('json');
-    if (!input.html && !input.body?.trim()) throw new HTTPException(400, {message: 'Write a reply first'});
+    if (!input.html && !input.body?.trim()) throw fieldError('html', 'Write a reply first');
     const {thread: t} = await loadConversation(c, c.req.param('id'));
     if (t.channel === 'ticket') throw new HTTPException(400, {message: 'Reply from the ticket instead'});
     if (isMessageChannel(t.channel)) throw new HTTPException(400, {message: 'Reply in the chat instead'});
@@ -504,7 +504,7 @@ export const inbox = new Hono<AppEnv>()
       binIds = bins.map((b) => b.id);
       return c.json({done: ok.length, skipped: threads.length - ok.length, errors, binIds});
     }
-    if (input.action === 'snooze' && !input.until) throw new HTTPException(400, {message: 'Pick when it should come back'});
+    if (input.action === 'snooze' && !input.until) throw fieldError('until', 'Pick when it should come back');
 
     for (const t of threads) {
       try {
@@ -550,7 +550,7 @@ export const inbox = new Hono<AppEnv>()
   // ─── Sidebar: link or create the contact, associate a deal, create a ticket ───
   .post('/conversations/:id/contact', valid('json', z.object({
     contactId: z.string().max(60).nullish(),
-    create: z.object({firstName: z.string().trim().min(1).max(100), lastName: z.string().trim().max(100).nullish(), email: z.email().transform((v) => v.toLowerCase()).nullish()}).optional(),
+    create: z.object({firstName: z.string().trim().min(1).max(100), lastName: z.string().trim().max(100).nullish(), email: z.email().max(254).transform((v) => v.toLowerCase()).nullish()}).optional(),
   })), async (c) => {
     const db = c.var.db;
     const me = currentUser(c);

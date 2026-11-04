@@ -5,6 +5,7 @@ import {logActivity} from './activity';
 import {emit} from './events';
 import {purgeFileRows} from '../kit/storage';
 import {strings} from './json-list';
+import {clip, COMPANY_LIMITS, CONTACT_LIMITS, DEAL_LIMITS, FORM_LIMITS} from '@/lib/record-limits';
 
 /**
  * Recycle bin. Deleting a contact, company, deal, ticket, form, list or inbox conversation goes
@@ -22,6 +23,9 @@ import {strings} from './json-list';
  */
 
 type Row = Record<string, unknown>;
+/** Column lengths of the binned main records (src/crm/lib/record-limits.ts; Ticket.subject from crm_text_lengths_2). */
+const RESTORE_LIMITS: Record<string, Readonly<Record<string, number>>> = {contact: CONTACT_LIMITS, company: COMPANY_LIMITS, deal: DEAL_LIMITS, form: FORM_LIMITS, ticket: {subject: 300}};
+
 type Target = 'user' | 'contact' | 'company' | 'deal' | 'stage' | 'activity' | 'ticket' | 'form' | 'contactList' | 'scoreRule' | 'emailAccount' | 'emailThread' | 'emailMessage' | 'channelIdentity';
 type Fk = Target | `${Target}!`;
 
@@ -468,7 +472,8 @@ export async function restoreFromBin(db: Db, entry: DeletedRecord, actor: BinAct
   const inserts = tables.map(([table, rows]) => {
     const kept: Row[] = [];
     for (const r of rows) {
-      const row = columnsOf(table, r);
+      // Binned before a column got its length (P3-14): cut to it, so the restore never fails on it.
+      const row = RESTORE_LIMITS[table] ? clip(columnsOf(table, r), RESTORE_LIMITS[table]) : columnsOf(table, r);
       let ok = true;
       for (const [col, fk] of Object.entries(TABLES[table].fk) as [string, Fk][]) {
         if (row[col] == null || alive(fk.replace('!', '') as Target, row[col])) continue;

@@ -4,6 +4,7 @@ import {z} from 'zod';
 
 import type {Prisma} from '../../../generated/prisma/client';
 import {answerText, defaultSettings, FORM_TEMPLATES, slugify, type FieldType, type StoredAnswer} from '@/lib/forms';
+import {copyName, cut, FORM_LIMITS} from '@/lib/record-limits';
 import {currentUser, isAdmin, requireRole, type AppEnv, type User} from '../kit/guards';
 import {audit} from '../lib/audit';
 import {formFields, formSettings} from '../lib/form-submit';
@@ -74,9 +75,11 @@ function canManage(me: Pick<User, 'id' | 'role'>, form: {createdById: string | n
 }
 
 async function uniqueSlug(db: AppEnv['Variables']['db'], base: string, exceptId?: string) {
-  const root = slugify(base);
+  // Within the slug's limit: the name's slug itself, then a shorter root with room for "-50" or the time.
+  const first = cut(slugify(base), FORM_LIMITS.slug).replace(/-+$/, '') || 'form';
+  const root = cut(first, FORM_LIMITS.slug - 10).replace(/-+$/, '') || 'form';
   for (let i = 0; i < 50; i++) {
-    const slug = i ? `${root}-${i + 1}` : root;
+    const slug = i ? `${root}-${i + 1}` : first;
     const taken = await db.form.findFirst({where: {slug, ...(exceptId ? {id: {not: exceptId}} : {})}, select: {id: true}});
     if (!taken) return slug;
   }
@@ -103,7 +106,7 @@ export const forms = new Hono<AppEnv>()
     return c.json({rows});
   })
 
-  .post('/', valid('json', z.object({name: z.string().trim().min(1).max(120), templateId: z.string().optional()})), async (c) => {
+  .post('/', valid('json', z.object({name: z.string().trim().min(1).max(FORM_LIMITS.name), templateId: z.string().optional()})), async (c) => {
     const me = currentUser(c);
     const {name, templateId} = c.req.valid('json');
     const template = FORM_TEMPLATES.find((t) => t.id === templateId) ?? FORM_TEMPLATES[0]!;
@@ -128,7 +131,7 @@ export const forms = new Hono<AppEnv>()
     return c.json({form: {...form, settings: formSettings(form), fields: formFields(form)}});
   })
 
-  .patch('/:id', valid('json', z.object({name: z.string().trim().min(1).max(120).optional(), slug: z.string().trim().max(60).optional(), fields: z.array(field).max(200).optional(), settings: settings.optional()})), async (c) => {
+  .patch('/:id', valid('json', z.object({name: z.string().trim().min(1).max(FORM_LIMITS.name).optional(), slug: z.string().trim().max(FORM_LIMITS.slug).optional(), fields: z.array(field).max(200).optional(), settings: settings.optional()})), async (c) => {
     const db = c.var.db;
     const body = c.req.valid('json');
     const found = await db.form.findUnique({where: {id: c.req.param('id')}, select: {id: true, settings: true}});
@@ -179,7 +182,7 @@ export const forms = new Hono<AppEnv>()
     const me = currentUser(c);
     const src = await c.var.db.form.findUnique({where: {id: c.req.param('id')}});
     if (!src) throw notFound('Form');
-    const name = `${src.name} (copy)`;
+    const name = copyName(src.name, FORM_LIMITS.name);
     const form = await c.var.db.form.create({
       data: {name, slug: await uniqueSlug(c.var.db, name), fields: src.fields as Prisma.InputJsonValue, settings: src.settings as Prisma.InputJsonValue, createdById: me.id},
       select: {id: true},

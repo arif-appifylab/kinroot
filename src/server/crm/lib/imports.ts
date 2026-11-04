@@ -37,6 +37,7 @@ import type {Db} from '../kit/db';
 import {companyBody, normalizeDomain} from '../routes/companies';
 import {contactBody} from '../routes/contacts';
 import {dealBody} from '../routes/deals';
+import {COMPANY_LIMITS, cut, DEAL_LIMITS} from '@/lib/record-limits';
 import {publicFileUrl} from '../routes/files';
 import {sendSystemEmail} from '../email/service';
 import {customDiff, diff, logActivity} from './activity';
@@ -176,7 +177,7 @@ function companyRef(ctx: Ctx, cells: string[]): CompanyRef | undefined {
   const name = cell(ctx, cells, 'company') || undefined;
   const domain = normalizeDomain(cell(ctx, cells, 'companyDomain')) || undefined;
   if (!name && !domain) return undefined;
-  return {key: domain ? `d:${domain}` : `n:${lower(name!)}`, name: name?.slice(0, 200), domain};
+  return {key: domain ? `d:${domain}` : `n:${lower(name!)}`, name: cut(name, COMPANY_LIMITS.name), domain: cut(domain, COMPANY_LIMITS.domain)};
 }
 
 /** Keys that identify a row's record; two rows sharing one are duplicates in the file. */
@@ -331,7 +332,7 @@ async function resolveCompanies(ctx: Ctx, rows: Prepared[]) {
   const inserted = await ctx.db.company.createManyAndReturn({
     data: create.map((r) => ({
       id: r.id,
-      name: r.name ?? nameFromDomain(r.domain!),
+      name: r.name ?? cut(nameFromDomain(r.domain!), COMPANY_LIMITS.name),
       domain: r.domain ?? null,
       website: r.domain ? `https://${r.domain}` : null,
       ownerId: r.ownerId,
@@ -377,10 +378,10 @@ async function associateByDomains(ctx: Ctx, contacts: {id: string; email: string
   if (ctx.settings.autoCreateCompanies) {
     const missing = [...byDomain.keys()].filter((d) => !company.has(d));
     const created = await ctx.db.company.createManyAndReturn({
-      data: await Promise.all(missing.map(async (d) => ({id: await detId(ctx.imp.id, 'company', `d:${d}`), name: nameFromDomain(d), domain: d, website: `https://${d}`, ownerId: byDomain.get(d)![0]!.ownerId, lastActivityAt: ctx.now}))),
+      data: await Promise.all(missing.map(async (d) => ({id: await detId(ctx.imp.id, 'company', `d:${d}`), name: cut(nameFromDomain(d), COMPANY_LIMITS.name), domain: d, website: `https://${d}`, ownerId: byDomain.get(d)![0]!.ownerId, lastActivityAt: ctx.now}))),
       skipDuplicates: true,
     });
-    for (const d of missing) company.set(d, {id: await detId(ctx.imp.id, 'company', `d:${d}`), name: nameFromDomain(d)});
+    for (const d of missing) company.set(d, {id: await detId(ctx.imp.id, 'company', `d:${d}`), name: cut(nameFromDomain(d), COMPANY_LIMITS.name)});
     await companiesCreated(ctx, created, 'Company created from email domain (import)');
   }
   const links = [...byDomain].flatMap(([d, list]) => (company.has(d) ? list.map((c) => ({contactId: c.id, companyId: company.get(d)!.id, name: company.get(d)!.name})) : []));
@@ -570,7 +571,7 @@ async function planCreate(ctx: Ctx, p: Prepared, id: string): Promise<Plan> {
     return {p, outcome: 'create', newId: id, data: {...data, source: data.source ?? 'Import', custom}, note: p.note};
   }
   if (ctx.entity === 'company') {
-    const name = (p.fields.name as string | undefined) || (typeof p.fields.domain === 'string' && p.fields.domain ? nameFromDomain(p.fields.domain) : undefined);
+    const name = (p.fields.name as string | undefined) || (typeof p.fields.domain === 'string' && p.fields.domain ? cut(nameFromDomain(p.fields.domain), COMPANY_LIMITS.name) : undefined);
     if (!name) return fail([{level: 'error', column: null, message: 'Needs a name or a domain'}]);
     const r = companyBody.safeParse(defined({...p.fields, name, tags: p.tags, ownerId: ownerFor(ctx, p)}));
     if (!r.success) return fail(zodIssues(ctx, r.error));
@@ -597,7 +598,7 @@ async function planCreate(ctx: Ctx, p: Prepared, id: string): Promise<Plan> {
       pipelineId: where.pipeline.id,
       stageId: where.stage.id,
       status: status ?? 'OPEN',
-      lostReason: status === 'LOST' ? lostReason ?? null : null,
+      lostReason: status === 'LOST' ? cut(lostReason ?? null, DEAL_LIMITS.lostReason) : null,
       closedAt: closed ? (closedAt ? new Date(closedAt) : ctx.now) : null,
       custom,
     },
@@ -631,7 +632,7 @@ async function planUpdate(ctx: Ctx, p: Prepared, before: Existing): Promise<Plan
       if (status === 'LOST' && !lostReason && !deal.lostReason) p.issues.push({level: 'warning', column: ctx.columnOf.get('status') ?? null, message: 'Lost without a lost reason'});
       if (status !== 'LOST') data.lostReason = null;
     } else if (closedAt && deal.status !== 'OPEN') data.closedAt = new Date(closedAt);
-    if (lostReason !== undefined && (status ?? deal.status) === 'LOST') data.lostReason = lostReason;
+    if (lostReason !== undefined && (status ?? deal.status) === 'LOST') data.lostReason = cut(lostReason, DEAL_LIMITS.lostReason);
   }
   const companyId = p.company ? ctx.companies.get(p.company.key) ?? null : null;
   if (ctx.entity === 'deal' && companyId && companyId !== NEW && companyId !== (before.companyId ?? null)) data.companyId = companyId;

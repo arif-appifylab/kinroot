@@ -3,6 +3,7 @@ import {toB64} from '../kit/crypto';
 import {buildMime, formatAddress, mimeToBase64Url, type OutgoingMessage} from './mime';
 import {config as site} from '../../../platform/config';
 import {fetchOut} from '../kit/outbound';
+import {MailboxCallError, MailboxSetupError} from './errors';
 
 /**
  * Two ways to connect email, one interface:
@@ -76,19 +77,22 @@ export function secretsPresent() {
 
 /** The account's stored settings plus its provider's key from the owner's secret (a refused send when missing). */
 function withKey(provider: EmailProvider, stored: Credentials): Credentials {
-  if (provider === 'SMTP') throw new ProviderError('Custom SMTP is not available on this site. Connect Resend, Postmark, SendGrid, Mailgun, Gmail or Outlook instead.', 400);
+  if (provider === 'SMTP') throw new MailboxSetupError('Custom SMTP is not available on this site. Connect Resend, Postmark, SendGrid, Mailgun, Gmail or Outlook instead.');
   if (!isApi(provider)) return stored;
   const name = API_KEY_SECRETS[provider];
   const key = site.ownerSecret(name);
-  if (!key) throw new ProviderError(`Add the ${name} secret in the site dashboard to send with ${PROVIDER_INFO[provider].label}.`, 400);
+  if (!key) throw new MailboxSetupError(`Add the ${name} secret in the site dashboard to send with ${PROVIDER_INFO[provider].label}.`);
   return provider === 'POSTMARK' ? {...stored, serverToken: key} : {...stored, apiKey: key};
 }
 
-/** A refused request: 4xx other than 429 won't succeed on retry, so jobs fail it straight away. */
-class ProviderError extends Error {
+/**
+ * A refused request: 4xx other than 429 won't succeed on retry, so jobs fail it straight away. Its
+ * text is the provider's: shown only as words (`mailboxErrorText`), logged raw.
+ */
+class ProviderError extends MailboxCallError {
   readonly permanent: boolean;
-  constructor(message: string, readonly status: number) {
-    super(message);
+  constructor(message: string, status: number) {
+    super(message, status);
     this.permanent = status >= 400 && status < 500 && status !== 408 && status !== 429;
   }
 }
@@ -291,7 +295,7 @@ export async function verifyCredentials(provider: EmailProvider, stored: Credent
       if (res.ok) return 'API key is valid';
       const body = (await res.json().catch(() => ({}))) as {name?: string; message?: string};
       if (body.name === 'restricted_api_key') return 'API key is valid (sending only)';
-      throw new Error(`Resend ${res.status}: ${body.message ?? res.statusText}`);
+      throw new ProviderError(`Resend ${res.status}: ${body.message ?? res.statusText}`, res.status);
     }
     case 'POSTMARK':
       await expectOk(await fetchOut('https://api.postmarkapp.com/server', {headers: {'x-postmark-server-token': (creds as PostmarkCreds).serverToken, accept: 'application/json'}}), 'Postmark');

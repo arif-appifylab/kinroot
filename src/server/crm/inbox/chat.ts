@@ -16,6 +16,7 @@ import {
   type VisitorMessage,
 } from '@/lib/chat';
 import {timeIn} from '@/lib/scheduling';
+import {clip, CONTACT_LIMITS} from '@/lib/record-limits';
 import {config} from '../kit/config';
 import {randomToken, sign, verifySignature} from '../kit/crypto';
 import type {Db} from '../kit/db';
@@ -26,6 +27,7 @@ import {checkDuplicates} from '../lib/duplicates';
 import {emit} from '../lib/events';
 import {enqueue} from '../lib/jobs';
 import {notifyWatchers} from '../lib/notify';
+import {fieldError} from '../lib/http';
 import {getSettings} from '../lib/settings';
 import {stripQuoted} from '../lib/ticket-mail';
 import {sendEmail} from '../email/service';
@@ -252,7 +254,7 @@ async function contactForVisitor(db: Db, email: string, name?: string | null) {
   if (existing) return existing;
   const [first, ...rest] = (name?.trim() || address.split('@')[0]!).split(/\s+/);
   const contact = await db.contact.create({
-    data: {firstName: (first || address).slice(0, 100), lastName: rest.join(' ').slice(0, 100) || null, email: address, source: 'Chat', lastActivityAt: new Date()},
+    data: clip({firstName: first || address, lastName: rest.join(' ') || null, email: address, source: 'Chat', lastActivityAt: new Date()}, CONTACT_LIMITS),
   });
   await logActivity(db, {type: 'contact_created', title: 'Contact created from a website chat', contactId: contact.id});
   await associateByDomain(db, contact.id).catch(() => null);
@@ -324,7 +326,7 @@ export async function openChat(tx: Prisma.TransactionClient, place: Awaited<Retu
   const identity = input.identity ?? (await tx.channelIdentity.create({data: {channel: 'chat', externalId: randomToken(12)}, select: {id: true, contactId: true}}));
   // A new visitor has no files: an upload makes the visitor first, and its token is bound to them.
   const fileIds = input.identity ? await claimFiles(tx, identity.id, input.files) : [];
-  if (!input.text && !fileIds.length) throw new HTTPException(400, {message: 'Write a message first'});
+  if (!input.text && !fileIds.length) throw fieldError('text', 'Write a message first');
   const thread = await tx.emailThread.create({
     data: {
       subject: excerpt(input.text, 80) || (fileIds.length ? 'Sent a file' : 'Website chat'),

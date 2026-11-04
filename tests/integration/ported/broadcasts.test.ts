@@ -113,7 +113,9 @@ describe.skipIf(!DATABASE_URL)('ported: broadcasts (scripts/integration/test-bro
 
   it('validates: empty email, a past schedule, a list nobody can be emailed in', async () => {
     expect((await own.post('/broadcasts', {listId: S.id, accountId: A.id, subject: 'x', html: '<p></p>'})).status, 'empty email rejected').toBe(400);
-    expect((await own.post('/broadcasts', {listId: S.id, accountId: A.id, subject: 'x', html, scheduledAt: new Date(Date.now() - 3_600_000).toISOString()})).status, 'past schedule rejected').toBe(400);
+    const past = await own.post('/broadcasts', {listId: S.id, accountId: A.id, subject: 'x', html, scheduledAt: new Date(Date.now() - 3_600_000).toISOString()});
+    expect(past.status, 'past schedule rejected').toBe(400);
+    expect(past.json.fields, 'on the send time field (P2-32)').toEqual({scheduledAt: 'Pick a time in the future'});
     const empty = must<{list: {id: string}}>(await own.post('/lists', {name: 'Empty', kind: 'STATIC'}), 'empty list').list;
     const r = await own.post('/broadcasts', {listId: empty.id, accountId: A.id, subject: 'x', html});
     expect(r.status).toBe(400);

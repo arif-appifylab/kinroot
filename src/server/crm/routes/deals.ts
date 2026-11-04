@@ -9,14 +9,16 @@ import {customDiff, diff, logActivity} from '../lib/activity';
 import {audit, auditMany} from '../lib/audit';
 import {cleanCustom} from '../lib/custom-fields';
 import {emit} from '../lib/events';
-import {assertVisible, custom, fieldError, intParam, isoDate, MAX_PAGE, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {assertVisible, custom, fieldError, intParam, isoDate, MAX_PAGE, notFound, optText, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {DEAL_LIMITS} from '@/lib/record-limits';
 import {notify, notifyWatchers, recordLink} from '../lib/notify';
 import {moveToBin} from '../lib/recycle-bin';
+import {companyIdsNamed} from '../lib/search-match';
 import {rememberOption} from '../lib/settings';
 import {userSelect} from '../lib/users';
 
 export const dealBody = z.object({
-  title: z.string().trim().min(1, 'is required').max(200),
+  title: z.string().trim().min(1, 'is required').max(DEAL_LIMITS.title, `must be at most ${DEAL_LIMITS.title} characters`),
   value: z.coerce.number().min(0).max(1e12).optional(),
   currency: z.string().length(3).toUpperCase().optional(),
   pipelineId: z.string().optional(),
@@ -24,8 +26,8 @@ export const dealBody = z.object({
   companyId: z.string().nullish(),
   /** All companies on the deal; the first one (or companyId) is primary. */
   companyIds: z.array(z.string()).max(20).optional(),
-  type: optStr,
-  priority: optStr,
+  type: optText(DEAL_LIMITS.type),
+  priority: optText(DEAL_LIMITS.priority),
   ownerId: z.string().nullish(),
   expectedCloseDate: isoDate,
   tags: tags.optional(),
@@ -126,7 +128,7 @@ const dealListQuery = z.object({
   ownerId: z.string().optional(),
   stageId: z.string().optional(),
   companyId: z.string().optional(),
-  q: z.string().optional(),
+  q: z.string().max(200).optional(),
   tag: z.string().optional(),
   rotting: z.string().optional(),
   sort: z.string().optional(),
@@ -135,8 +137,13 @@ const dealListQuery = z.object({
   page: intParam(1, MAX_PAGE).default(1),
 });
 
-/** The deals list's filters as a where (exports use it too). `rotting` is applied after loading. */
-export function dealWhere(q: Partial<z.infer<typeof dealListQuery>>): Prisma.DealWhereInput {
+/**
+ * The deals list's filters as a where (exports use it too). `rotting` is applied after loading.
+ * The search matches the title or the company's name, among the companies the user may see
+ * (`scope`: ownerScope); those companies are looked up first, so the match stays index-served
+ * (lib/search-match.ts).
+ */
+export async function dealWhere(db: Db, q: Partial<z.infer<typeof dealListQuery>>, scope: {ownerId?: string} = {}): Promise<Prisma.DealWhereInput> {
   const where: Prisma.DealWhereInput = {};
   if (q.pipelineId) where.pipelineId = q.pipelineId;
   if (q.status === 'CLOSED') where.status = {in: ['WON', 'LOST']};
@@ -156,7 +163,10 @@ export function dealWhere(q: Partial<z.infer<typeof dealListQuery>>): Prisma.Dea
   if (q.stageId) where.stageId = q.stageId;
   if (q.companyId) where.companies = {some: {companyId: q.companyId}};
   if (q.tag) where.tags = {array_contains: [q.tag]};
-  if (q.q) where.OR = [{title: {contains: q.q, mode: 'insensitive'}}, {company: {name: {contains: q.q, mode: 'insensitive'}}}];
+  if (q.q) {
+    const companyIds = await companyIdsNamed(db, q.q, scope);
+    where.OR = [{title: {contains: q.q, mode: 'insensitive'}}, ...(companyIds.length ? [{companyId: {in: companyIds}}] : [])];
+  }
   return where;
 }
 
@@ -165,7 +175,7 @@ export const deals = new Hono<AppEnv>()
     const db = c.var.db;
     const q = c.req.valid('query');
     const scope = await ownerScope(c);
-    const base: Prisma.DealWhereInput = {...dealWhere(q), ...scope};
+    const base: Prisma.DealWhereInput = {...(await dealWhere(db, q, scope)), ...scope};
     const where: Prisma.DealWhereInput = q.rotting === '1' ? {AND: [base, await rottingWhere(db, q.pipelineId)]} : base;
     // The id last makes the order total, so a page never skips or repeats a deal.
     const order = q.sort ? sortBy(q.sort, q.dir, ['title', 'value', 'expectedCloseDate', 'createdAt', 'lastActivityAt'], 'createdAt') : null;
@@ -327,7 +337,7 @@ export const deals = new Hono<AppEnv>()
     return c.json({deal: updated});
   })
 
-  .post('/:id/status', valid('json', z.object({status: z.enum(['OPEN', 'WON', 'LOST']), lostReason: optStr})), async (c) => {
+  .post('/:id/status', valid('json', z.object({status: z.enum(['OPEN', 'WON', 'LOST']), lostReason: optText(DEAL_LIMITS.lostReason)})), async (c) => {
     const me = currentUser(c);
     const db = c.var.db;
     const {status, lostReason} = c.req.valid('json');

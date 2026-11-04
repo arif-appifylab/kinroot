@@ -32,10 +32,26 @@ const taskBody = z.object({
 
 const taskInclude = {
   assignee: {select: userSelect},
-  contact: {select: {id: true, firstName: true, lastName: true}},
-  company: {select: {id: true, name: true}},
-  deal: {select: {id: true, title: true}},
+  // `ownerId` only to decide what this person may see (`shownTask`); never sent.
+  contact: {select: {id: true, firstName: true, lastName: true, ownerId: true}},
+  company: {select: {id: true, name: true, ownerId: true}},
+  deal: {select: {id: true, title: true, ownerId: true}},
 } satisfies Prisma.TaskInclude;
+
+type Linked = {ownerId: string | null} | null;
+
+/**
+ * A task as this person may see it: with owner-only visibility, a linked contact, company or deal
+ * they may not see shows as no link (a task assigned to them can sit on someone else's record).
+ */
+function shownTask<T extends {contact: Linked; company: Linked; deal: Linked}>(task: T, scope: {ownerId?: string}) {
+  const keep = <L extends Linked>(link: L) => {
+    if (!link) return null;
+    const {ownerId, ...rest} = link;
+    return !scope.ownerId || ownerId === scope.ownerId ? rest : null;
+  };
+  return {...task, contact: keep(task.contact), company: keep(task.company), deal: keep(task.deal)};
+}
 
 const taskLink = (t: {contactId: string | null; companyId: string | null; dealId: string | null}) => linkFor(t) ?? '/tasks';
 
@@ -164,13 +180,15 @@ export const tasks = new Hono<AppEnv>()
     if (q.type) where.type = q.type;
     if (q.priority) where.priority = q.priority;
     if (q.queue) where.queue = q.queue === 'none' ? null : q.queue;
+    const scope = await ownerScope(c);
     if (q.q) {
+      // A linked record's name matches only when this person may see that record.
       where.OR = [
         {title: {contains: q.q, mode: 'insensitive'}},
         {description: {contains: q.q, mode: 'insensitive'}},
-        {contact: {OR: [{firstName: {contains: q.q, mode: 'insensitive'}}, {lastName: {contains: q.q, mode: 'insensitive'}}]}},
-        {company: {name: {contains: q.q, mode: 'insensitive'}}},
-        {deal: {title: {contains: q.q, mode: 'insensitive'}}},
+        {contact: {...scope, OR: [{firstName: {contains: q.q, mode: 'insensitive'}}, {lastName: {contains: q.q, mode: 'insensitive'}}]}},
+        {company: {...scope, name: {contains: q.q, mode: 'insensitive'}}},
+        {deal: {...scope, title: {contains: q.q, mode: 'insensitive'}}},
       ];
     }
 
@@ -196,7 +214,7 @@ export const tasks = new Hono<AppEnv>()
     let rows = await c.var.db.task.findMany({where, include: taskInclude, orderBy, take: 500});
     // Enum order in Postgres isn't the importance order, so rank in code.
     if (q.sort === 'priority') rows = [...rows].sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]);
-    return c.json({rows});
+    return c.json({rows: rows.map((t) => shownTask(t, scope))});
   })
 
   .get('/counts', async (c) => {
@@ -218,7 +236,8 @@ export const tasks = new Hono<AppEnv>()
       orderBy: {reminderAt: 'asc'},
       take: 10,
     });
-    return c.json({rows});
+    const scope = await ownerScope(c);
+    return c.json({rows: rows.map((t) => shownTask(t, scope))});
   })
 
   .post('/:id/reminded', async (c) => {
@@ -254,7 +273,7 @@ export const tasks = new Hono<AppEnv>()
     });
     await emit(c.var.db, 'task.created', {recordId: task.id, actorId: me.id, data: task});
     await notify(c.var.db, [task.assigneeId], {type: 'assigned', title: `${me.name} assigned you a task: ${task.title}`, link: taskLink(task), actorId: me.id});
-    return c.json({task}, 201);
+    return c.json({task: shownTask(task, await ownerScope(c))}, 201);
   })
 
   .post('/bulk', valid('json', z.object({
@@ -311,7 +330,7 @@ export const tasks = new Hono<AppEnv>()
     let next = null;
     if (completing) next = (await completeTasks(c.var.db, [task], me)).get(task.id) ?? null;
     else await touch(c.var.db, task);
-    return c.json({task, next});
+    return c.json({task: shownTask(task, await ownerScope(c)), next});
   })
 
   .delete('/:id', async (c) => {

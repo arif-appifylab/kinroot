@@ -108,7 +108,8 @@ export function EditableProperty<T>({label, value, display, editor, onSave, fiel
 
 const empty = <span className="text-slate-400">—</span>;
 
-export function TextProperty({label, value, onSave, type = 'text', href, field}: {label: string; value: string | null | undefined; onSave: (v: string | null) => unknown; type?: string; href?: string; field?: string}) {
+/** `maxLength`: the field's limit (src/crm/lib/record-limits.ts), so the inline edit can't go past what the server takes. */
+export function TextProperty({label, value, onSave, type = 'text', href, field, maxLength}: {label: string; value: string | null | undefined; onSave: (v: string | null) => unknown; type?: string; href?: string; field?: string; maxLength?: number}) {
   const ref = useRef<HTMLInputElement>(null);
   return (
     <EditableProperty
@@ -123,6 +124,7 @@ export function TextProperty({label, value, onSave, type = 'text', href, field}:
           autoFocus
           aria-label={label}
           type={type}
+          maxLength={maxLength}
           className="h-8"
           value={v}
           onChange={(e) => onChange(e.target.value)}

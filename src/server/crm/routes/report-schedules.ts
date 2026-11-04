@@ -4,7 +4,7 @@ import {z} from 'zod';
 
 import type {Prisma, ReportSchedule} from '../../../generated/prisma/client';
 import type {User} from '../kit/guards';
-import {SCHEDULE_STATUS, describeSchedule, scheduleBodySchema, schedulePatchSchema, scheduleProblem, scheduleTimingSchema, type ScheduleBody} from '@/lib/report-schedules';
+import {SCHEDULE_STATUS, describeSchedule, scheduleBodySchema, scheduleIssue, schedulePatchSchema, scheduleTimingSchema, type ScheduleBody} from '@/lib/report-schedules';
 import {isTimeZone} from '@/lib/scheduling';
 import {publicOrigin} from '../kit/config';
 import type {Db} from '../kit/db';
@@ -38,9 +38,9 @@ async function findSchedule(db: Db, me: User, id: string) {
 
 /** Checks the draft, the target (visible to the creator) and the team recipients. */
 async function checkBody(db: Db, creator: Pick<User, 'id'>, b: ScheduleBody) {
-  const problem = scheduleProblem(b);
-  if (problem) throw new HTTPException(400, {message: problem});
-  if (!isTimeZone(b.timezone)) throw new HTTPException(400, {message: 'Pick a valid time zone'});
+  const issue = scheduleIssue(b);
+  if (issue) throw issue.field ? fieldError(issue.field, issue.message) : new HTTPException(400, {message: issue.message});
+  if (!isTimeZone(b.timezone)) throw fieldError('timezone', 'Pick a valid time zone');
   const visible = {OR: [{shared: true}, {ownerId: creator.id}]};
   if (b.reportId && !(await db.report.findFirst({where: {id: b.reportId, ...visible}, select: {id: true}}))) throw notFound('Report');
   if (b.dashboardId && !(await db.dashboard.findFirst({where: {id: b.dashboardId, ...visible}, select: {id: true}}))) throw notFound('Dashboard');
@@ -118,9 +118,9 @@ export const reportSchedules = new Hono<AppEnv>()
   /** The next sends of a timing (the drawer shows them; `after` defaults to now). */
   .post('/next', valid('json', scheduleTimingSchema.extend({after: z.iso.datetime().optional(), count: z.number().int().min(1).max(12).default(3)})), async (c) => {
     const b = c.req.valid('json');
-    if (!isTimeZone(b.timezone)) throw new HTTPException(400, {message: 'Pick a valid time zone'});
-    if (b.frequency === 'weekly' && (b.weekday === null || b.weekday === undefined)) throw new HTTPException(400, {message: 'Pick a weekday'});
-    if (b.frequency === 'monthly' && !b.monthDay) throw new HTTPException(400, {message: 'Pick a day of the month'});
+    if (!isTimeZone(b.timezone)) throw fieldError('timezone', 'Pick a valid time zone');
+    if (b.frequency === 'weekly' && (b.weekday === null || b.weekday === undefined)) throw fieldError('weekday', 'Pick a weekday');
+    if (b.frequency === 'monthly' && !b.monthDay) throw fieldError('monthDay', 'Pick a day of the month');
     const timing = {...b, weekday: b.weekday ?? null, monthDay: b.monthDay ?? null};
     return c.json({slots: upcomingSlots(timing, b.after ? Date.parse(b.after) : Date.now(), b.count).map((t) => new Date(t).toISOString())});
   })

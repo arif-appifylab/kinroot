@@ -4,6 +4,7 @@ import type {Db} from '../kit/db';
 import {config as site} from '../../../platform/config';
 import type {Credentials, OAuthCreds} from './providers';
 import {fetchOut} from '../kit/outbound';
+import {logMailboxError, mailboxErrorText, MailboxCallError, MailboxSetupError} from './errors';
 
 export type OAuthKind = 'google' | 'microsoft';
 
@@ -70,20 +71,20 @@ async function tokenRequest(kind: OAuthKind, client: {clientId: string; clientSe
     body: new URLSearchParams({client_id: client.clientId, client_secret: client.clientSecret, ...params}),
   });
   const body = (await res.json()) as TokenResponse;
-  if (!res.ok || body.error) throw new Error(body.error_description ?? body.error ?? `Token request failed (${res.status})`);
+  if (!res.ok || body.error) throw new MailboxCallError(body.error_description ?? body.error ?? `Token request failed (${res.status})`, res.ok ? 400 : res.status, body.error ?? null);
   return body;
 }
 
 export async function exchangeCode(kind: OAuthKind, client: {clientId: string; clientSecret: string; tenant: string}, code: string, redirectUri: string) {
   const t = await tokenRequest(kind, client, {code, redirect_uri: redirectUri, grant_type: 'authorization_code'});
-  if (!t.refresh_token) throw new Error('No refresh token returned. Remove the app from your account permissions and connect again.');
+  if (!t.refresh_token) throw new MailboxSetupError('No refresh token returned. Remove the app from your account permissions and connect again.');
   const creds: OAuthCreds = {accessToken: t.access_token, refreshToken: t.refresh_token, expiresAt: Date.now() + t.expires_in * 1000, scope: t.scope};
 
   const profileUrl = kind === 'google' ? 'https://openidconnect.googleapis.com/v1/userinfo' : 'https://graph.microsoft.com/v1.0/me';
   const profile = (await (await fetchOut(profileUrl, {headers: {authorization: `Bearer ${creds.accessToken}`}})).json()) as Record<string, string>;
   const email = (kind === 'google' ? profile.email : profile.mail || profile.userPrincipalName)?.toLowerCase();
   const name = kind === 'google' ? profile.name : profile.displayName;
-  if (!email) throw new Error('Could not read the mailbox address');
+  if (!email) throw new MailboxSetupError('Could not read the mailbox address');
   return {creds, email, name: name ?? email};
 }
 
@@ -96,7 +97,7 @@ export async function accountCredentials(db: Db, account: EmailAccount): Promise
   if (oauth.expiresAt - Date.now() > 120_000) return oauth;
   const kind: OAuthKind = account.provider === 'GMAIL' ? 'google' : 'microsoft';
   const client = await oauthClient(db, kind);
-  if (!client) throw new Error(`${kind === 'google' ? 'Google' : 'Microsoft'} OAuth app is not configured`);
+  if (!client) throw Object.assign(new Error(`${kind === 'google' ? 'Google' : 'Microsoft'} OAuth app is not configured`), {notConfigured: true});
   try {
     const t = await tokenRequest(kind, client, {refresh_token: oauth.refreshToken, grant_type: 'refresh_token'});
     const next: OAuthCreds = {
@@ -108,7 +109,8 @@ export async function accountCredentials(db: Db, account: EmailAccount): Promise
     await db.emailAccount.update({where: {id: account.id}, data: {credentials: await encryptJson(next), status: 'CONNECTED', lastError: null}});
     return next;
   } catch (e) {
-    await db.emailAccount.update({where: {id: account.id}, data: {status: 'ERROR', lastError: `Reconnect needed: ${(e as Error).message}`}});
+    logMailboxError('token refresh', e);
+    await db.emailAccount.update({where: {id: account.id}, data: {status: 'ERROR', lastError: mailboxErrorText(e)}});
     throw e;
   }
 }

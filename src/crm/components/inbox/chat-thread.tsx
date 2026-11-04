@@ -13,7 +13,8 @@ import {MentionField} from '../mentions';
 import {useCannedReplies} from '../tickets/ticket-badges';
 import {Button} from '../ui/button';
 import {Card} from '../ui/card';
-import {Textarea} from '../ui/form';
+import {Field, Textarea} from '../ui/form';
+import {useFormState} from '../ui/form-state';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger, Tooltip} from '../ui/menu';
 import {Avatar} from '../ui/misc';
 import type {ComposerMode} from './reply-composer';
@@ -220,7 +221,9 @@ export function ChatComposer({detail, mode, onMode, focusKey}: {detail: Conversa
   }
 
   const ready = (text.trim() || files.length) && !send.isPending && !uploading;
-  const submit = (close = false) => ready && send.mutate(close);
+  // The server's "write a message first" (`fields.text`) shows under the message box.
+  const f = useFormState({text});
+  const submit = (close = false) => ready && send.mutate(close, {onError: f.fail});
   const submitComment = () => comment.trim() && !addComment.isPending && addComment.mutate(undefined);
   const hint = !visitor
     ? null
@@ -263,6 +266,7 @@ export function ChatComposer({detail, mode, onMode, focusKey}: {detail: Conversa
           />
         ) : (
           <>
+            <Field error={f.error('text')}>
             <Textarea
               aria-label="Chat message"
               value={text}
@@ -277,6 +281,7 @@ export function ChatComposer({detail, mode, onMode, focusKey}: {detail: Conversa
                 }
               }}
             />
+            </Field>
             {files.length > 0 && (
               <ul className="flex flex-wrap gap-1.5" aria-label="Attachments">
                 {files.map((f) => (

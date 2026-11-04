@@ -15,7 +15,7 @@ export const search = new Hono<AppEnv>().get('/', valid('query', z.object({q: z.
   const number = q.replace(/^#/, '');
   const [contacts, companies, deals, notes, tickets] = await Promise.all([
     db.contact.findMany({
-      where: {...contactWhere({q}), ...scope},
+      where: {...(await contactWhere(db, {q}, scope)), ...scope},
       select: {id: true, firstName: true, lastName: true, email: true, title: true},
       take: 6,
       orderBy: {lastActivityAt: {sort: 'desc', nulls: 'last'}},

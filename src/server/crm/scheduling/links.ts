@@ -1,6 +1,7 @@
 import type {BookingLink} from '../../../generated/prisma/client';
 import type {User} from '../kit/guards';
 import {slugify} from '@/lib/forms';
+import {BOOKING_LINK_LIMITS, cut} from '@/lib/record-limits';
 import {
   availabilityOf,
   computeSlots,
@@ -45,9 +46,11 @@ export async function uniqueHandle(db: Db, base: string, exceptUserId?: string) 
 
 /** Slugs are unique per owner (personal) or among team links. */
 export async function uniqueLinkSlug(db: Db, link: {kind: string; userId: string | null}, base: string, exceptId?: string) {
-  const root = slugify(base);
+  // Within the slug's limit: the name's slug itself, then a shorter root with room for "-50" or the time.
+  const first = cut(slugify(base), BOOKING_LINK_LIMITS.slug).replace(/-+$/, '') || 'meeting';
+  const root = cut(first, BOOKING_LINK_LIMITS.slug - 10).replace(/-+$/, '') || 'meeting';
   // Every candidate checked in ONE query (not one query per try).
-  const candidates = Array.from({length: 50}, (_, i) => (i ? `${root}-${i + 1}` : root));
+  const candidates = Array.from({length: 50}, (_, i) => (i ? `${root}-${i + 1}` : first));
   const taken = new Set(
     (
       await db.bookingLink.findMany({

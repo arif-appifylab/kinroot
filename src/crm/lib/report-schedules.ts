@@ -67,16 +67,19 @@ export type ScheduleBody = z.infer<typeof scheduleBodySchema>;
 /** PATCH: only the fields sent (no defaults, so a partial update never resets recipients). The target never changes. */
 export const schedulePatchSchema = scheduleTimingSchema.extend(fields).partial();
 
-/** Rules zod can't say per field. Returns the first problem, or null. */
-export function scheduleProblem(b: Partial<ScheduleBody>): string | null {
-  if (!!b.reportId === !!b.dashboardId) return 'Pick a report or a dashboard';
-  if (b.frequency === 'weekly' && (b.weekday === null || b.weekday === undefined)) return 'Pick a weekday';
-  if (b.frequency === 'monthly' && (!b.monthDay || b.monthDay < -1)) return 'Pick a day of the month';
+/** Rules zod can't say per field: the first problem and the field it is about (null: not one field), or null. */
+export function scheduleIssue(b: Partial<ScheduleBody>): {field: 'weekday' | 'monthDay' | 'userIds' | null; message: string} | null {
+  if (!!b.reportId === !!b.dashboardId) return {field: null, message: 'Pick a report or a dashboard'};
+  if (b.frequency === 'weekly' && (b.weekday === null || b.weekday === undefined)) return {field: 'weekday', message: 'Pick a weekday'};
+  if (b.frequency === 'monthly' && (!b.monthDay || b.monthDay < -1)) return {field: 'monthDay', message: 'Pick a day of the month'};
   const count = new Set([...(b.userIds ?? []), ...(b.emails ?? []).map((e) => e.toLowerCase())]).size;
-  if (!count) return 'Add at least one recipient';
-  if (count > MAX_RECIPIENTS) return `Up to ${MAX_RECIPIENTS} recipients`;
+  if (!count) return {field: 'userIds', message: 'Add at least one recipient'};
+  if (count > MAX_RECIPIENTS) return {field: 'userIds', message: `Up to ${MAX_RECIPIENTS} recipients`};
   return null;
 }
+
+/** scheduleIssue()'s words only. */
+export const scheduleProblem = (b: Partial<ScheduleBody>): string | null => scheduleIssue(b)?.message ?? null;
 
 const ordinal = (n: number) => `${n}${n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th'}`;
 

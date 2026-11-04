@@ -50,7 +50,7 @@ async function exportWhere(db: Db, exp: Export, user: User) {
   const f = exp.filters as Record<string, string>;
   const scope = await userScope(db, user);
   if (exp.entity === 'contact') {
-    const and: Prisma.ContactWhereInput[] = [contactWhere(f)];
+    const and: Prisma.ContactWhereInput[] = [await contactWhere(db, f, scope)];
     if (f.scoreBand) and.push(await scoreBandWhere(db, f.scoreBand));
     const listId = exp.listId ?? f.listId;
     if (listId) and.push(await listContactWhere(db, listId));
@@ -61,7 +61,7 @@ async function exportWhere(db: Db, exp: Export, user: User) {
     if (f.industry) where.industry = f.industry;
     return {AND: [where], ...scope} satisfies Prisma.CompanyWhereInput;
   }
-  const where = dealWhere({...f, createdDays: f.createdDays ? Number(f.createdDays) : undefined, closedDays: undefined} as Parameters<typeof dealWhere>[0]);
+  const where = await dealWhere(db, {...f, createdDays: f.createdDays ? Number(f.createdDays) : undefined, closedDays: undefined} as Parameters<typeof dealWhere>[1], scope);
   const and: Prisma.DealWhereInput[] = [where];
   // "Rotting" on the deals page: no activity for longer than the pipeline allows.
   if (f.rotting === '1' && f.pipelineId) {

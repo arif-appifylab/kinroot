@@ -81,6 +81,7 @@ function Preview({form}: {form: ChatSettings}) {
     session: null,
     conversation: state === 'conversation' ? SAMPLE : null,
     error: null,
+    errorField: null,
     sending: false,
     unread: 0,
     start: noop,

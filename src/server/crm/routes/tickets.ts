@@ -11,6 +11,7 @@ import {audit} from '../lib/audit';
 import {emit} from '../lib/events';
 import {fieldError, intParam, MAX_PAGE, notFound, optStr, tags, valid} from '../lib/http';
 import {moveToBin} from '../lib/recycle-bin';
+import {companyIdsNamed, contactIdsByNameOrEmail} from '../lib/search-match';
 import {richBody, richHtml} from '../lib/rich-text';
 import {
   agentReply,
@@ -114,13 +115,14 @@ export const tickets = new Hono<AppEnv>()
     if (q.dealId) and.push({dealId: q.dealId});
     if (q.q) {
       const n = q.q.replace(/^#/, '');
+      // The requester and company are looked up first (trigram indexes), so every branch is index-served (lib/search-match.ts).
+      const [contactIds, companyIds] = await Promise.all([contactIdsByNameOrEmail(db, q.q), companyIdsNamed(db, q.q)]);
       and.push({
         OR: [
           ...(/^\d{1,9}$/.test(n) ? [{number: Number(n)}] : []),
           {subject: {contains: q.q, mode: 'insensitive'}},
-          {contact: {email: {contains: q.q, mode: 'insensitive'}}},
-          {contact: {firstName: {contains: q.q, mode: 'insensitive'}}},
-          {company: {name: {contains: q.q, mode: 'insensitive'}}},
+          ...(contactIds.length ? [{contactId: {in: contactIds}}] : []),
+          ...(companyIds.length ? [{companyId: {in: companyIds}}] : []),
         ],
       });
     }
@@ -324,7 +326,7 @@ export const tickets = new Hono<AppEnv>()
     async (c) => {
       const me = currentUser(c);
       const input = c.req.valid('json');
-      if (!richBody({html: input.html, text: input.body}).text && !input.fileIds.length) throw new HTTPException(400, {message: input.kind === 'note' ? 'Write a note first' : 'Write a reply first'});
+      if (!richBody({html: input.html, text: input.body}).text && !input.fileIds.length) throw fieldError('html', input.kind === 'note' ? 'Write a note first' : 'Write a reply first');
       const ticket = await loadTicket(c, c.req.param('ref'));
       const result = await agentReply(c.var.db, me, publicOrigin(c.req.raw), ticket, input.kind, input);
       return c.json({message: result.message, warning: result.warning}, 201);

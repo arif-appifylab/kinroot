@@ -174,12 +174,12 @@ export function BroadcastDialog({list, onClose}: {list: {id: string; name: strin
   const days = a?.account && a.recipients > (left ?? 0) ? 1 + Math.ceil((a.recipients - (left ?? 0)) / a.account.dailyLimit) : 1;
   const canSend = !!a?.recipients;
   const noAccounts = accounts.isSuccess && !accounts.data.length;
-  const f = useFormState({accountId, subject, preheader, html, at: when === 'later' ? at : ''}, {
+  const f = useFormState({accountId, subject, preheader, html, scheduledAt: when === 'later' ? at : ''}, {
     accountId: [is.required('Pick an account to send from.')],
     subject: [is.required('Write a subject line.'), is.maxLength(500)],
     preheader: [is.maxLength(300)],
     html: [(v) => (isEmptyHtml(v) ? 'Write the email first.' : null)],
-    at: [
+    scheduledAt: [
       (v) => (when === 'later' && !v ? 'Pick the date and time to send.' : null),
       (v) => (v && new Date(v).getTime() < Date.now() - 5 * 60_000 ? 'Pick a time in the future.' : null),
       (v) => (v && new Date(v).getTime() > Date.now() + 365 * 86_400_000 ? 'Schedule it within the next 12 months.' : null),
@@ -267,8 +267,8 @@ export function BroadcastDialog({list, onClose}: {list: {id: string; name: strin
                   <h3 className="text-sm font-bold text-slate-900">When</h3>
                   <Segmented label="When to send" value={when} onChange={setWhen} options={[{value: 'now', label: 'Send now', icon: <Send />}, {value: 'later', label: 'Schedule', icon: <Clock />}]} />
                   {when === 'later' && (
-                    <Field error={f.error('at')}>
-                      <Input aria-label="Send at" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} onBlur={f.blur('at')} />
+                    <Field error={f.error('scheduledAt')}>
+                      <Input aria-label="Send at" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} onBlur={f.blur('scheduledAt')} />
                     </Field>
                   )}
                 </Card>

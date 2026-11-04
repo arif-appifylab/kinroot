@@ -18,6 +18,7 @@ import {phoneKey, queueDuplicateCheck} from './duplicates';
 import {emit} from './events';
 import {notify, recordLink} from './notify';
 import {rememberOption} from './settings';
+import {clip, COMPANY_LIMITS, CONTACT_LIMITS, DEAL_LIMITS} from '@/lib/record-limits';
 
 export type Writer = {
   /** Reads after "Created by" / "Updated by": `incoming webhook Stripe`, `API key Zapier`. */
@@ -91,7 +92,8 @@ export async function findCompany(db: Db, ref: {name?: string | null; domain?: s
 
 /** Creates a contact from validated fields: timeline, event, audit, owner notification. Caller links companies and checks duplicates. */
 export async function createContactRecord(db: Db, w: Writer, data: Prisma.ContactUncheckedCreateInput, custom?: Record<string, unknown>) {
-  const contact = await db.contact.create({data: {...data, custom: (custom ?? {}) as Prisma.InputJsonValue, lastActivityAt: new Date()}});
+  // Callers validate; names they build (a domain's name, an email's local part) are cut to the columns here.
+  const contact = await db.contact.create({data: {...clip(data, CONTACT_LIMITS), custom: (custom ?? {}) as Prisma.InputJsonValue, lastActivityAt: new Date()}});
   await rememberOption(db, 'sources', contact.source);
   await logActivity(db, {type: 'contact_created', title: `Created by ${w.by}`, actorId: actorId(w), contactId: contact.id, data: timelineData(w)});
   await emit(db, 'contact.created', {recordId: contact.id, actorId: actorId(w), data: contact});
@@ -102,7 +104,7 @@ export async function createContactRecord(db: Db, w: Writer, data: Prisma.Contac
 
 /** Writes the fields that change (timeline `field_changed` with old values, event, audit, duplicates, domain link, owner notification). */
 export async function updateContactRecord(db: Db, w: Writer, before: Contact, data: Record<string, unknown>, custom?: Record<string, unknown>) {
-  const {changes, writes} = changedWrites(before, data, custom);
+  const {changes, writes} = changedWrites(before, clip(data, CONTACT_LIMITS), custom);
   if (!changes.length) return {contact: before, changes};
   const contact = await db.contact.update({where: {id: before.id}, data: writes});
   await logActivity(db, {type: 'field_changed', title: `Updated by ${w.by}`, actorId: actorId(w), contactId: contact.id, data: timelineData(w, {changes})});
@@ -126,7 +128,7 @@ export async function linkContactCompany(db: Db, contactId: string, companyId: s
 
 /** Creates a company from validated fields: timeline, event, audit, notification, options, domain contacts, duplicates. */
 export async function createCompanyRecord(db: Db, w: Writer, data: Prisma.CompanyUncheckedCreateInput, custom?: Record<string, unknown>) {
-  const company = await db.company.create({data: {...data, custom: (custom ?? {}) as Prisma.InputJsonValue, lastActivityAt: new Date()}});
+  const company = await db.company.create({data: {...clip(data, COMPANY_LIMITS), custom: (custom ?? {}) as Prisma.InputJsonValue, lastActivityAt: new Date()}});
   await logActivity(db, {type: 'company_created', title: `Created by ${w.by}`, actorId: actorId(w), companyId: company.id, data: timelineData(w)});
   await emit(db, 'company.created', {recordId: company.id, actorId: actorId(w), data: company});
   await audit(db, null, {action: 'company.created', entity: 'company', recordId: company.id, label: company.name, meta: w.meta, ...auditActor(w)});
@@ -139,7 +141,7 @@ export async function createCompanyRecord(db: Db, w: Writer, data: Prisma.Compan
 }
 
 export async function updateCompanyRecord(db: Db, w: Writer, before: Company, data: Record<string, unknown>, custom?: Record<string, unknown>) {
-  const {changes, writes} = changedWrites(before, data, custom);
+  const {changes, writes} = changedWrites(before, clip(data, COMPANY_LIMITS), custom);
   if (!changes.length) return {company: before, changes};
   const company = await db.company.update({where: {id: before.id}, data: writes});
   await logActivity(db, {type: 'field_changed', title: `Updated by ${w.by}`, actorId: actorId(w), companyId: company.id, data: timelineData(w, {changes})});
@@ -187,11 +189,11 @@ export async function createDealRecord(db: Db, w: Writer, input: DealInput) {
   const first = await db.deal.findFirst({where: {stageId: input.stageId, status: 'OPEN'}, orderBy: {position: 'asc'}, select: {position: true}});
   const deal = await db.deal.create({
     data: {
-      ...input.data,
+      ...clip(input.data, DEAL_LIMITS),
       pipelineId: input.pipelineId,
       stageId: input.stageId,
       status,
-      lostReason: status === 'LOST' ? (input.lostReason ?? null) : null,
+      lostReason: status === 'LOST' ? (input.lostReason?.slice(0, DEAL_LIMITS.lostReason) ?? null) : null,
       closedAt: closed ? (input.closedAt ?? new Date()) : null,
       position: (first?.position ?? 1) - 1,
       companyId: input.companyId ?? null,

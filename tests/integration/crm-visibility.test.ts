@@ -248,6 +248,45 @@ describe.skipIf(!DATABASE_URL)('Kinroot owner-only visibility (integration, real
     expect((await get(ben, `/deals/${created.id}`)).status, "and Ben can't open Amy's deal").toBe(404);
   });
 
+  it("a search never matches on the name of a company the member can't see (deals, contacts)", async () => {
+    // An admin links Amy's records to Ben's company (Amy may not see it).
+    const deal = ok<{deal: {id: string}}>(await post(own, '/deals', {title: 'Quiet deal', companyId: ids.benCompany, ownerId: amyId}), 201).deal;
+    const contact = ok<{contact: {id: string}}>(await post(own, '/contacts', {firstName: 'Quinn', ownerId: amyId}), 201).contact;
+    ok(await post(own, `/contacts/${contact.id}/companies`, {companyId: ids.benCompany}));
+
+    type Rows = {rows: {id: string}[]};
+    expect(ok<Rows>(await get(amy, '/deals?q=Ben%20Co')).rows.map((d) => d.id), 'deals: no hint that a link exists').not.toContain(deal.id);
+    expect(ok<Rows>(await get(amy, '/contacts?q=Ben%20Co')).rows.map((r) => r.id), 'contacts list').not.toContain(contact.id);
+    expect(ok<{contacts: {id: string}[]}>(await get(amy, '/search?q=Ben%20Co')).contacts.map((r) => r.id), '⌘K').not.toContain(contact.id);
+    // Their own titles and names still match; the admin (who sees the company) finds both by it.
+    expect(ok<Rows>(await get(amy, '/deals?q=Quiet')).rows.map((d) => d.id)).toContain(deal.id);
+    expect(ok<Rows>(await get(own, '/deals?q=Ben%20Co')).rows.map((d) => d.id)).toContain(deal.id);
+    expect(ok<Rows>(await get(own, '/contacts?q=Ben%20Co')).rows.map((r) => r.id)).toContain(contact.id);
+    // Amy's own company matches for Amy.
+    ok(await patch(own, `/deals/${deal.id}`, {companyId: ids.company}));
+    expect(ok<Rows>(await get(amy, '/deals?q=Amy%20Co')).rows.map((d) => d.id)).toContain(deal.id);
+  });
+
+  it("shows no link to another member's records on a task assigned to the member", async () => {
+    const benId = (await db.member.findUniqueOrThrow({where: {userId: await userId('ben@example.com')}})).id;
+    // Assigned to Ben, but on Amy's contact, company and deal (an admin can set that up).
+    const task = await db.task.create({data: {title: 'Follow up zz', assigneeId: benId, contactId: ids.contact, companyId: ids.company, dealId: ids.deal}});
+    try {
+      const rows = ok<{rows: {id: string; contact: unknown; company: unknown; deal: unknown}[]}>(await get(ben, '/tasks?scope=mine')).rows;
+      expect(rows.find((r) => r.id === task.id)).toMatchObject({contact: null, company: null, deal: null});
+      expect(JSON.stringify(rows)).not.toContain('Amy Co');
+      // Nor does the search match on those names.
+      const found = ok<{rows: {id: string}[]}>(await get(ben, '/tasks?scope=mine&q=Amy')).rows;
+      expect(found.map((r) => r.id)).not.toContain(task.id);
+      // The admin still sees the links (never the owner ids).
+      const adminRows = ok<{rows: {id: string; company: {name: string; ownerId?: string} | null}[]}>(await get(own, `/tasks?scope=all&assigneeId=${benId}`)).rows;
+      const mine = adminRows.find((r) => r.id === task.id)!;
+      expect(mine.company).toEqual({id: ids.company, name: 'Amy Co'});
+    } finally {
+      await db.task.delete({where: {id: task.id}});
+    }
+  });
+
   it('answers validation failures 422 with every field error (P2-32), checks links (P2-13) and numbers (P2-18)', async () => {
     const res = await post(amy, '/contacts', {firstName: '', email: 'not-an-email', linkedin: 'javascript:alert(1)'});
     expect(res.status).toBe(422);

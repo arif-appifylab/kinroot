@@ -218,7 +218,9 @@ function Composer({ticket}: {ticket: TicketRow}) {
   }
 
   const empty = isEmptyHtml(body);
-  const submit = () => (!empty || files.length > 0) && !send.isPending && uploading === 0 && send.mutate(undefined);
+  // The server's "write a reply first" (`fields.html`) shows under the editor.
+  const f = useFormState({html: body});
+  const submit = () => (!empty || files.length > 0) && !send.isPending && uploading === 0 && send.mutate(undefined, {onError: f.fail});
 
   return (
     <Card className={cn('overflow-hidden', mode === 'note' && 'ring-1 ring-amber-200')}>
@@ -234,6 +236,7 @@ function Composer({ticket}: {ticket: TicketRow}) {
       </div>
       <div className="grid gap-2.5 p-3">
         {mode === 'reply' && optedOut && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">This contact opted out of email, so replies can't be emailed. Opt them back in on their contact page if they asked for help.</p>}
+        <Field error={f.error('html')}>
         <RichEditor
           key={mode}
           variant="text"
@@ -248,6 +251,7 @@ function Composer({ticket}: {ticket: TicketRow}) {
           mentions={mode === 'note' ? mentions : undefined}
           className={mode === 'note' ? 'bg-amber-50/30' : undefined}
         />
+        </Field>
         <FileChips files={files} onRemove={(id) => setFiles((fs) => fs.filter((f) => f.id !== id))} />
         <div className="flex flex-wrap items-center gap-2">
           <DropdownMenu>

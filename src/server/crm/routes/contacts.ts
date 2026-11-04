@@ -3,18 +3,21 @@ import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
 import {Prisma} from '../../../generated/prisma/client';
+import type {Db} from '../kit/db';
 import {currentUser, type AppEnv} from '../kit/guards';
 import {customDiff, diff, logActivity} from '../lib/activity';
 import {audit, auditMany} from '../lib/audit';
 import {cleanCustom} from '../lib/custom-fields';
 import {forgetPairs, queueDuplicateCheck} from '../lib/duplicates';
 import {emit, emitMany} from '../lib/events';
-import {assertVisible, custom, fieldError, httpUrl, intParam, listQuery, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {assertVisible, custom, fieldError, httpUrl, intParam, listQuery, notFound, optStr, optText, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {CONTACT_LIMITS, copyName} from '@/lib/record-limits';
 import {associateByDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
 import {moveScoreEvents, scoreBandWhere} from '../lib/scoring';
 import {queueRescore} from '../lib/scoring-hook';
 import {moveToBin} from '../lib/recycle-bin';
+import {contactIdsAtCompaniesNamed, searchTerms} from '../lib/search-match';
 import {listContactWhere} from '../lib/segments';
 import {rememberOption} from '../lib/settings';
 import {userSelect} from '../lib/users';
@@ -22,20 +25,21 @@ import {strings} from '../lib/json-list';
 
 const lifecycle = z.enum(['LEAD', 'QUALIFIED', 'OPPORTUNITY', 'CUSTOMER', 'CHURNED', 'OTHER']);
 
+const L = CONTACT_LIMITS;
 export const contactBody = z.object({
-  firstName: z.string().trim().min(1, 'is required').max(100),
-  lastName: optStr,
-  email: z.union([z.email(), z.literal('')]).nullish().transform((v) => (v ? v.toLowerCase() : v === '' ? null : v)),
-  phone: optStr,
-  title: optStr,
+  firstName: z.string().trim().min(1, 'is required').max(L.firstName, `must be at most ${L.firstName} characters`),
+  lastName: optText(L.lastName),
+  email: z.union([z.email().max(L.email, `must be at most ${L.email} characters`), z.literal('')]).nullish().transform((v) => (v ? v.toLowerCase() : v === '' ? null : v)),
+  phone: optText(L.phone),
+  title: optText(L.title),
   linkedin: httpUrl,
   lifecycleStage: lifecycle.optional(),
-  leadStatus: optStr,
-  buyingRole: optStr,
+  leadStatus: optText(L.leadStatus),
+  buyingRole: optText(L.buyingRole),
   emailOptOut: z.boolean().optional(),
-  city: optStr,
-  country: optStr,
-  source: optStr,
+  city: optText(L.city),
+  country: optText(L.country),
+  source: optText(L.source),
   tags: tags.optional(),
   ownerId: z.string().nullish(),
   custom: custom.optional(),
@@ -52,18 +56,25 @@ export const contactName = (c: {firstName: string; lastName: string | null}) => 
 /** Properties a merge lets you choose between. */
 export const MERGE_FIELDS = ['firstName', 'lastName', 'email', 'phone', 'title', 'linkedin', 'lifecycleStage', 'leadStatus', 'buyingRole', 'city', 'country', 'source', 'ownerId'] as const;
 
-export function contactWhere(q: Record<string, string | undefined>): Prisma.ContactWhereInput {
+/**
+ * The contacts list's filters as a where (search, exports and lists use it too). Each search word
+ * matches the contact's own columns (trigram indexes) or a company it's linked to, among the
+ * companies the user may see (`scope`: ownerScope); those contacts are looked up first, so the
+ * match stays index-served (lib/search-match.ts).
+ */
+export async function contactWhere(db: Db, q: Record<string, string | undefined>, scope: {ownerId?: string} = {}): Promise<Prisma.ContactWhereInput> {
   const where: Prisma.ContactWhereInput = {};
   if (q.q) {
-    const terms = q.q.trim().split(/\s+/);
-    where.AND = terms.map((t) => ({
+    const terms = searchTerms(q.q);
+    const viaCompany = await Promise.all(terms.map((t) => contactIdsAtCompaniesNamed(db, t, scope)));
+    where.AND = terms.map((t, i) => ({
       OR: [
         {firstName: {contains: t, mode: 'insensitive'}},
         {lastName: {contains: t, mode: 'insensitive'}},
         {email: {contains: t, mode: 'insensitive'}},
         {phone: {contains: t}},
         {title: {contains: t, mode: 'insensitive'}},
-        {companies: {some: {company: {name: {contains: t, mode: 'insensitive'}}}}},
+        ...(viaCompany[i]!.length ? [{id: {in: viaCompany[i]}}] : []),
       ],
     }));
   }
@@ -81,9 +92,10 @@ export function contactWhere(q: Record<string, string | undefined>): Prisma.Cont
 export const contacts = new Hono<AppEnv>()
   .get('/', valid('query', listQuery.extend({lifecycleStage: lifecycle.optional(), source: z.string().optional(), companyId: z.string().optional(), noActivityDays: intParam(1, 36_500).optional(), listId: z.string().optional(), scoreBand: z.string().max(30).optional()})), async (c) => {
     const q = c.req.valid('query');
-    const plain = contactWhere(q as unknown as Record<string, string>);
+    const scope = await ownerScope(c);
+    const plain = await contactWhere(c.var.db, q as unknown as Record<string, string>, scope);
     const base = q.scoreBand ? {AND: [plain, await scoreBandWhere(c.var.db, q.scoreBand)]} : plain;
-    const where = {...(q.listId ? {AND: [base, await listContactWhere(c.var.db, q.listId)]} : base), ...(await ownerScope(c))};
+    const where = {...(q.listId ? {AND: [base, await listContactWhere(c.var.db, q.listId)]} : base), ...scope};
     const [rows, total] = await Promise.all([
       c.var.db.contact.findMany({
         where,
@@ -348,7 +360,7 @@ export const contacts = new Hono<AppEnv>()
         custom: src.custom as Prisma.InputJsonValue,
         tags: strings(src.tags),
         firstName: src.firstName,
-        lastName: `${src.lastName ?? ''} (copy)`.trim(),
+        lastName: src.lastName ? copyName(src.lastName, L.lastName) : '(copy)',
         lastActivityAt: new Date(),
         companies: {create: companies.map((l) => ({companyId: l.companyId, role: l.role, isPrimary: l.isPrimary}))},
       },

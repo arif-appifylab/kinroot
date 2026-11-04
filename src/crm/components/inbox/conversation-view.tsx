@@ -237,23 +237,24 @@ function EventLine({c}: {c: ConversationComment}) {
   );
 }
 
-function SnoozeDrawer({onPick, onClose}: {onPick: (iso: string) => void; onClose: () => void}) {
-  const [value, setValue] = useState(toLocalInput(new Date(Date.now() + 24 * 3600_000).toISOString()));
-  const f = useFormState({value}, {value: [is.required('Choose when it comes back.'), (v) => (v && new Date(v).getTime() <= Date.now() ? 'Choose a time in the future.' : null)]});
+/** Stays open until the snooze is saved; the server's words about the time (`fields.until`) land on the field. */
+function SnoozeDrawer({onPick, onClose, pending}: {onPick: (iso: string, onError: (e: unknown) => void) => void; onClose: () => void; pending: boolean}) {
+  const [until, setUntil] = useState(toLocalInput(new Date(Date.now() + 24 * 3600_000).toISOString()));
+  const f = useFormState({until}, {until: [is.required('Choose when it comes back.'), (v) => (v && new Date(v).getTime() <= Date.now() ? 'Choose a time in the future.' : null)]});
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !pending && onClose()}>
       <DialogContent size="sm">
-        <form {...f.form(() => (onPick(new Date(value).toISOString()), onClose()))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => onPick(new Date(until).toISOString(), f.fail))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>Snooze until…</DialogTitle>
             <DialogDescription>It leaves the open views and comes back, unread, at this time.</DialogDescription>
           </DialogHeader>
           <DialogBody>
-            <Field label="Date and time" htmlFor="snooze-at" error={f.error('value')}><Input id="snooze-at" type="datetime-local" value={value} onChange={(e) => setValue(e.target.value)} onBlur={f.blur('value')} /></Field>
+            <Field label="Date and time" htmlFor="snooze-at" error={f.error('until')}><Input id="snooze-at" type="datetime-local" value={until} onChange={(e) => setUntil(e.target.value)} onBlur={f.blur('until')} /></Field>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit">Snooze</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={pending}>Cancel</Button>
+            <Button type="submit" pending={pending} pendingLabel="Snoozing…">Snooze</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -512,7 +513,7 @@ export function ConversationView({id, onBack, onGone}: {id: string; onBack: () =
         </aside>
       </div>
 
-      {snoozing && <SnoozeDrawer onClose={() => setSnoozing(false)} onPick={(until) => act.mutate({action: 'snooze', until})} />}
+      {snoozing && <SnoozeDrawer onClose={() => setSnoozing(false)} pending={act.isPending} onPick={(until, onError) => act.mutate({action: 'snooze', until}, {onSuccess: () => setSnoozing(false), onError})} />}
       {details && (
         <Dialog open onOpenChange={(o) => !o && setDetails(false)}>
           <DialogContent size="sm">

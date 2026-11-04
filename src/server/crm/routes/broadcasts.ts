@@ -94,8 +94,8 @@ export const broadcasts = new Hono<AppEnv>()
     if (!account) throw fieldError('accountId', 'Pick one of your email accounts or a shared one');
 
     const at = input.scheduledAt ? new Date(input.scheduledAt) : new Date();
-    if (at.getTime() < Date.now() - 5 * 60_000) throw new HTTPException(400, {message: 'Pick a time in the future'});
-    if (at.getTime() > Date.now() + 365 * DAY) throw new HTTPException(400, {message: 'Schedule it within the next 12 months'});
+    if (at.getTime() < Date.now() - 5 * 60_000) throw fieldError('scheduledAt', 'Pick a time in the future');
+    if (at.getTime() > Date.now() + 365 * DAY) throw fieldError('scheduledAt', 'Schedule it within the next 12 months');
 
     // Checked now so nobody schedules an empty or oversized send; the recipients are frozen when it starts.
     const audience = await resolveAudience(db, list, await ownerScope(c));

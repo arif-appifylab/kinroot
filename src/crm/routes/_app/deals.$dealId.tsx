@@ -29,6 +29,7 @@ import {daysSince, fullName, money, shortDate, toDateInput} from '@/lib/format';
 import {keys, recordKeys, useApiMutation, useFields, useMe, usePipelines} from '@/lib/queries';
 import type {DealDetail} from '@/lib/types';
 import {cn} from '@/lib/utils';
+import {DEAL_LIMITS} from '@/lib/record-limits';
 
 export const Route = createFileRoute('/_app/deals/$dealId')({
   head: () => ({meta: [{title: pageTitle('Deal')}]}),
@@ -172,7 +173,7 @@ function DealPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_300px]">
         <div className="grid min-w-0 grid-cols-1 content-start gap-6">
           <PropertyCard title="Details">
-            <TextProperty label="Name" field="title" value={d.title} onSave={(v) => v && save.mutate({title: v})} />
+            <TextProperty label="Name" field="title" maxLength={DEAL_LIMITS.title} value={d.title} onSave={(v) => v && save.mutate({title: v})} />
             <EditableProperty
               label="Value" field="value"
               value={String(d.value)}

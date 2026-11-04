@@ -9,6 +9,7 @@ import {sign, verifySignature} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import type {AppContext} from '../kit/guards';
 import {escapeHtml} from '@/lib/email-html';
+import {clip, CONTACT_LIMITS} from '@/lib/record-limits';
 import {mergeFields} from '../email/render';
 import {sendEmail, sendSystemEmail, usableAccounts} from '../email/service';
 import {publicFileUrl} from '../routes/files';
@@ -99,7 +100,7 @@ export async function contactForEmail(db: Db, email: string, name?: string | nul
   if (existing) return existing;
   const [first, ...rest] = (name?.trim() || address.split('@')[0]!).split(/\s+/);
   const contact = await db.contact.create({
-    data: {firstName: (first || address).slice(0, 100), lastName: rest.join(' ').slice(0, 100) || null, email: address, source: 'Support', lastActivityAt: new Date()},
+    data: clip({firstName: first || address, lastName: rest.join(' ') || null, email: address, source: 'Support', lastActivityAt: new Date()}, CONTACT_LIMITS),
   });
   await logActivity(db, {type: 'contact_created', title: 'Contact created from a support request', contactId: contact.id});
   await associateByDomain(db, contact.id).catch(() => null);

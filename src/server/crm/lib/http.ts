@@ -33,13 +33,17 @@ export const notFound = (what = 'Record') => new HTTPException(404, {message: `$
  * A hand-written check about ONE input (`throw fieldError('slug', 'Another form already uses that
  * link', 409)`): answers `{error, fields: {[field]: message}}` in `valid()`'s shape, so the form shows
  * the words under that field (`f.fail`). Keeps its status (400 by default, 409 for "already taken").
+ * `summary` is the top-level `error` when it should say more than the field's words (which field).
  * Checks that are not about one input (permissions, a record's state) stay plain HTTPExceptions.
  */
-export const fieldError = (field: string, message: string, status: 400 | 409 | 422 = 400) =>
-  new HTTPException(status, {message, res: Response.json({error: message, fields: {[field]: message}}, {status})});
+export const fieldError = (field: string, message: string, status: 400 | 409 | 422 = 400, summary = message) =>
+  new HTTPException(status, {message: summary, res: Response.json({error: summary, fields: {[field]: message}}, {status})});
 
 // Shared zod pieces
 export const optStr = z.string().trim().max(5000).nullish().transform((v) => (v === '' ? null : v));
+/** optStr with the field's own limit (src/crm/lib/record-limits.ts: the column's VARCHAR(n)). */
+export const optText = (max: number) =>
+  z.string().trim().max(max, `must be at most ${max} characters`).nullish().transform((v) => (v === '' ? null : v));
 export const tags = z.array(z.string().trim().min(1).max(40)).max(50);
 export const custom = z.record(z.string(), z.unknown());
 export const isoDate = z
