@@ -1,6 +1,6 @@
 import {keepPreviousData, useQuery} from '@tanstack/react-query';
 import {createFileRoute, useNavigate} from '@tanstack/react-router';
-import {ArchiveRestore, Building2, ClipboardList, Handshake, Inbox, LifeBuoy, ListChecks, Loader2, MoreHorizontal, Trash2, User} from 'lucide-react';
+import {ArchiveRestore, Building2, ClipboardList, Handshake, Inbox, LifeBuoy, ListChecks, MoreHorizontal, Trash2, User} from 'lucide-react';
 import {useState} from 'react';
 import {toast} from 'sonner';
 
@@ -112,10 +112,10 @@ function RecycleBin() {
       cell: (r) =>
         canEdit && (
           <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-            <Button variant="secondary" size="sm" disabled={restore.isPending} onClick={() => restore.mutate(r.id)}><ArchiveRestore /> Restore</Button>
+            <Button variant="secondary" size="sm" disabled={restore.isPending || purge.isPending} pending={restore.isPending && restore.variables === r.id} pendingLabel="Restoring…" onClick={() => restore.mutate(r.id)}><ArchiveRestore /> Restore</Button>
             {isAdmin && (
               <DropdownMenu>
-                <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label={`More actions for ${r.label}`}><MoreHorizontal /></Button></DropdownMenuTrigger>
+                <DropdownMenuTrigger asChild disabled={restore.isPending || purge.isPending}><Button variant="ghost" size="icon-sm" pending={purge.isPending && purge.variables?.length === 1 && purge.variables[0] === r.id} aria-label={`More actions for ${r.label}`}><MoreHorizontal /></Button></DropdownMenuTrigger>
                 <DropdownMenuContent>
                   <DropdownMenuItem destructive onSelect={async () => (await confirm({title: `Delete "${r.label}" forever?`, description: `This can't be undone.`, confirmLabel: 'Delete forever', destructive: true})) && purge.mutate([r.id])}><Trash2 /> Delete forever</DropdownMenuItem>
                 </DropdownMenuContent>
@@ -132,7 +132,7 @@ function RecycleBin() {
       description={`Deleted records stay here for ${BIN_DAYS} days. Restoring brings a record back with its notes, tasks, timeline, files and links.${isAdmin ? '' : ' You see the records you deleted.'}`}
     >
       <FilterBar className="mb-4 [&>*]:max-w-full">
-        <form onSubmit={(e) => (e.preventDefault(), setQ(qDraft), setPage(1))} className="contents">
+        <form role="search" noValidate onSubmit={(e) => (e.preventDefault(), setQ(qDraft), setPage(1))} className="contents">
           <SearchInput size="sm" value={qDraft} onChange={(v) => (setQDraft(v), !v && (setQ(''), setPage(1)))} placeholder="Search deleted records…" />
         </form>
         <Tabs value={entity} onValueChange={(v) => (setEntity(v as BinEntity | 'all'), setPage(1), setSelected(new Set()))}>
@@ -149,6 +149,8 @@ function RecycleBin() {
           rows={data?.rows}
           columns={columns}
           loading={list.isLoading}
+          error={list.error}
+          onRetry={() => list.refetch()}
           selected={canEdit ? selected : undefined}
           onSelect={canEdit ? setSelected : undefined}
           empty={<EmptyState icon={<Trash2 />} title={q ? 'Nothing matches' : 'The recycle bin is empty'} description={`Deleted contacts, companies, deals, tickets, forms and lists wait here for ${BIN_DAYS} days.`} />}
@@ -156,12 +158,12 @@ function RecycleBin() {
         {data && data.total > 0 && <Pagination page={data.page} pageSize={data.pageSize} total={data.total} onPage={setPage} />}
       </div>
       <BulkBar count={selected.size} onClear={() => setSelected(new Set())}>
-        <Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={restoreMany.isPending} onClick={() => restoreMany.mutate([...selected])}>
-          {restoreMany.isPending ? <Loader2 className="animate-spin" /> : <ArchiveRestore />} Restore
+        <Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={purge.isPending} pending={restoreMany.isPending} pendingLabel="Restoring…" onClick={() => restoreMany.mutate([...selected])}>
+          <ArchiveRestore /> Restore
         </Button>
         {isAdmin && (
           <DropdownMenu>
-            <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200"><Trash2 /> Delete forever</Button></DropdownMenuTrigger>
+            <DropdownMenuTrigger asChild disabled={restoreMany.isPending || purge.isPending}><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" pending={purge.isPending && (purge.variables?.length ?? 0) > 1} pendingLabel="Deleting…"><Trash2 /> Delete forever</Button></DropdownMenuTrigger>
             <DropdownMenuContent align="center">
               <DropdownMenuLabel>Delete {selected.size} forever? This can't be undone.</DropdownMenuLabel>
               <DropdownMenuItem destructive onSelect={() => purge.mutate([...selected])}>Yes, delete forever</DropdownMenuItem>

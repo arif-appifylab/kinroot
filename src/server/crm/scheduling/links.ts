@@ -70,8 +70,16 @@ export async function linkByPath(db: Db, path: string) {
 
 export async function linkPath(db: Db, link: Pick<BookingLink, 'kind' | 'slug' | 'userId'>) {
   if (link.kind === 'team') return `team/${link.slug}`;
-  const profile = link.userId ? await db.schedulingProfile.findUnique({where: {userId: link.userId}}) : null;
+  const profile = link.userId ? await db.schedulingProfile.findUnique({where: {userId: link.userId}, select: {handle: true}}) : null;
   return `${profile?.handle ?? 'unknown'}/${link.slug}`;
+}
+
+/** The paths of many links (link id → path) with ONE query for their owners' handles, never one per link. */
+export async function linkPaths(db: Db, links: Pick<BookingLink, 'id' | 'kind' | 'slug' | 'userId'>[]): Promise<Map<string, string>> {
+  const userIds = [...new Set(links.flatMap((l) => (l.kind !== 'team' && l.userId ? [l.userId] : [])))];
+  const profiles = userIds.length ? await db.schedulingProfile.findMany({where: {userId: {in: userIds}}, select: {userId: true, handle: true}}) : [];
+  const handles = new Map(profiles.map((p) => [p.userId, p.handle]));
+  return new Map(links.map((l) => [l.id, l.kind === 'team' ? `team/${l.slug}` : `${(l.userId && handles.get(l.userId)) || 'unknown'}/${l.slug}`]));
 }
 
 export function locationLabel(type: string, location: string | null) {
@@ -115,27 +123,36 @@ export async function toPublicLink(db: Db, link: BookingLink): Promise<PublicBoo
 
 // ─── Slots ──────────────────────────────────────────────────────────────────
 
+type Exclude = {id: string; interactionId: string | null; startAt: Date; endAt: Date};
+
 /**
- * Busy blocks of one host: upcoming CRM meetings they organise (bookings are
- * meetings too) plus their connected calendars. `exclude` is the booking being
- * rescheduled, so its own time doesn't block itself.
+ * Busy blocks of each host: CRM meetings they organise (bookings are meetings too) plus their
+ * connected calendars. ONE query for all hosts' meetings, their calendars read side by side.
+ * `exclude` is the booking being rescheduled, so its own time doesn't block itself.
  */
-export async function hostBusy(db: Db, hostId: string, from: Date, to: Date, exclude?: {interactionId: string | null; startAt: Date; endAt: Date} | null): Promise<Interval[]> {
-  const meetings = await db.interaction.findMany({
-    where: {
-      kind: 'MEETING',
-      authorId: hostId,
-      occurredAt: {gte: new Date(from.getTime() - DAY), lt: to},
-      OR: [{outcome: null}, {outcome: {not: 'Canceled'}}],
-      ...(exclude?.interactionId ? {id: {not: exclude.interactionId}} : {}),
-    },
-    select: {occurredAt: true, durationMin: true},
-  });
-  const own = meetings.map((m) => ({start: m.occurredAt.getTime(), end: m.occurredAt.getTime() + (m.durationMin ?? 30) * 60_000}));
-  const calendar = await calendarBusy(db, hostId, from, to);
+async function busyByHost(db: Db, hostIds: string[], from: Date, to: Date, exclude?: Exclude | null): Promise<Map<string, Interval[]>> {
+  const [meetings, calendars] = await Promise.all([
+    db.interaction.findMany({
+      where: {
+        kind: 'MEETING',
+        authorId: {in: hostIds},
+        occurredAt: {gte: new Date(from.getTime() - DAY), lt: to},
+        OR: [{outcome: null}, {outcome: {not: 'Canceled'}}],
+        ...(exclude?.interactionId ? {id: {not: exclude.interactionId}} : {}),
+      },
+      select: {authorId: true, occurredAt: true, durationMin: true},
+    }),
+    Promise.all(hostIds.map((id) => calendarBusy(db, id, from, to))),
+  ]);
   // The booking's own calendar event shows up as busy too.
   const skip = exclude ? {start: exclude.startAt.getTime(), end: exclude.endAt.getTime()} : null;
-  return [...own, ...calendar.filter((b) => !skip || b.start !== skip.start || b.end !== skip.end)];
+  const out = new Map<string, Interval[]>();
+  hostIds.forEach((id, i) => out.set(id, calendars[i]!.filter((b) => !skip || b.start !== skip.start || b.end !== skip.end)));
+  for (const m of meetings) {
+    const start = m.occurredAt.getTime();
+    if (m.authorId) out.get(m.authorId)?.push({start, end: start + (m.durationMin ?? 30) * 60_000});
+  }
+  return out;
 }
 
 export type Slot = {start: number; hostIds: string[]};
@@ -143,26 +160,33 @@ export type Slot = {start: number; hostIds: string[]};
 /**
  * Open start times of a link between `from` and `to` (at most ~6 weeks), with
  * the hosts free at each. Team links offer a time when any host is free.
+ * A fixed number of queries whatever the number of hosts (no query per host).
  */
 export async function linkSlots(
   db: Db,
   link: BookingLink,
-  opts: {from: Date; to: Date; duration: number; now?: number; onlyHostId?: string | null; exclude?: {id: string; interactionId: string | null; startAt: Date; endAt: Date} | null},
+  opts: {from: Date; to: Date; duration: number; now?: number; onlyHostId?: string | null; exclude?: Exclude | null},
 ): Promise<Slot[]> {
   const now = opts.now ?? Date.now();
   const from = new Date(Math.max(opts.from.getTime(), now));
   const to = new Date(Math.min(opts.to.getTime(), from.getTime() + 45 * DAY, now + (link.maxDaysAhead + 2) * DAY));
   if (to <= from) return [];
   const hosts = (await hostsFor(db, link)).filter((h) => !opts.onlyHostId || h.id === opts.onlyHostId);
+  if (!hosts.length) return [];
+  const ids = hosts.map((h) => h.id);
+  const [busyOf, booked] = await Promise.all([
+    busyByHost(db, ids, new Date(from.getTime() - 2 * DAY), new Date(to.getTime() + DAY), opts.exclude),
+    db.booking.findMany({
+      where: {linkId: link.id, hostId: {in: ids}, status: 'CONFIRMED', startAt: {gte: new Date(from.getTime() - 2 * DAY), lt: new Date(to.getTime() + 2 * DAY)}, ...(opts.exclude ? {id: {not: opts.exclude.id}} : {})},
+      select: {hostId: true, startAt: true, endAt: true},
+    }),
+  ]);
   const byStart = new Map<number, string[]>();
   for (const host of hosts) {
-    const busy = await hostBusy(db, host.id, new Date(from.getTime() - 2 * DAY), new Date(to.getTime() + DAY), opts.exclude);
-    const booked = await db.booking.findMany({
-      where: {linkId: link.id, hostId: host.id, status: 'CONFIRMED', startAt: {gte: new Date(from.getTime() - 2 * DAY), lt: new Date(to.getTime() + 2 * DAY)}, ...(opts.exclude ? {id: {not: opts.exclude.id}} : {})},
-      select: {startAt: true, endAt: true},
-    });
+    const busy = busyOf.get(host.id) ?? [];
     const bookedPerDay: Record<string, number> = {};
     for (const b of booked) {
+      if (b.hostId !== host.id) continue;
       const d = localDate(b.startAt.getTime(), link.timezone);
       bookedPerDay[d] = (bookedPerDay[d] ?? 0) + 1;
       // Earlier bookings of this link keep their own buffers too.

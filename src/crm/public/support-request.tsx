@@ -124,7 +124,7 @@ function PortalTicketPage({number}: {number: string}) {
             This request is closed. <a href="/support/" className="font-semibold text-primary hover:underline">Open a new one</a> if you need more help.
           </p>
         ) : (
-          <form onSubmit={(e) => (e.preventDefault(), !isEmptyHtml(body) && reply())} className="mt-6 grid gap-2.5">
+          <form noValidate onSubmit={(e) => (e.preventDefault(), !isEmptyHtml(body) && !busy && reply())} className="mt-6 grid gap-2.5">
             <RichEditor
               variant="text"
               compact
@@ -135,9 +135,9 @@ function PortalTicketPage({number}: {number: string}) {
               ariaLabel="Your reply"
               placeholder={ticket.status === 'RESOLVED' ? 'Still need help? Reply and we will reopen your request.' : 'Write a reply…'}
             />
-            {sendError && <p className="text-sm font-medium text-destructive">{sendError}</p>}
+            {sendError && <p role="alert" className="text-sm font-medium text-destructive">{sendError}</p>}
             <div className="flex justify-end">
-              <Button type="submit" disabled={isEmptyHtml(body) || busy}>{busy ? <Loader2 className="animate-spin" /> : <Send />} Send reply</Button>
+              <Button type="submit" disabled={isEmptyHtml(body)} pending={busy} pendingLabel="Sending…"><Send /> Send reply</Button>
             </div>
           </form>
         )}

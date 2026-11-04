@@ -44,7 +44,7 @@ import {audit} from './audit';
 import {CSV_BOM, csvLine, parseCsv} from './csv';
 import {nameFromDomain, workDomain} from './domains';
 import {emitMany} from './events';
-import {enqueue, kickJobs} from './jobs';
+import {enqueue} from './jobs';
 import {notify} from './notify';
 import {queueRescore} from './scoring-hook';
 import {addToList} from './segments';
@@ -54,9 +54,12 @@ import {readBytes, storeBytes} from '../kit/storage';
 import {memberWithEmail} from './users';
 
 const BATCH = 200;
+/** Deal updates write history, timeline and events per row: smaller batches keep each one short. */
+const DEAL_UPDATE_BATCH = 25;
 /** Every raw lookup is bounded: a batch's keys can match at most this many rows (ten per key). */
 const LOOKUP_LIMIT = BATCH * 10;
-const BUDGET_MS = 8_000;
+/** A job's time for batches (checked before each one; a job has 60 s): fewer, fuller jobs within the platform's job rate. */
+const BUDGET_MS = 25_000;
 /** Issues kept per phase; counts stay exact beyond this. */
 const MAX_ISSUES = 50_000;
 
@@ -123,9 +126,12 @@ async function loadContext(db: Db, imp: Import, phase: Phase, rows: string[][]):
   const targets = new Map(importTargets(entity, defs).map((t) => [t.key, lists[t.key]?.length ? {...t, suggest: [...(t.suggest ?? []), ...lists[t.key]!]} : t]));
   const columnOf = new Map<string, string>();
   mapping.forEach((key, i) => key && columnOf.set(key, imp.headers[i] || `Column ${i + 1}`));
-  const users = (await db.member.findMany({where: {active: true}, select: {id: true, name: true, user: {select: {email: true}}}})).map((u) => ({id: u.id, name: u.name, email: u.user?.email ?? ''}));
+  // Invited teammates who have not joined yet own records by their invite address, as in the original.
+  const users = (await db.member.findMany({where: {active: true}, select: {id: true, name: true, inviteEmail: true, user: {select: {email: true}}}})).map((u) => ({id: u.id, name: u.name, email: u.user?.email ?? '', inviteEmail: u.inviteEmail ?? ''}));
   const usersByName = new Map<string, string>();
   for (const u of users) if (u.name && !usersByName.has(lower(u.name))) usersByName.set(lower(u.name), u.id);
+  const usersByEmail = new Map<string, string>();
+  for (const u of users) for (const e of [u.email, u.inviteEmail]) if (e && !usersByEmail.has(lower(e))) usersByEmail.set(lower(e), u.id);
   const scope = await userScope(db, user);
   const ctx: Ctx = {
     db,
@@ -140,7 +146,7 @@ async function loadContext(db: Db, imp: Import, phase: Phase, rows: string[][]):
     defs: new Map(defs.map((d) => [d.key, d])),
     user,
     scopeOwnerId: scope.ownerId ?? null,
-    usersByEmail: new Map(users.map((u) => [lower(u.email), u.id])),
+    usersByEmail,
     usersByName,
     defaultOwnerId: options.defaultOwner === 'me' ? user.id : options.defaultOwner && users.some((u) => u.id === options.defaultOwner) ? options.defaultOwner : null,
     pipelines: entity === 'deal' ? await db.pipeline.findMany({include: {stages: {orderBy: {position: 'asc'}}}, orderBy: [{isDefault: 'desc'}, {position: 'asc'}]}) : [],
@@ -826,30 +832,51 @@ async function applyUpdates(ctx: Ctx, plans: Plan[]) {
   if (ctx.entity === 'contact') await queueRescore(db, done.map((pl) => pl.existing!.id));
 }
 
-/** Stage moves and won / lost from an import update: history, timeline and events like the deal page. */
+/**
+ * Stage moves and won / lost from an import update: history, timeline and events like the deal
+ * page, written for the whole batch at once (one insert per kind, one event batch per type).
+ */
 async function applyDealUpdates(ctx: Ctx, plans: Plan[]) {
   const db = ctx.db;
   await linkDealContacts(ctx, plans.map((pl) => ({p: pl.p, dealId: pl.existing!.id})));
+  type Before = {id: string; title: string; companyId: string | null; stageId: string; stage: {id: string; name: string}; contacts: {contactId: string}[]};
+  const stages = new Map(ctx.pipelines.flatMap((x) => x.stages).map((st) => [st.id, st]));
+  const primary: {dealId: string; companyId: string}[] = [];
+  const stageChanges: Prisma.StageChangeCreateManyInput[] = [];
+  const activities: Prisma.ActivityCreateManyInput[] = [];
+  const moved: Parameters<typeof emitMany>[2] = [];
+  const won: Parameters<typeof emitMany>[2] = [];
+  const lost: Parameters<typeof emitMany>[2] = [];
+  const customers = new Set<string>();
   for (const pl of plans) {
-    const before = pl.existing as unknown as {id: string; title: string; companyId: string | null; stageId: string; stage: {id: string; name: string}; contacts: {contactId: string}[]};
-    if (pl.data!.companyId) {
-      await db.dealCompany.updateMany({where: {dealId: before.id}, data: {isPrimary: false}});
-      await db.dealCompany.upsert({where: {dealId_companyId: {dealId: before.id, companyId: String(pl.data!.companyId)}}, create: {dealId: before.id, companyId: String(pl.data!.companyId), isPrimary: true}, update: {isPrimary: true}});
-    }
+    const before = pl.existing as unknown as Before;
+    if (pl.data!.companyId) primary.push({dealId: before.id, companyId: String(pl.data!.companyId)});
     if (pl.data!.stageId) {
-      const to = ctx.pipelines.flatMap((x) => x.stages).find((s) => s.id === pl.data!.stageId)!;
-      await db.stageChange.createMany({data: [{id: await detId(ctx.imp.id, 'stage', pl.p.index), dealId: before.id, fromStageId: before.stageId, toStageId: to.id, userId: ctx.user.id}], skipDuplicates: true});
-      await db.activity.createMany({data: [{id: await detId(ctx.imp.id, 'act-stage', pl.p.index), type: 'stage_changed', title: `Moved from ${before.stage.name} to ${to.name}`, actorId: ctx.user.id, dealId: before.id, data: {from: before.stage.name, to: to.name}}], skipDuplicates: true});
-      await emitMany(db, 'deal.stage_changed', [{recordId: before.id, actorId: ctx.user.id, data: {deal: {...before, ...pl.data}, from: before.stage, to: {id: to.id, name: to.name}}}]);
+      const to = stages.get(String(pl.data!.stageId))!;
+      stageChanges.push({id: await detId(ctx.imp.id, 'stage', pl.p.index), dealId: before.id, fromStageId: before.stageId, toStageId: to.id, userId: ctx.user.id});
+      activities.push({id: await detId(ctx.imp.id, 'act-stage', pl.p.index), type: 'stage_changed', title: `Moved from ${before.stage.name} to ${to.name}`, actorId: ctx.user.id, dealId: before.id, data: {from: before.stage.name, to: to.name}});
+      moved.push({recordId: before.id, actorId: ctx.user.id, data: {deal: {...before, ...pl.data}, from: before.stage, to: {id: to.id, name: to.name}}});
     }
     const status = pl.data!.status as string | undefined;
     if (status) {
       const title = status === 'WON' ? `Deal won 🎉 ${before.title}` : status === 'LOST' ? `Deal lost${pl.data!.lostReason ? `: ${pl.data!.lostReason}` : ''}` : 'Deal reopened';
-      await db.activity.createMany({data: [{id: await detId(ctx.imp.id, 'act-status', pl.p.index), type: status === 'WON' ? 'deal_won' : status === 'LOST' ? 'deal_lost' : 'deal_reopened', title, actorId: ctx.user.id, dealId: before.id, companyId: before.companyId}], skipDuplicates: true});
-      if (status !== 'OPEN') await emitMany(db, status === 'WON' ? 'deal.won' : 'deal.lost', [{recordId: before.id, actorId: ctx.user.id, data: {...before, ...pl.data}}]);
-      if (status === 'WON' && before.contacts.length) await db.contact.updateMany({where: {id: {in: before.contacts.map((l) => l.contactId)}}, data: {lifecycleStage: 'CUSTOMER'}});
+      activities.push({id: await detId(ctx.imp.id, 'act-status', pl.p.index), type: status === 'WON' ? 'deal_won' : status === 'LOST' ? 'deal_lost' : 'deal_reopened', title, actorId: ctx.user.id, dealId: before.id, companyId: before.companyId});
+      if (status === 'WON') won.push({recordId: before.id, actorId: ctx.user.id, data: {...before, ...pl.data}});
+      if (status === 'LOST') lost.push({recordId: before.id, actorId: ctx.user.id, data: {...before, ...pl.data}});
+      if (status === 'WON') for (const l of before.contacts) customers.add(l.contactId);
     }
   }
+  if (primary.length) {
+    // The imported company becomes each deal's primary one (the others stay linked).
+    await db.dealCompany.updateMany({where: {dealId: {in: primary.map((x) => x.dealId)}}, data: {isPrimary: false}});
+    await db.$transaction(primary.map((x) => db.dealCompany.upsert({where: {dealId_companyId: x}, create: {...x, isPrimary: true}, update: {isPrimary: true}})));
+  }
+  if (stageChanges.length) await db.stageChange.createMany({data: stageChanges, skipDuplicates: true});
+  if (activities.length) await db.activity.createMany({data: activities, skipDuplicates: true});
+  if (customers.size) await db.contact.updateMany({where: {id: {in: [...customers]}}, data: {lifecycleStage: 'CUSTOMER'}});
+  await emitMany(db, 'deal.stage_changed', moved);
+  await emitMany(db, 'deal.won', won);
+  await emitMany(db, 'deal.lost', lost);
 }
 
 // ─── Running a phase ────────────────────────────────────────────────────────
@@ -903,8 +930,10 @@ async function runPhase(db: Db, imp: Import, phase: Phase) {
   }
   let issueCount = await db.importIssue.count({where: {importId: imp.id, phase}});
   let at = imp.processed;
+  const batch = ctx.entity === 'deal' && ctx.options.mode !== 'create' ? DEAL_UPDATE_BATCH : BATCH;
+  // The budget is checked before each row group; a group is small enough to fit in what is left.
   while (at < rows.length && Date.now() - started < BUDGET_MS) {
-    const end = Math.min(at + BATCH, rows.length);
+    const end = Math.min(at + batch, rows.length);
     const r = await processBatch(ctx, rows.slice(at, end), at);
     // A retried batch replaces its own issues instead of adding them twice.
     await db.importIssue.deleteMany({where: {importId: imp.id, phase, row: {gte: at + 2, lt: end + 2}}});
@@ -933,8 +962,8 @@ async function runPhase(db: Db, imp: Import, phase: Phase) {
     if (current.status === 'canceled') return finishRun(db, await db.import.findUniqueOrThrow({where: {id: imp.id}}), 'canceled');
   }
   if (at < rows.length) {
-    await enqueue(db, phase === 'validate' ? 'import.validate' : 'import.run', {importId: imp.id, token: imp.token!});
-    kickJobs();
+    // Keyed by where it goes on from: a retried job never queues the same next step twice.
+    await enqueue(db, phase === 'validate' ? 'import.validate' : 'import.run', {importId: imp.id, token: imp.token!}, {key: `import-${imp.token}-${phase}-${at}`, label: importLabel(phase, imp.fileName)});
     return;
   }
   const done = await db.import.findUniqueOrThrow({where: {id: imp.id}});
@@ -954,9 +983,12 @@ export async function queuePhase(db: Db, importId: string, phase: Phase, origin:
     where: {id: importId},
     data: {status: phase === 'validate' ? 'validating' : 'queued', token, processed: 0, created: 0, updated: 0, skipped: 0, failed: 0, warnings: 0, error: null, ...(phase === 'validate' ? {preview: undefined, stats: {origin}} : {stats: {origin}, startedAt: null, finishedAt: null})},
   });
-  await enqueue(db, phase === 'validate' ? 'import.validate' : 'import.run', {importId, token});
-  kickJobs();
+  const imp = await db.import.findUnique({where: {id: importId}, select: {fileName: true}});
+  await enqueue(db, phase === 'validate' ? 'import.validate' : 'import.run', {importId, token}, {key: `import-${token}-${phase}-0`, label: importLabel(phase, imp?.fileName ?? '')});
 }
+
+/** "Import · contacts.csv" in the platform's Jobs tab (the file's name only). */
+const importLabel = (phase: Phase, fileName: string) => `${phase === 'validate' ? 'Import check' : 'Import'} · ${fileName}`.slice(0, 80);
 
 /** Admin-approved new select options from the value map are added to the custom field before the run starts. */
 export async function addNewOptions(db: Db, entity: IoEntity, mapping: (string | null)[], options: ImportOptions) {
@@ -1044,9 +1076,10 @@ async function finishRun(db: Db, imp: Import, status: 'done' | 'failed' | 'cance
     if (!k.startsWith('owner:')) continue;
     await notify(db, [k.slice(6)], {type: 'assigned', title: `${user.name} imported ${n} ${n === 1 ? noun.one : noun.many} assigned to you`, link: noun.path, actorId: user.id});
   }
-  if (imp.created && entity !== 'deal') await enqueue(db, 'duplicates.scan', {entity});
-  if (extra.companiesCreated && entity !== 'company') await enqueue(db, 'duplicates.scan', {entity: 'company'});
-  kickJobs();
+  // A full scan per entity; several imports finishing in the same hour share one.
+  const hour = Math.floor(Date.now() / 3_600_000);
+  if (imp.created && entity !== 'deal') await enqueue(db, 'duplicates.scan', {entity}, {key: `dup-scan-${entity}-import-${hour}`});
+  if (extra.companiesCreated && entity !== 'company') await enqueue(db, 'duplicates.scan', {entity: 'company'}, {key: `dup-scan-company-import-${hour}`});
   if (options.emailMe) {
     const origin = (imp.stats as {origin?: string}).origin || config.siteUrl();
     const lines = [

@@ -7,9 +7,9 @@ import {currentUser, type AppEnv} from '../kit/guards';
 import {customDiff, diff, logActivity} from '../lib/activity';
 import {audit, auditMany} from '../lib/audit';
 import {cleanCustom} from '../lib/custom-fields';
-import {checkDuplicates, forgetPairs} from '../lib/duplicates';
-import {emit} from '../lib/events';
-import {custom, listQuery, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {forgetPairs, queueDuplicateCheck} from '../lib/duplicates';
+import {emit, emitMany} from '../lib/events';
+import {assertVisible, custom, httpUrl, intParam, listQuery, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
 import {associateByDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
 import {moveScoreEvents, scoreBandWhere} from '../lib/scoring';
@@ -27,7 +27,7 @@ export const contactBody = z.object({
   email: z.union([z.email(), z.literal('')]).nullish().transform((v) => (v ? v.toLowerCase() : v === '' ? null : v)),
   phone: optStr,
   title: optStr,
-  linkedin: optStr,
+  linkedin: httpUrl,
   lifecycleStage: lifecycle.optional(),
   leadStatus: optStr,
   buyingRole: optStr,
@@ -71,12 +71,14 @@ export function contactWhere(q: Record<string, string | undefined>): Prisma.Cont
   if (q.lifecycleStage) where.lifecycleStage = q.lifecycleStage as Prisma.ContactWhereInput['lifecycleStage'];
   if (q.source) where.source = q.source;
   if (q.companyId) where.companies = {some: {companyId: q.companyId}};
-  if (q.noActivityDays) where.OR = [{lastActivityAt: null}, {lastActivityAt: {lt: new Date(Date.now() - Number(q.noActivityDays) * 86400_000)}}];
+  // Other callers (exports) pass the raw query string: a non-number is ignored, never an Invalid Date.
+  const idleDays = Number(q.noActivityDays);
+  if (q.noActivityDays && Number.isInteger(idleDays) && idleDays > 0 && idleDays <= 36_500) where.OR = [{lastActivityAt: null}, {lastActivityAt: {lt: new Date(Date.now() - idleDays * 86400_000)}}];
   return where;
 }
 
 export const contacts = new Hono<AppEnv>()
-  .get('/', valid('query', listQuery.extend({lifecycleStage: lifecycle.optional(), source: z.string().optional(), companyId: z.string().optional(), noActivityDays: z.string().optional(), listId: z.string().optional(), scoreBand: z.string().max(30).optional()})), async (c) => {
+  .get('/', valid('query', listQuery.extend({lifecycleStage: lifecycle.optional(), source: z.string().optional(), companyId: z.string().optional(), noActivityDays: intParam(1, 36_500).optional(), listId: z.string().optional(), scoreBand: z.string().max(30).optional()})), async (c) => {
     const q = c.req.valid('query');
     const plain = contactWhere(q as unknown as Record<string, string>);
     const base = q.scoreBand ? {AND: [plain, await scoreBandWhere(c.var.db, q.scoreBand)]} : plain;
@@ -97,6 +99,7 @@ export const contacts = new Hono<AppEnv>()
   .post('/', valid('json', contactBody), async (c) => {
     const me = currentUser(c);
     const {companyId, custom: customInput, ...body} = c.req.valid('json');
+    if (companyId) await assertVisible(c, {companyId});
     if (body.email) {
       const dupe = await c.var.db.contact.findFirst({where: {email: body.email}, select: {id: true}});
       if (dupe) throw new HTTPException(409, {message: `A contact with ${body.email} already exists`});
@@ -117,16 +120,19 @@ export const contacts = new Hono<AppEnv>()
     await audit(c.var.db, c, {action: 'contact.created', entity: 'contact', recordId: contact.id, label: contactName(contact)});
     await notify(c.var.db, [contact.ownerId], {type: 'assigned', title: `${me.name} assigned you a contact: ${contactName(contact)}`, link: recordLink.contact(contact.id), actorId: me.id});
     const linked = companyId ? null : await associateByDomain(c.var.db, contact.id, me.id);
-    await checkDuplicates(c.var.db, 'contact', contact.id);
+    // Compared with every contact: a job, not this request (P2-25).
+    await queueDuplicateCheck(c.var.db, 'contact', contact.id);
     return c.json({contact, linkedCompany: linked}, 201);
   })
 
   .get('/:id', async (c) => {
+    const scope = await ownerScope(c);
     const contact = await c.var.db.contact.findFirst({
-      where: {id: c.req.param('id'), ...(await ownerScope(c))},
+      where: {id: c.req.param('id'), ...scope},
       include: {
         ...contactInclude,
-        deals: {include: {deal: {include: {stage: true, owner: {select: userSelect}}}}},
+        // Only deals the user may see (owner-only visibility).
+        deals: {where: {deal: scope}, include: {deal: {include: {stage: true, owner: {select: userSelect}}}}},
       },
     });
     if (!contact) throw notFound('Contact');
@@ -153,7 +159,7 @@ export const contacts = new Hono<AppEnv>()
       await logActivity(db, {type: 'field_changed', title: 'Contact updated', actorId: me.id, contactId: contact.id, data: {changes} as Prisma.InputJsonValue});
       await emit(db, 'contact.updated', {recordId: contact.id, actorId: me.id, data: {...contact, changes}});
       await audit(db, c, {action: 'contact.updated', entity: 'contact', recordId: contact.id, label: contactName(contact), meta: {changes}});
-      if (changes.some((ch) => ['firstName', 'lastName', 'email', 'phone'].includes(ch.field))) await checkDuplicates(db, 'contact', contact.id);
+      if (changes.some((ch) => ['firstName', 'lastName', 'email', 'phone'].includes(ch.field))) await queueDuplicateCheck(db, 'contact', contact.id);
     }
     if (contact.ownerId !== before.ownerId) {
       await notify(db, [contact.ownerId], {type: 'assigned', title: `${me.name} assigned you a contact: ${contactName(contact)}`, link: recordLink.contact(contact.id), actorId: me.id});
@@ -172,18 +178,20 @@ export const contacts = new Hono<AppEnv>()
   })
 
   .post('/bulk', valid('json', z.object({
-    ids: z.array(z.string()).min(1).max(500),
+    ids: z.array(z.string().max(40)).min(1).max(500),
     action: z.enum(['delete', 'assign', 'tag', 'untag', 'stage']),
-    value: z.string().optional(),
+    value: z.string().trim().max(100).optional(),
   })), async (c) => {
     const {ids, action, value} = c.req.valid('json');
     const db = c.var.db;
     const me = currentUser(c);
-    const where = {id: {in: ids}, ...(await ownerScope(c))};
+    const scope = await ownerScope(c);
+    const where = {id: {in: ids}, ...scope};
     if (action === 'delete') {
       const gone = await db.contact.findMany({where});
       await moveToBin(db, 'contact', gone.map((r) => r.id), me);
-      for (const row of gone) await emit(db, 'contact.deleted', {recordId: row.id, actorId: me.id, data: row});
+      // One batch of events and one of audit rows, not a few queries per record.
+      await emitMany(db, 'contact.deleted', gone.map((row) => ({recordId: row.id, actorId: me.id, data: row})));
       await auditMany(db, c, gone.map((r) => ({action: 'contact.deleted', entity: 'contact', recordId: r.id, label: contactName(r), meta: {bulk: true}})));
     }
     // Values before the edit, so the audit log (and property history) shows old → new per record.
@@ -192,14 +200,18 @@ export const contacts = new Hono<AppEnv>()
       const {count} = await db.contact.updateMany({where, data: {ownerId: value || null}});
       await notify(db, [value], {type: 'assigned', title: `${me.name} assigned you ${count} contact${count === 1 ? '' : 's'}`, link: '/contacts', actorId: me.id});
     }
-    if (action === 'stage' && value) await db.contact.updateMany({where, data: {lifecycleStage: lifecycle.parse(value)}});
+    if (action === 'stage' && value) {
+      const stage = lifecycle.safeParse(value);
+      if (!stage.success) throw new HTTPException(400, {message: 'Pick a lifecycle stage'});
+      await db.contact.updateMany({where, data: {lifecycleStage: stage.data}});
+    }
     if ((action === 'tag' || action === 'untag') && value) {
       await Promise.all(before.map((r) => db.contact.update({
         where: {id: r.id},
         data: {tags: action === 'tag' ? [...new Set([...r.tags, value])] : r.tags.filter((t) => t !== value)},
       })));
     }
-    if (action !== 'delete') await queueRescore(db, ids);
+    if (action !== 'delete') await queueRescore(db, before.map((r) => r.id));
     if (action !== 'delete') {
       const after = new Map((await db.contact.findMany({where: {id: {in: before.map((r) => r.id)}}, select: {id: true, ownerId: true, lifecycleStage: true, tags: true}})).map((r) => [r.id, r]));
       await auditMany(db, c, before.map((r) => {
@@ -215,6 +227,7 @@ export const contacts = new Hono<AppEnv>()
   .post('/:id/companies', valid('json', z.object({companyId: z.string(), role: optStr, isPrimary: z.boolean().optional()})), async (c) => {
     const {companyId, role, isPrimary} = c.req.valid('json');
     const contactId = c.req.param('id');
+    await assertVisible(c, {contactId, companyId});
     if (isPrimary) await c.var.db.contactCompany.updateMany({where: {contactId}, data: {isPrimary: false}});
     await c.var.db.contactCompany.upsert({
       where: {contactId_companyId: {contactId, companyId}},
@@ -225,6 +238,7 @@ export const contacts = new Hono<AppEnv>()
     return c.json({ok: true});
   })
   .delete('/:id/companies/:companyId', async (c) => {
+    await assertVisible(c, {contactId: c.req.param('id')});
     await c.var.db.contactCompany.deleteMany({where: {contactId: c.req.param('id'), companyId: c.req.param('companyId')}});
     await queueRescore(c.var.db, [c.req.param('id')]);
     return c.json({ok: true});
@@ -242,9 +256,11 @@ export const contacts = new Hono<AppEnv>()
     const {otherId, keep, fields} = c.req.valid('json');
     const thisId = c.req.param('id');
     if (thisId === otherId) throw new HTTPException(400, {message: 'Pick a different contact'});
+    // Both must be visible to the user: a merge takes the other's history and deletes it for good.
+    const scope = await ownerScope(c);
     const [a, b] = await Promise.all([
-      db.contact.findUnique({where: {id: thisId}, include: {companies: true, deals: true, listMemberships: true}}),
-      db.contact.findUnique({where: {id: otherId}, include: {companies: true, deals: true, listMemberships: true}}),
+      db.contact.findFirst({where: {id: thisId, ...scope}, include: {companies: true, deals: true, listMemberships: true}}),
+      db.contact.findFirst({where: {id: otherId, ...scope}, include: {companies: true, deals: true, listMemberships: true}}),
     ]);
     if (!a || !b) throw notFound('Contact');
     const [survivor, dropped] = keep === 'this' ? [a, b] : [b, a];
@@ -310,7 +326,7 @@ export const contacts = new Hono<AppEnv>()
     await queueRescore(db, [keepId]);
     await forgetPairs(db, [dropId]);
     await audit(db, c, {action: 'contact.merged', entity: 'contact', recordId: keepId, label: contactName({firstName: String(data.firstName ?? survivor.firstName), lastName: (data.lastName as string | null) ?? null}), meta: {droppedId: dropId, dropped: contactName(dropped), droppedEmail: dropped.email, fields, changes}});
-    await checkDuplicates(db, 'contact', keepId);
+    await queueDuplicateCheck(db, 'contact', keepId);
     return c.json({ok: true, keptId: keepId});
   })
 

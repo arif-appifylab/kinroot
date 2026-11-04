@@ -55,7 +55,7 @@ export function CommandPalette({open, onOpenChange}: {open: boolean; onOpenChang
           <Command shouldFilter={!debounced} loop>
             <div className="flex items-center gap-3 border-b border-slate-100 px-4">
               <Search className="size-4 text-slate-400" />
-              <Command.Input value={q} onValueChange={setQ} placeholder="Search people, companies, deals, tickets, notes… or type a command" className="h-14 flex-1 bg-transparent text-[15px] outline-none placeholder:text-slate-400" />
+              <Command.Input value={q} onValueChange={setQ} aria-label="Search or run a command" placeholder="Search people, companies, deals, tickets, notes… or type a command" className="h-14 flex-1 bg-transparent text-[15px] outline-none placeholder:text-slate-400" />
               <kbd className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">ESC</kbd>
             </div>
             <Command.List className="max-h-[60vh] overflow-y-auto p-2 scrollbar-thin">

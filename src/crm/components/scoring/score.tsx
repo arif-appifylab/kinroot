@@ -13,6 +13,7 @@ import {Badge} from '../ui/badge';
 import {Button} from '../ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle} from '../ui/dialog';
 import {Skeleton} from '../ui/misc';
+import {LoadError} from '../data-table';
 
 /** Bands, decay and notification settings (every signed-in user can read them). */
 export function useScoringSettings() {
@@ -79,7 +80,7 @@ export function ScoreBreakdownDialog({contactId, onClose}: {contactId: string; o
         </DialogHeader>
         <DialogBody className="gap-5">
           {q.isLoading && <Skeleton className="h-40" />}
-          {q.error && <p className="text-sm text-destructive">{(q.error as Error).message}</p>}
+          {q.error && <LoadError error={q.error} onRetry={() => q.refetch()} title="The score could not be loaded" />}
           {d && (
             <>
               <div className="flex flex-wrap items-center gap-4 rounded-xl bg-accent/50 p-4">

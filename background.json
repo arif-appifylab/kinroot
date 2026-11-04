@@ -15,6 +15,12 @@
     "crm-email-forward-reply": {
       "retries": 2
     },
+    "crm-email-sync-account": {
+      "retries": 1
+    },
+    "crm-calendar-sync-connection": {
+      "retries": 1
+    },
     "crm-booking-email": {
       "retries": 5
     },
@@ -38,6 +44,9 @@
     },
     "crm-duplicates-scan": {
       "retries": 5
+    },
+    "crm-duplicates-check": {
+      "retries": 3
     },
     "crm-automation-events": {
       "retries": 5
@@ -68,12 +77,24 @@
     },
     "crm-incoming-webhook-process": {
       "retries": 5
+    },
+    "crm-tick": {
+      "retries": 0,
+      "concurrency": 1
+    },
+    "crm-sync": {
+      "retries": 0,
+      "concurrency": 1
+    },
+    "crm-prune": {
+      "retries": 0,
+      "concurrency": 1
     }
   },
   "schedules": {
     "crm-tick": {
       "every": "minute",
-      "label": "Kinroot: automations, lead scoring, report emails, inbox"
+      "label": "Kinroot: automations, lead scoring, report emails, inbox, duplicate scans"
     },
     "crm-sync": {
       "cron": "*/5 * * * *",
@@ -83,7 +104,7 @@
       "every": "day",
       "at": "04:00",
       "tz": "UTC",
-      "label": "Kinroot: clean-ups and duplicate scan"
+      "label": "Kinroot: clean-ups"
     }
   }
 }

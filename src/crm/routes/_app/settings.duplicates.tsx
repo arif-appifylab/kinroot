@@ -1,10 +1,10 @@
 import {keepPreviousData, useQuery} from '@tanstack/react-query';
 import {createFileRoute, Link, useNavigate} from '@tanstack/react-router';
-import {Building2, CopyCheck, GitMerge, Loader2, RefreshCw, RotateCcw, User, X} from 'lucide-react';
+import {Building2, CopyCheck, GitMerge, RefreshCw, RotateCcw, User, X} from 'lucide-react';
 import {useState} from 'react';
 import {z} from 'zod';
 
-import {Pagination} from '@/components/data-table';
+import {LoadError, Pagination} from '@/components/data-table';
 import {useDuplicateCounts} from '@/components/duplicates';
 import {FilterBar} from '@/components/filter-bar';
 import {MergePairDialog} from '@/components/record-merge';
@@ -119,11 +119,11 @@ function PairCard({pair, entity, onMerge}: {pair: DuplicatePairRow; entity: Enti
         <div className="mt-3 flex flex-wrap justify-end gap-2">
           {pair.status === 'open' ? (
             <>
-              <Button variant="secondary" size="sm" disabled={dismiss.isPending} onClick={() => dismiss.mutate(undefined)}><X /> Not a duplicate</Button>
-              <Button size="sm" onClick={onMerge}><GitMerge /> Review &amp; merge</Button>
+              <Button variant="secondary" size="sm" pending={dismiss.isPending} pendingLabel="Dismissing…" onClick={() => dismiss.mutate(undefined)}><X /> Not a duplicate</Button>
+              <Button size="sm" disabled={dismiss.isPending} onClick={onMerge}><GitMerge /> Review &amp; merge</Button>
             </>
           ) : (
-            <Button variant="secondary" size="sm" disabled={reopen.isPending} onClick={() => reopen.mutate(undefined)}><RotateCcw /> Reopen</Button>
+            <Button variant="secondary" size="sm" pending={reopen.isPending} pendingLabel="Reopening…" onClick={() => reopen.mutate(undefined)}><RotateCcw /> Reopen</Button>
           )}
         </div>
       )}
@@ -134,7 +134,7 @@ function PairCard({pair, entity, onMerge}: {pair: DuplicatePairRow; entity: Enti
 function Duplicates() {
   const s = Route.useSearch();
   const navigate = useNavigate({from: Route.fullPath});
-  const {canEdit} = useMe();
+  const {canEdit, isAdmin} = useMe();
   const entity: Entity = s.entity ?? 'contact';
   const status = s.status ?? 'open';
   const [page, setPage] = useState(1);
@@ -159,9 +159,10 @@ function Duplicates() {
       title="Duplicates"
       description="Likely duplicate contacts and companies, matched on email (ignoring case, +tags and Gmail dots), phone, name with company or email domain, similar names and website domain. Merge them, or mark them as not duplicates so they are never suggested again."
       actions={
-        canEdit && (
-          <Button variant="secondary" size="sm" disabled={scan.isPending} onClick={() => scan.mutate(undefined)}>
-            {scan.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} Scan now
+        // A full scan is an admin action (the server refuses others).
+        isAdmin && (
+          <Button variant="secondary" size="sm" pending={scan.isPending} pendingLabel="Scanning…" onClick={() => scan.mutate(undefined)}>
+            <RefreshCw /> Scan now
           </Button>
         )
       }
@@ -182,6 +183,7 @@ function Duplicates() {
         <span className="text-xs text-muted-foreground sm:ml-auto">{last ? `Scanned ${ago(last)}` : 'Not scanned yet'} · rescans every 6 hours</span>
       </FilterBar>
 
+      {list.isError && !data && <LoadError error={list.error} onRetry={() => list.refetch()} />}
       {list.isLoading && <div className="grid gap-3">{Array.from({length: 3}, (_, i) => <Skeleton key={i} className="h-40 rounded-2xl" />)}</div>}
       {data && data.rows.length === 0 && (
         <EmptyState

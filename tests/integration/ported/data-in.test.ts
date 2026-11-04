@@ -468,7 +468,7 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     expect(all).not.toContain(KEY);
     expect(all).not.toContain(SECRET);
     expect(all).not.toMatch(/Bearer |authorization/i);
-    const unauth = await db.dataInRequest.findFirstOrThrow({where: {errorCode: 'E_UNAUTHORIZED'}, orderBy: {createdAt: 'desc'}});
-    expect(unauth.body).toBeNull();
+    // A request without a valid key is answered but never logged (AUDIT P2-10): anyone could fill the log.
+    expect(await db.dataInRequest.count({where: {errorCode: 'E_UNAUTHORIZED'}})).toBe(0);
   });
 });

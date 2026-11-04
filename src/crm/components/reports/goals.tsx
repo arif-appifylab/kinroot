@@ -7,6 +7,7 @@ import {Button} from '@/components/ui/button';
 import {Card, CardContent, CardDescription, CardHeader, CardTitle} from '@/components/ui/card';
 import {Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Checkbox, Field, Input, NativeSelect} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {Avatar} from '@/components/ui/misc';
 import {api} from '@/lib/api';
 import {money} from '@/lib/format';
@@ -136,6 +137,9 @@ export function GoalDialog({open, onOpenChange, goal}: {open: boolean; onOpenCha
     },
     {invalidate: [keys.goals], success: goal ? 'Goal updated' : 'Goal added', onSuccess: () => onOpenChange(false)},
   );
+  const f = useFormState(draft, {
+    target: [is.required('Enter a target, like 20.'), is.number({max: 1e12, message: 'Enter a target above 0, like 20.'}), (v) => Number(v) <= 0 && 'Enter a target above 0, like 20.'],
+  });
   // No kinds stored = all three.
   const toggleKind = (k: string) => {
     const current = draft.kinds.length ? draft.kinds : Object.keys(ACTIVITY_KINDS);
@@ -143,18 +147,12 @@ export function GoalDialog({open, onOpenChange, goal}: {open: boolean; onOpenCha
     if (next.length) setDraft({...draft, kinds: next.length === 3 ? [] : next});
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => !save.isPending && onOpenChange(o)}>
       <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>{goal ? 'Edit goal' : 'New goal'}</DialogTitle>
         </DialogHeader>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            save.mutate(undefined);
-          }}
-          className="contents"
-        >
+        <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="contents">
           <DialogBody>
             <Field label="Who">
               <NativeSelect value={draft.userId} onChange={(e) => setDraft({...draft, userId: e.target.value})}>
@@ -186,13 +184,13 @@ export function GoalDialog({open, onOpenChange, goal}: {open: boolean; onOpenCha
                 </div>
               </Field>
             )}
-            <Field label={`Target per ${draft.period === 'MONTH' ? 'month' : 'quarter'}`}>
-              <Input type="number" min={1} step="any" required value={draft.target} onChange={(e) => setDraft({...draft, target: e.target.value})} placeholder={draft.metric === 'won_revenue' ? '50000' : '20'} />
+            <Field label={`Target per ${draft.period === 'MONTH' ? 'month' : 'quarter'}`} error={f.error('target')}>
+              <Input type="number" inputMode="decimal" step="any" value={draft.target} onChange={(e) => setDraft({...draft, target: e.target.value})} onBlur={f.blur('target')} placeholder={draft.metric === 'won_revenue' ? '50000' : '20'} />
             </Field>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending || !Number(draft.target)}>{goal ? 'Save goal' : 'Add goal'}</Button>
+            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={save.isPending}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel={goal ? 'Saving…' : 'Adding…'}>{goal ? 'Save goal' : 'Add goal'}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

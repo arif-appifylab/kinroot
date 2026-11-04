@@ -10,11 +10,16 @@ import {cn} from '@/lib/utils';
 import {prompt} from '../ui/confirm';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger} from '../ui/menu';
 
-/** Every list (or only static lists / segments), with live member counts. */
-export function useLists(kind?: ListKind) {
+/**
+ * Every list (or only static lists / segments), with live member counts. Static lists are asked
+ * for alone (their counts are one cheap query; no segment is counted); pickers that need only
+ * names pass `{counts: false}`.
+ */
+export function useLists(kind?: ListKind, {counts = true}: {counts?: boolean} = {}) {
+  const query = kind === 'STATIC' ? {kind} : counts ? {} : {counts: 0};
   return useQuery({
-    queryKey: [...keys.lists, 'all'],
-    queryFn: () => api.get<{rows: ContactListRow[]}>('/lists'),
+    queryKey: [...keys.lists, 'all', query],
+    queryFn: () => api.get<{rows: ContactListRow[]}>('/lists', query),
     select: (d) => (kind ? d.rows.filter((l) => l.kind === kind) : d.rows),
     staleTime: 30_000,
   });
@@ -33,8 +38,9 @@ export function ListMultiSelect({value, onChange}: {value: string[]; onChange: (
           <button
             key={l.id}
             type="button"
+            aria-pressed={on}
             onClick={() => onChange(on ? value.filter((id) => id !== l.id) : [...value, l.id])}
-            className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold transition-colors', on ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-600 hover:border-primary/50')}
+            className={cn('inline-flex cursor-pointer items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/30', on ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-600 hover:border-primary/50')}
           >
             {on && <Check className="size-3" />}
             {l.name}
@@ -70,6 +76,7 @@ export function ListMenu({trigger, label, onPick, onCreate, exclude = [], align 
               if (e.key === 'Enter' && q && onCreate && !shown.length) onCreate(draft.trim());
             }}
             placeholder="Find a list…"
+            aria-label="Find a list"
             className="h-9 w-full rounded-lg border border-input bg-card pr-2.5 pl-8 text-sm outline-none focus:border-primary"
           />
         </div>

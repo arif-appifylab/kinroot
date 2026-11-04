@@ -120,8 +120,8 @@ describe.skipIf(!DATABASE_URL)('Ported: scheduled report emails (integration, re
 
   it('validates schedules and keeps members to their own', async () => {
     expect((await own.post('/site-api/crm/report-schedules', base({emails: []}))).status).toBe(400);
-    expect((await own.post('/site-api/crm/report-schedules', base({emails: ['not-an-email']}))).status).toBe(400);
-    expect((await own.post('/site-api/crm/report-schedules', base({emails: Array.from({length: 21}, (_, i) => ext(i + 100))}))).status).toBe(400);
+    expect((await own.post('/site-api/crm/report-schedules', base({emails: ['not-an-email']}))).status).toBe(422);
+    expect((await own.post('/site-api/crm/report-schedules', base({emails: Array.from({length: 21}, (_, i) => ext(i + 100))}))).status).toBe(422);
     expect((await own.post('/site-api/crm/report-schedules', base({dashboardId: dash.id}))).status).toBe(400);
     expect((await viewer.post('/site-api/crm/report-schedules', base())).status).toBe(403);
     expect((await member.post('/site-api/crm/report-schedules', base({reportId: privateReport.id}))).status).toBe(404);

@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/react-query';
 import {Link} from '@tanstack/react-router';
-import {FlaskConical, Loader2, Play, Workflow} from 'lucide-react';
+import {FlaskConical, Play, Workflow} from 'lucide-react';
 import {useState} from 'react';
 
 import {OBJECTS, TEST_MODES, type AutoObject, type Target, type TestMode} from '@/lib/automations';
@@ -27,7 +27,7 @@ function TicketPicker({onChange}: {onChange: (id: string | null) => void}) {
   const list = useQuery({queryKey: [...keys.tickets, 'picker', q], queryFn: () => api.get<Paged<TicketRow>>('/tickets', {q, status: 'all', pageSize: 20})});
   return (
     <div className="grid gap-2">
-      <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tickets by subject or number…" />
+      <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tickets by subject or number…" aria-label="Search tickets" />
       <NativeSelect value={picked} onChange={(e) => (setPicked(e.target.value), onChange(e.target.value || null))} aria-label="Ticket">
         <option value="">Pick a ticket…</option>
         {list.data?.rows.map((t) => <option key={t.id} value={t.id}>#{t.number} {t.subject}</option>)}
@@ -91,7 +91,7 @@ export function ManualRunDialog({automation, mode, onClose}: {automation: {id: s
     onSuccess: onClose,
   });
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !run.isPending && onClose()}>
       <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>{mode === 'record' ? 'Run on a record' : 'Run on a list or segment'}</DialogTitle>
@@ -110,8 +110,8 @@ export function ManualRunDialog({automation, mode, onClose}: {automation: {id: s
           )}
         </DialogBody>
         <DialogFooter>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => run.mutate(undefined)} disabled={run.isPending || (mode === 'record' ? !recordId : !listId)}>{run.isPending ? <Loader2 className="animate-spin" /> : <Play />} Start</Button>
+          <Button variant="secondary" onClick={onClose} disabled={run.isPending}>Cancel</Button>
+          <Button onClick={() => run.mutate(undefined)} disabled={mode === 'record' ? !recordId : !listId} pending={run.isPending} pendingLabel="Starting…"><Play /> Start</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -138,7 +138,7 @@ export function AutomationsCard({object, recordId}: {object: Target; recordId: s
         action={canEdit && manual.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" disabled={start.isPending}>{start.isPending ? <Loader2 className="animate-spin" /> : <Play />} Run</Button>
+              <Button variant="ghost" size="sm" pending={start.isPending} pendingLabel="Starting…"><Play /> Run</Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-64">
               <DropdownMenuLabel>Run on this {object}</DropdownMenuLabel>
@@ -155,9 +155,15 @@ export function AutomationsCard({object, recordId}: {object: Target; recordId: s
           </DropdownMenu>
         )}
       >
+        {q.isError && !q.data && (
+          <p role="alert" className="px-3 py-3 text-sm text-destructive">
+            Automations could not be loaded.{' '}
+            <button type="button" onClick={() => q.refetch()} className="cursor-pointer rounded font-semibold text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/30">Retry</button>
+          </p>
+        )}
         {q.data && !runs.length && <p className="px-3 py-3 text-sm text-muted-foreground">No automation has run on this {object} yet.</p>}
         {runs.map((r) => (
-          <button key={r.id} type="button" onClick={() => setOpen(r.id)} className="flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-3 py-2.5 text-left hover:bg-slate-50">
+          <button key={r.id} type="button" onClick={() => setOpen(r.id)} className="flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-3 py-2.5 text-left outline-none hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-primary/30">
             <Workflow className="mt-0.5 size-4 shrink-0 text-slate-400" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-slate-800">{r.automation?.name}</p>

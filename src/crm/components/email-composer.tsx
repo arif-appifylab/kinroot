@@ -1,8 +1,8 @@
 import {Link} from '@tanstack/react-router';
-import {Eye, FileText, Loader2, Send} from 'lucide-react';
-import {useEffect, useState} from 'react';
+import {Eye, FileText, Send} from 'lucide-react';
+import {useEffect, useId, useState} from 'react';
 
-import {api} from '@/lib/api';
+import {api, ApiError} from '@/lib/api';
 import {isEmptyHtml, textToEditorHtml} from '@/lib/email-html';
 import type {EmailLayout} from '@/lib/email-layout';
 import {recordKeys, useApiMutation, useEmailAccounts, useTemplates} from '@/lib/queries';
@@ -10,10 +10,23 @@ import {recordKeys, useApiMutation, useEmailAccounts, useTemplates} from '@/lib/
 import {EmailPreview, RichEditor, Segmented} from './email-editor';
 import {Button} from './ui/button';
 import {Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle} from './ui/dialog';
-import {Input, NativeSelect} from './ui/form';
+import {Field, Input, NativeSelect} from './ui/form';
+import {is, useFormState} from './ui/form-state';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger} from './ui/menu';
 
 const splitEmails = (v: string) => v.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+/** Every address in a comma-separated list is valid (and at most 50). */
+const emailList = (v: string) => {
+  const list = splitEmails(v);
+  const bad = list.find((x) => !EMAIL.test(x));
+  if (bad) return `"${bad}" isn't a valid email address. Separate addresses with commas.`;
+  return list.length > 50 ? 'Send to at most 50 addresses.' : null;
+};
+/** The server names list errors `to.0`, `cc.2`…: they belong on the list's field. */
+const listFields = (e: unknown) =>
+  e instanceof ApiError ? new ApiError(e.message, e.status, Object.fromEntries(Object.entries(e.fields).map(([k, v]) => [k.replace(/\.\d+$/, ''), v]))) : e;
+const inlineLabel = 'pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-sm text-slate-500';
 
 export type ComposerContext = {contactId?: string | null; companyId?: string | null; dealId?: string | null; threadId?: string};
 
@@ -42,6 +55,17 @@ export function EmailComposer({to: initialTo = [], subject: initialSubject = '',
     {invalidate: recordKeys, success: 'Email sent', onSuccess: () => (setHtml(''), setPreheader(''), !context.threadId && setSubject(''), onSent?.())},
   );
 
+  const uid = useId();
+  const f = useFormState(
+    {to, cc, subject, preheader},
+    {
+      to: [is.required('Add at least one recipient, like name@company.com.'), emailList],
+      cc: [(v) => (showCc ? emailList(v) : null)],
+      subject: context.threadId ? [] : [is.required('Add a subject.'), is.maxLength(500)],
+      preheader: [is.maxLength(300)],
+    },
+  );
+
   if (accounts.isSuccess && !accounts.data.length) {
     return (
       <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-5 text-center">
@@ -57,23 +81,44 @@ export function EmailComposer({to: initialTo = [], subject: initialSubject = '',
   const empty = isEmptyHtml(html);
 
   return (
-    <form onSubmit={(e) => (e.preventDefault(), !empty && send.mutate(undefined))} className="grid gap-2.5">
+    <form {...f.form(() => !empty && !send.isPending && send.mutate(undefined, {onError: (e) => f.fail(listFields(e))}))} className="grid gap-2.5">
       <div className="grid grid-cols-1 gap-2.5 xl:grid-cols-[minmax(0,1fr)_14rem]">
-        <div className="relative">
-          <Input aria-label="To" value={to} onChange={(e) => setTo(e.target.value)} placeholder="To" className="pr-12" required />
-          {!showCc && (
-            <button type="button" onClick={() => setShowCc(true)} className="absolute top-1/2 right-3 -translate-y-1/2 cursor-pointer text-xs font-semibold text-slate-400 hover:text-primary">Cc</button>
-          )}
-        </div>
+        <Field htmlFor={`${uid}-to`} error={f.error('to')}>
+          <div className="relative">
+            <label htmlFor={`${uid}-to`} className={inlineLabel}>To</label>
+            <Input id={`${uid}-to`} value={to} onChange={(e) => setTo(e.target.value)} onBlur={f.blur('to')} placeholder="name@company.com" className="pr-12 pl-10" />
+            {!showCc && (
+              <button type="button" onClick={() => setShowCc(true)} className="absolute top-1/2 right-3 -translate-y-1/2 cursor-pointer rounded text-xs font-semibold text-slate-400 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30" aria-label="Add Cc">Cc</button>
+            )}
+          </div>
+        </Field>
         {(accounts.data?.length ?? 0) > 1 && (
           <NativeSelect aria-label="Send from" value={accountId} onChange={(e) => setAccountId(e.target.value)} className="min-w-0">
             {accounts.data?.map((a) => <option key={a.id} value={a.id}>{a.fromEmail}</option>)}
           </NativeSelect>
         )}
       </div>
-      {showCc && <Input aria-label="Cc" value={cc} onChange={(e) => setCc(e.target.value)} placeholder="Cc" />}
-      {!context.threadId && <Input aria-label="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" required />}
-      {layout === 'branded' && <Input aria-label="Preview text" value={preheader} onChange={(e) => setPreheader(e.target.value)} placeholder="Preview text (shown next to the subject in the inbox)" maxLength={300} />}
+      {showCc && (
+        <Field htmlFor={`${uid}-cc`} error={f.error('cc')}>
+          <div className="relative">
+            <label htmlFor={`${uid}-cc`} className={inlineLabel}>Cc</label>
+            <Input id={`${uid}-cc`} value={cc} onChange={(e) => setCc(e.target.value)} onBlur={f.blur('cc')} placeholder="name@company.com" className="pl-10" />
+          </div>
+        </Field>
+      )}
+      {!context.threadId && (
+        <Field htmlFor={`${uid}-subject`} error={f.error('subject')}>
+          <div className="relative">
+            <label htmlFor={`${uid}-subject`} className={inlineLabel}>Subject</label>
+            <Input id={`${uid}-subject`} value={subject} onChange={(e) => setSubject(e.target.value)} onBlur={f.blur('subject')} className="pl-[4.25rem]" />
+          </div>
+        </Field>
+      )}
+      {layout === 'branded' && (
+        <Field htmlFor={`${uid}-preheader`} error={f.error('preheader')}>
+          <Input id={`${uid}-preheader`} aria-label="Preview text" value={preheader} onChange={(e) => setPreheader(e.target.value)} onBlur={f.blur('preheader')} placeholder="Preview text (shown next to the subject in the inbox)" maxLength={300} />
+        </Field>
+      )}
       <RichEditor value={html} onChange={setHtml} compact={compact} placeholder="Write your message… add a merge field from the toolbar" />
       <div className="flex flex-wrap items-center gap-2">
         <DropdownMenu>
@@ -108,8 +153,8 @@ export function EmailComposer({to: initialTo = [], subject: initialSubject = '',
           ]}
         />
         <Button type="button" variant="ghost" size="sm" onClick={() => setPreviewing(true)} disabled={empty}><Eye /> Preview</Button>
-        <Button type="submit" size="sm" className="ml-auto" disabled={send.isPending || !accountId || empty}>
-          {send.isPending ? <Loader2 className="animate-spin" /> : <Send />} Send
+        <Button type="submit" size="sm" className="ml-auto" disabled={!accountId || empty} pending={send.isPending} pendingLabel="Sending…">
+          <Send /> Send
         </Button>
       </div>
       {previewing && (

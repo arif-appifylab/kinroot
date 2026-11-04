@@ -23,6 +23,9 @@ export async function publicBookingByToken(db: Db, token: string, origin: string
 
 const optText = (max: number) => z.string().trim().max(max).optional().nullable();
 
+/** An ISO date-time from the booking widget (`2026-11-03T00:00:00.000Z`); anything else is refused in words. */
+const isoDateTime = z.iso.datetime({offset: true, error: 'must be a date and time like 2026-11-03T09:00:00Z'});
+
 /** Booking pages, <BookingWidget> and the forms "booking slot" field talk to these. No sign-in. */
 export const bookingPublic = new Hono<AppEnv>()
   .get('/booking/links/:first/:slug', async (c) => {
@@ -40,10 +43,18 @@ export const bookingPublic = new Hono<AppEnv>()
   /** Open start times (ISO, UTC) in [from, to). With `reschedule` (a manage token) the booking's own time and host are used. */
   .get(
     '/booking/slots',
-    valid('query', z.object({linkId: z.string().optional(), duration: z.coerce.number().int().min(5).max(480), from: z.string(), to: z.string(), reschedule: z.string().optional()})),
+    valid('query', z.object({
+      linkId: z.string().max(40).optional(),
+      duration: z.string().regex(/^\d{1,3}$/, 'must be minutes').transform(Number).pipe(z.number().int().min(5).max(480)),
+      from: isoDateTime,
+      to: isoDateTime,
+      reschedule: z.string().max(200).optional(),
+    })),
     async (c) => {
       const db = c.var.db;
       const q = c.req.valid('query');
+      // Public and costly (calendar reads for every host): bounded per connection.
+      await rateLimit(db, await connectionLimits((n) => c.req.header(n), 'booking:slots', 60, 600), 'Too many requests for open times. Please wait a moment and try again.');
       const booking = q.reschedule ? await bookingFromToken(db, q.reschedule) : null;
       if (q.reschedule && !booking) throw new HTTPException(400, {message: 'This link is not valid'});
       const link = booking?.link ?? (q.linkId ? await db.bookingLink.findUnique({where: {id: q.linkId}}) : null);

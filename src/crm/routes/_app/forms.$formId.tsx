@@ -5,6 +5,7 @@ import {useEffect, useRef, useState} from 'react';
 import {toast} from 'sonner';
 import {z} from 'zod';
 
+import {LoadError} from '@/components/data-table';
 import {FormBuilder} from '@/components/forms/builder';
 import {FormSettingsPanel} from '@/components/forms/form-settings';
 import {FormRenderer} from '@/components/forms/renderer';
@@ -51,6 +52,7 @@ function FormPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved');
   const [preview, setPreview] = useState(false);
+  const [flushing, setFlushing] = useState(false);
   const saved = useRef('');
 
   useEffect(() => {
@@ -96,6 +98,14 @@ function FormPage() {
   });
   const slug = useApiMutation((s: string) => api.patch(`/forms/${formId}`, {slug: s}), {invalidate: [keys.forms], success: 'Link updated'});
 
+  if (q.isError && !form) {
+    return (
+      <div>
+        <h1 className="sr-only">Form</h1>
+        <LoadError error={q.error} onRetry={() => q.refetch()} />
+      </div>
+    );
+  }
   if (q.isLoading || !form || !draft) {
     return (
       <div className="grid gap-4">
@@ -112,9 +122,18 @@ function FormPage() {
   async function publish() {
     // Flush pending edits first so the live form is what you see.
     if (JSON.stringify(draft) !== saved.current) {
-      await api.patch(`/forms/${formId}`, draft);
-      saved.current = JSON.stringify(draft);
-      setSaveState('saved');
+      setFlushing(true);
+      try {
+        await api.patch(`/forms/${formId}`, draft);
+        saved.current = JSON.stringify(draft);
+        setSaveState('saved');
+      } catch (e) {
+        setSaveState('error');
+        toast.error((e as Error).message);
+        return;
+      } finally {
+        setFlushing(false);
+      }
     }
     status.mutate('PUBLISHED');
   }
@@ -127,6 +146,8 @@ function FormPage() {
             <Link to="/forms" aria-label="Back to forms"><ArrowLeft /></Link>
           </Button>
           <div className="min-w-0 flex-1">
+            {/* The screen's heading; the name field below is what people see and edit. */}
+            <h1 className="sr-only">{draft.name.trim() || form.name}</h1>
             <div className="flex items-center gap-2">
               <input
                 value={draft.name}
@@ -138,7 +159,7 @@ function FormPage() {
               />
               <Badge tone={st.tone}>{st.label}</Badge>
             </div>
-            <p className="mt-0.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
+            <p role="status" className="mt-0.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
               {saveState === 'saving' && <><Loader2 className="size-3 animate-spin" /> Saving…</>}
               {saveState === 'saved' && <><Check className="size-3 text-emerald-500" /> All changes saved{form.status === 'PUBLISHED' && ' · live form updated'}</>}
               {saveState === 'error' && <><CloudOff className="size-3 text-destructive" /> Not saved, check the last change</>}
@@ -152,9 +173,9 @@ function FormPage() {
           )}
           {canEdit &&
             (form.status === 'PUBLISHED' ? (
-              <Button variant="secondary" onClick={async () => (await confirm({title: 'Close this form?', description: 'The link stays but stops accepting responses.', confirmLabel: 'Close form'})) && status.mutate('CLOSED')}>Close form</Button>
+              <Button variant="secondary" pending={status.isPending} pendingLabel="Closing…" onClick={async () => (await confirm({title: 'Close this form?', description: 'The link stays but stops accepting responses.', confirmLabel: 'Close form'})) && status.mutate('CLOSED')}>Close form</Button>
             ) : (
-              <Button onClick={publish} disabled={status.isPending}>{status.isPending && <Loader2 className="animate-spin" />} {form.status === 'CLOSED' ? 'Reopen' : 'Publish'}</Button>
+              <Button onClick={publish} pending={status.isPending || flushing} pendingLabel={form.status === 'CLOSED' ? 'Reopening…' : 'Publishing…'}>{form.status === 'CLOSED' ? 'Reopen' : 'Publish'}</Button>
             ))}
         </div>
       </div>
@@ -170,8 +191,8 @@ function FormPage() {
 
       <div className={cn(!canEdit && tab !== 'results' && tab !== 'share' && 'pointer-events-none opacity-80')}>
         {tab === 'build' && <FormBuilder fields={draft.fields} settings={draft.settings} onFields={(fields) => setDraft({...draft, fields})} onSettings={(settings) => setDraft({...draft, settings})} />}
-        {tab === 'settings' && <FormSettingsPanel fields={draft.fields} settings={draft.settings} onChange={(settings) => setDraft({...draft, settings})} slug={form.slug} onSlug={(s) => slug.mutate(s)} />}
-        {tab === 'share' && <SharePanel slug={form.slug} status={form.status} onPublish={publish} />}
+        {tab === 'settings' && <FormSettingsPanel fields={draft.fields} settings={draft.settings} onChange={(settings) => setDraft({...draft, settings})} slug={form.slug} onSlug={(s) => slug.mutate(s)} slugPending={slug.isPending} />}
+        {tab === 'share' && <SharePanel slug={form.slug} status={form.status} onPublish={publish} publishing={status.isPending || flushing} />}
         {tab === 'results' && <ResultsPanel formId={form.id} fields={draft.fields} />}
       </div>
 
@@ -192,8 +213,9 @@ function PreviewDialog({form, onClose}: {form: ReturnType<typeof toPublicForm>; 
               <button
                 key={d}
                 type="button"
+                aria-pressed={device === d}
                 onClick={() => setDevice(d)}
-                className={cn('flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold', device === d ? 'bg-card text-slate-900 shadow-soft' : 'text-slate-500')}
+                className={cn('flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold outline-none focus-visible:ring-2 focus-visible:ring-primary/30', device === d ? 'bg-card text-slate-900 shadow-soft' : 'text-slate-500')}
               >
                 {d === 'desktop' ? <Monitor className="size-3.5" /> : <Smartphone className="size-3.5" />} {d === 'desktop' ? 'Desktop' : 'Mobile'}
               </button>

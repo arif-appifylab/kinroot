@@ -305,7 +305,7 @@ describe.skipIf(!DATABASE_URL)('ported: lists and segments (scripts/test-lists.m
     const self = await owner.post('/lists/preview', {listId: S1.id, rules: {match: 'all', groups: [{match: 'all', rules: [{field: 'list', op: 'in', value: S1.id}]}]}});
     expect(self.status).toBe(400);
     const bad = await owner.post('/lists/preview', {rules: {match: 'maybe', groups: []}});
-    expect(bad.status).toBe(400);
+    expect(bad.status).toBe(422);
   });
 
   it('static lists: count, add / remove, events and timeline entries', async () => {
@@ -389,7 +389,10 @@ describe.skipIf(!DATABASE_URL)('ported: lists and segments (scripts/test-lists.m
     try {
       const mine = must<{contact: Row}>(await member.post('/contacts', {firstName: 'Mo', tags: [TAG]}), 'member contact').contact;
       expect(must<{list: {count: number}}>(await member.get(`/lists/${L1.id}`), 'member list').list.count, 'member sees only own contacts in count').toBe(0);
-      expect(must<{added: number}>(await member.post(`/lists/${L1.id}/members`, {contactIds: [mine.id, B.id]}), 'member add').added, 'member can only add visible contacts').toBe(1);
+      // Changing a static list's members is editing it: the list owner or an admin (P2-6).
+      expect((await member.post(`/lists/${L1.id}/members`, {contactIds: [mine.id]})).status, "member cannot add to the owner's list").toBe(403);
+      expect((await member.post(`/lists/${L1.id}/members/remove`, {contactIds: [mine.id]})).status, "member cannot remove from the owner's list").toBe(403);
+      must(await owner.post(`/lists/${L1.id}/members`, {contactIds: [mine.id]}), 'owner adds the member contact');
       const mMembers = must<{rows: Row[]; total: number}>(await member.get(`/lists/${L1.id}/members`), 'member members');
       expect([mMembers.total, mMembers.rows[0]?.id], 'member members scoped').toEqual([1, mine.id]);
       expect(must<{list: {count: number}}>(await owner.get(`/lists/${L1.id}`), 'owner count').list.count, 'owner sees everyone').toBe(3);
@@ -397,6 +400,7 @@ describe.skipIf(!DATABASE_URL)('ported: lists and segments (scripts/test-lists.m
       expect((await member.get(`/lists/for-contact/${B.id}`)).status, 'member cannot read lists of hidden contact').toBe(404);
       expect((await member.patch(`/lists/${L1.id}`, {name: 'hijack'})).status, 'member cannot rename owner list').toBe(403);
       const own = must<{list: Row}>(await member.post('/lists', {name: 'Mine'}), 'member list create').list;
+      expect(must<{added: number}>(await member.post(`/lists/${own.id}/members`, {contactIds: [mine.id, B.id]}), 'member add').added, 'member can only add visible contacts').toBe(1);
       expect((await member.patch(`/lists/${own.id}`, {name: 'Mine2'})).status, 'member renames own list').toBe(200);
       expect((await member.del(`/lists/${own.id}`)).status, 'member deletes own list').toBe(200);
     } finally {

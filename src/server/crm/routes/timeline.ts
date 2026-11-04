@@ -4,7 +4,7 @@ import {z} from 'zod';
 
 import type {Prisma} from '../../../generated/prisma/client';
 import type {AppContext, AppEnv} from '../kit/guards';
-import {notFound, ownerScope, valid} from '../lib/http';
+import {intParam, notFound, ownerScope, valid} from '../lib/http';
 import {userSelect} from '../lib/users';
 
 const GROUPS: Record<string, string[]> = {
@@ -32,17 +32,13 @@ async function feedWhere(c: AppContext, q: z.infer<typeof recordQuery>): Promise
   }
   if (q.companyId) {
     if (!(await db.company.findFirst({where: {id: q.companyId, ...scope}, select: {id: true}}))) throw notFound('Company');
-    const [people, deals] = await Promise.all([
-      db.contactCompany.findMany({where: {companyId: q.companyId}, select: {contactId: true}}),
-      db.deal.findMany({where: {companies: {some: {companyId: q.companyId}}}, select: {id: true}}),
-    ]);
-    return {OR: [{companyId: q.companyId}, {contactId: {in: people.map((p) => p.contactId)}}, {dealId: {in: deals.map((d) => d.id)}}]};
+    // Its people and deals as joins (no id lists in memory), only those the user may see.
+    return {OR: [{companyId: q.companyId}, {contact: {companies: {some: {companyId: q.companyId}}, ...scope}}, {deal: {companies: {some: {companyId: q.companyId}}, ...scope}}]};
   }
   if (q.dealId) {
     if (!(await db.deal.findFirst({where: {id: q.dealId, ...scope}, select: {id: true}}))) throw notFound('Deal');
-    const people = await db.dealContact.findMany({where: {dealId: q.dealId}, select: {contactId: true}});
     // A deal's feed also shows its contacts' emails and notes, the context reps actually need.
-    return {OR: [{dealId: q.dealId}, {contactId: {in: people.map((p) => p.contactId)}, type: {in: ['email_out', 'email_in', 'note', 'interaction_CALL', 'interaction_MEETING']}}]};
+    return {OR: [{dealId: q.dealId}, {contact: {deals: {some: {dealId: q.dealId}}, ...scope}, type: {in: ['email_out', 'email_in', 'note', 'interaction_CALL', 'interaction_MEETING']}}]};
   }
   throw new HTTPException(400, {message: 'Pass contactId, companyId or dealId'});
 }
@@ -65,8 +61,8 @@ export const timeline = new Hono<AppEnv>()
   valid('query', recordQuery.extend({
     group: z.enum(GROUP_NAMES).default('all'),
     q: z.string().trim().max(100).optional(),
-    before: z.string().optional(), // ISO cursor
-    take: z.coerce.number().int().min(1).max(100).default(40),
+    before: z.iso.datetime().optional(), // ISO cursor (nextCursor); anything else is a 422, never an Invalid Date
+    take: intParam(1, 100).default(40),
   })),
   async (c) => {
     const db = c.var.db;

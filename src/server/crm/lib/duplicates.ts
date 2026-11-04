@@ -4,12 +4,13 @@ import {enqueue} from './jobs';
 
 /**
  * Duplicate detection for contacts and companies. Records are reduced to
- * match keys (normalised email / phone / name / domain); a full scan buckets
- * every record by key, scores the pairs inside each bucket and syncs the
- * result into `DuplicatePair` (dismissed pairs are never re-opened). The same
- * scoring runs for one record after it is created, edited or restored
- * (`checkDuplicates()`) and for the "Possible duplicate" hint in the create
- * dialogs (`findLikelyDuplicates()`), so all three always agree.
+ * match keys (normalised email / phone / name / domain); a full scan lets the
+ * database group records that share a key, scores the pairs inside each group
+ * and syncs the result into `DuplicatePair` (dismissed pairs are never
+ * re-opened). The same scoring runs for one record after it is created, edited
+ * or restored (`checkDuplicates()`, as a job through `queueDuplicateCheck()`)
+ * and for the "Possible duplicate" hint in the create dialogs
+ * (`findLikelyDuplicates()`), so all three always agree.
  */
 
 export type DupEntity = 'contact' | 'company';
@@ -159,37 +160,8 @@ async function loadCompanies(db: Db, where: Prisma.CompanyWhereInput = {}) {
 type Found = Map<string, Match & {aId: string; bId: string}>;
 const pairKey = (x: string, y: string) => (x < y ? `${x}|${y}` : `${y}|${x}`);
 
-/** Scores every pair that shares a bucket. Blocking buckets bigger than MAX_BLOCK are skipped (too generic to mean anything). */
+/** Groups bigger than this are skipped (too generic to mean anything). */
 const MAX_BLOCK = 400;
-function pairsFrom<K extends {id: string}>(rows: K[], bucketsOf: (k: K) => string[], score: (a: K, b: K) => Match | null): Found {
-  const buckets = new Map<string, K[]>();
-  for (const r of rows) for (const b of bucketsOf(r)) buckets.set(b, [...(buckets.get(b) ?? []), r]);
-  const seen = new Set<string>();
-  const found: Found = new Map();
-  for (const [, list] of buckets) {
-    if (list.length < 2 || list.length > MAX_BLOCK) continue;
-    for (let i = 0; i < list.length; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        const key = pairKey(list[i]!.id, list[j]!.id);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const m = score(list[i]!, list[j]!);
-        if (m) found.set(key, {...m, aId: key.split('|')[0]!, bId: key.split('|')[1]!});
-      }
-    }
-  }
-  return found;
-}
-
-const contactBuckets = (k: ContactKeys) => [
-  k.emailKey && `e:${k.emailKey}`,
-  k.phoneKey && `p:${k.phoneKey}`,
-  k.name && `n:${k.name}`,
-  k.last && `l:${k.last}`,
-  k.first && k.last && `i:${k.first[0]}${k.last[0]}`,
-].filter((x): x is string => !!x);
-
-const companyBuckets = (k: CompanyKeys) => [k.domain && `d:${k.domain}`, k.name && `n:${k.name}`, k.name && `b:${k.name.replace(/ /g, '').slice(0, 3)}`].filter((x): x is string => !!x);
 
 // ─── Syncing pairs ───
 
@@ -215,22 +187,113 @@ async function syncPairs(db: Db, entity: DupEntity, found: Found, scope: {ids?: 
 
 const SCAN_KEY = 'duplicates.lastScan';
 
-/** Full scan of one entity (job `duplicates.scan`, "Scan now"). Also drops pairs whose records are gone for good. */
+/** Groups (records sharing a match key) one scan looks at, and records it loads; past either the scan is partial. */
+const MAX_GROUPS = 20_000;
+const MAX_RECORDS = 50_000;
+const LOAD_CHUNK = 1000;
+
+/** Lower case, common accents folded, anything else not a-z0-9 → space, trimmed (close to normName()). */
+const nameSql = (col: Prisma.Sql) =>
+  Prisma.sql`trim(regexp_replace(translate(lower(coalesce(${col}, '')), 'àáâãäåāçćčèéêëēěìíîïīñńòóôõöøōùúûüūýÿžšß', 'aaaaaaaccceeeeeeiiiiinnooooooouuuuuyyzss'), '[^a-z0-9]+', ' ', 'g'))`;
+/** normDomain() in SQL: no scheme, no www., no path; only values with a dot. */
+const domainSql = (col: Prisma.Sql) =>
+  Prisma.sql`NULLIF(rtrim(regexp_replace(regexp_replace(regexp_replace(lower(trim(coalesce(${col}, ''))), '^https?://', ''), '^www\\.', ''), '[/?#].*$', ''), '.'), '')`;
+
+/**
+ * Candidate groups of one entity (ids are cuids: no commas), found by the database: records that share a normalised email,
+ * phone, last name (first name when there is none), first initial + company or + work domain
+ * (contacts); a domain or a name prefix (companies). Groups of one, and groups too generic to mean
+ * anything (over MAX_BLOCK), are left out. Only these records are loaded and scored, never the table.
+ */
+async function candidateGroups(db: Db, entity: DupEntity): Promise<string[][]> {
+  if (entity === 'contact') {
+    const last = nameSql(Prisma.raw('c."lastName"'));
+    const first = nameSql(Prisma.raw('c."firstName"'));
+    const rows = await db.$queryRaw<{ids: string}[]>`
+      WITH k AS (
+        SELECT c.id, 'e:' || ${emailKeySql(Prisma.raw('c.email'))} AS g FROM "Contact" c WHERE c.email LIKE '%@%'
+        UNION ALL
+        SELECT c.id, 'p:' || right(regexp_replace(c.phone, '\\D', '', 'g'), 10) FROM "Contact" c WHERE length(regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g')) >= 7
+        UNION ALL
+        SELECT c.id, 'l:' || ${last} FROM "Contact" c WHERE ${last} <> ''
+        UNION ALL
+        SELECT c.id, 'f:' || ${first} FROM "Contact" c WHERE ${last} = '' AND ${first} <> ''
+        UNION ALL
+        SELECT c.id, 'c:' || left(${first}, 1) || ':' || cc."companyId" FROM "Contact" c JOIN "ContactCompany" cc ON cc."contactId" = c.id WHERE ${first} <> ''
+        UNION ALL
+        SELECT c.id, 'd:' || left(${first}, 1) || ':' || lower(split_part(c.email, '@', 2)) FROM "Contact" c
+        WHERE c.email LIKE '%@%' AND ${first} <> '' AND lower(split_part(c.email, '@', 2)) NOT IN (${Prisma.join([...FREE_MAIL])})
+      )
+      SELECT string_agg(id, ',') AS ids FROM k GROUP BY g HAVING count(*) BETWEEN 2 AND ${MAX_BLOCK} ORDER BY g LIMIT ${MAX_GROUPS}`;
+    return rows.map((r) => r.ids.split(','));
+  }
+  const domain = Prisma.sql`COALESCE(${domainSql(Prisma.raw('c.domain'))}, ${domainSql(Prisma.raw('c.website'))})`;
+  const rows = await db.$queryRaw<{ids: string}[]>`
+    WITH k AS (
+      SELECT c.id, 'd:' || ${domain} AS g FROM "Company" c WHERE position('.' in coalesce(${domain}, '')) > 0
+      UNION ALL
+      SELECT c.id, 'b:' || lower(left(regexp_replace(regexp_replace(lower(c.name), '^the\\s+', ''), '[^a-z0-9]', '', 'g'), 3)) FROM "Company" c
+      WHERE regexp_replace(regexp_replace(lower(c.name), '^the\\s+', ''), '[^a-z0-9]', '', 'g') <> ''
+    )
+    SELECT string_agg(id, ',') AS ids FROM k GROUP BY g HAVING count(*) BETWEEN 2 AND ${MAX_BLOCK} ORDER BY g LIMIT ${MAX_GROUPS}`;
+  return rows.map((r) => r.ids.split(','));
+}
+
+/** Scores every pair inside each group (each pair once). */
+function pairsFromGroups<K extends {id: string}>(groups: string[][], byId: Map<string, K>, score: (a: K, b: K) => Match | null): Found {
+  const seen = new Set<string>();
+  const found: Found = new Map();
+  for (const group of groups) {
+    const list = group.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const key = pairKey(list[i]!.id, list[j]!.id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const m = score(list[i]!, list[j]!);
+        if (m) found.set(key, {...m, aId: key.split('|')[0]!, bId: key.split('|')[1]!});
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Full scan of one entity (job `duplicates.scan`, "Scan now"): candidate groups come from SQL
+ * (`candidateGroups`), only their records are loaded and scored. Also drops dismissed pairs whose
+ * records are gone for good. A scan cut short by its caps keeps the open pairs it did not see.
+ */
 export async function scanDuplicates(db: Db, entity: DupEntity) {
-  const rows = entity === 'contact' ? await loadContacts(db) : await loadCompanies(db);
-  const found = entity === 'contact' ? pairsFrom(rows as ContactKeys[], contactBuckets, scoreContacts) : pairsFrom(rows as CompanyKeys[], companyBuckets, scoreCompanies);
-  const result = await syncPairs(db, entity, found, {});
+  const groups = await candidateGroups(db, entity);
+  const ids = [...new Set(groups.flat())].slice(0, MAX_RECORDS);
+  const partial = groups.length >= MAX_GROUPS || ids.length >= MAX_RECORDS;
+  const found: Found = new Map();
+  if (entity === 'contact') {
+    const byId = new Map<string, ContactKeys>();
+    for (let k = 0; k < ids.length; k += LOAD_CHUNK) for (const r of await loadContacts(db, {id: {in: ids.slice(k, k + LOAD_CHUNK)}})) byId.set(r.id, r);
+    for (const [key, m] of pairsFromGroups(groups, byId, scoreContacts)) found.set(key, m);
+  } else {
+    const byId = new Map<string, CompanyKeys>();
+    for (let k = 0; k < ids.length; k += LOAD_CHUNK) for (const r of await loadCompanies(db, {id: {in: ids.slice(k, k + LOAD_CHUNK)}})) byId.set(r.id, r);
+    for (const [key, m] of pairsFromGroups(groups, byId, scoreCompanies)) found.set(key, m);
+  }
+  const result = partial ? await syncPairs(db, entity, found, {ids}) : await syncPairs(db, entity, found, {});
   // Dismissed pairs of merged / purged records (binned ones stay, they may come back).
-  const alive = new Set(rows.map((r) => r.id));
-  const binned = new Set((await db.deletedRecord.findMany({where: {entity}, select: {recordId: true}})).map((r) => r.recordId));
-  const dead = (await db.duplicatePair.findMany({where: {entity, status: 'dismissed'}, select: {id: true, aId: true, bId: true}}))
-    .filter((p) => [p.aId, p.bId].some((id) => !alive.has(id) && !binned.has(id)))
-    .map((p) => p.id);
-  if (dead.length) await db.duplicatePair.deleteMany({where: {id: {in: dead}}});
+  if (entity === 'contact') {
+    await db.$executeRaw`
+      DELETE FROM "DuplicatePair" p WHERE p.entity = 'contact' AND p.status = 'dismissed' AND (
+        (NOT EXISTS (SELECT 1 FROM "Contact" x WHERE x.id = p."aId") AND NOT EXISTS (SELECT 1 FROM "DeletedRecord" d WHERE d.entity = 'contact' AND d."recordId" = p."aId"))
+        OR (NOT EXISTS (SELECT 1 FROM "Contact" x WHERE x.id = p."bId") AND NOT EXISTS (SELECT 1 FROM "DeletedRecord" d WHERE d.entity = 'contact' AND d."recordId" = p."bId")))`;
+  } else {
+    await db.$executeRaw`
+      DELETE FROM "DuplicatePair" p WHERE p.entity = 'company' AND p.status = 'dismissed' AND (
+        (NOT EXISTS (SELECT 1 FROM "Company" x WHERE x.id = p."aId") AND NOT EXISTS (SELECT 1 FROM "DeletedRecord" d WHERE d.entity = 'company' AND d."recordId" = p."aId"))
+        OR (NOT EXISTS (SELECT 1 FROM "Company" x WHERE x.id = p."bId") AND NOT EXISTS (SELECT 1 FROM "DeletedRecord" d WHERE d.entity = 'company' AND d."recordId" = p."bId")))`;
+  }
   const row = await db.setting.findUnique({where: {key: SCAN_KEY}});
   const value = {...((row?.value ?? {}) as object), [entity]: new Date().toISOString()};
   await db.setting.upsert({where: {key: SCAN_KEY}, create: {key: SCAN_KEY, value}, update: {value}});
-  return {...result, records: rows.length};
+  return {...result, records: ids.length, ...(partial ? {partial: true} : {})};
 }
 
 export async function lastScans(db: Db) {
@@ -240,7 +303,7 @@ export async function lastScans(db: Db) {
 
 const SCAN_EVERY_MS = 6 * 60 * 60_000;
 
-/** Called by the `crm-prune` schedule: queues a full scan per entity every 6 hours. */
+/** Called by the `crm-tick` schedule (every minute; one settings read): queues a full scan per entity every 6 hours. */
 export async function scheduleDuplicateScans(db: Db) {
   const scans = await lastScans(db);
   for (const entity of ['contact', 'company'] as const) {
@@ -330,6 +393,21 @@ export async function checkDuplicates(db: Db, entity: DupEntity, id: string) {
     await syncPairs(db, entity, found, {ids: [id]});
   } catch (e) {
     console.error('[duplicates]', entity, id, String((e as Error)?.message ?? e).slice(0, 200));
+  }
+}
+
+/**
+ * Queues the duplicate check of one record after it was created, edited or restored, instead of
+ * running it inside the request (it reads the table for candidates). One job per version of the
+ * record (its `updatedAt` is in the key): repeated calls for the same save queue it once.
+ */
+export async function queueDuplicateCheck(db: Db, entity: DupEntity, id: string): Promise<void> {
+  try {
+    const row = entity === 'contact' ? await db.contact.findUnique({where: {id}, select: {updatedAt: true}}) : await db.company.findUnique({where: {id}, select: {updatedAt: true}});
+    if (!row) return;
+    await enqueue(db, 'duplicates.check', {entity, id}, {key: `dup-check-${id}-${row.updatedAt.getTime()}`});
+  } catch (e) {
+    console.error('[duplicates] queue', entity, String((e as Error)?.message ?? e).slice(0, 200));
   }
 }
 

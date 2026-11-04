@@ -15,6 +15,7 @@ import {SavedViews} from '@/components/saved-views';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {Card} from '@/components/ui/card';
+import {confirm} from '@/components/ui/confirm';
 import {NativeSelect} from '@/components/ui/form';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger} from '@/components/ui/menu';
 import {Avatar, EmptyState, PageHeader} from '@/components/ui/misc';
@@ -70,6 +71,8 @@ function ContactsPage() {
   const addToList = useApiMutation((listId: string) => api.post<{added: number}>(`/lists/${listId}/members`, {contactIds: [...selected]}), {invalidate: listInvalidate, success: (r) => `Added ${r.added} to the list`, onSuccess: () => setSelected(new Set())});
   const newList = useApiMutation((name: string) => api.post('/lists', {name, kind: 'STATIC', contactIds: [...selected]}), {invalidate: listInvalidate, success: 'List created', onSuccess: () => setSelected(new Set())});
   const removeFromList = useApiMutation((listId: string) => api.post<{removed: number}>(`/lists/${listId}/members/remove`, {contactIds: [...selected]}), {invalidate: listInvalidate, success: (r) => `Removed ${r.removed} from the list`, onSuccess: () => setSelected(new Set())});
+
+  const busy = bulk.isPending || addToList.isPending || newList.isPending || removeFromList.isPending;
 
   const columns: Column<Contact>[] = [
     {
@@ -136,7 +139,7 @@ function ContactsPage() {
           active={!!s.q || Object.values(filters).some(Boolean)}
           onClear={() => (setQDraft(''), set({q: undefined, ownerId: undefined, lifecycleStage: undefined, source: undefined, tag: undefined, noActivityDays: undefined, listId: undefined, scoreBand: undefined}))}
         >
-          <form onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
+          <form noValidate onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
             <SearchInput size="sm" value={qDraft} onChange={(v) => (setQDraft(v), !v && set({q: undefined}))} placeholder="Search name, email, company…" />
           </form>
           <NativeSelect size="sm" aria-label="Owner" value={filters.ownerId} onChange={(e) => set({ownerId: e.target.value || undefined})}>
@@ -160,12 +163,18 @@ function ContactsPage() {
             <option value="">Any score</option>
             {bands.map((b) => <option key={b.key} value={b.key}>{b.name}</option>)}
           </NativeSelect>
-          {s.tag && <Badge tone="teal" className="h-7 cursor-pointer" onClick={() => set({tag: undefined})}>tag: {s.tag} ✕</Badge>}
+          {s.tag && (
+            <button type="button" aria-label={`Remove the tag filter ${s.tag}`} onClick={() => set({tag: undefined})} className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
+              <Badge tone="teal" className="h-7">tag: {s.tag} ✕</Badge>
+            </button>
+          )}
         </FilterBar>
         <DataTable
           rows={list.data?.rows}
           columns={columns}
           loading={list.isLoading}
+          error={list.error}
+          onRetry={() => list.refetch()}
           sort={s.sort ?? 'createdAt'}
           dir={s.dir ?? 'desc'}
           onSort={(key) => set({sort: key, dir: s.sort === key && s.dir === 'asc' ? 'desc' : 'asc'})}
@@ -179,31 +188,34 @@ function ContactsPage() {
 
       <BulkBar count={selected.size} onClear={() => setSelected(new Set())}>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white"><UserCheck /> Assign</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={busy}><UserCheck /> Assign</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             {team.data?.map((u) => <DropdownMenuItem key={u.id} onSelect={() => bulk.mutate({action: 'assign', value: u.id})}>{u.name}</DropdownMenuItem>)}
           </DropdownMenuContent>
         </DropdownMenu>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white">Stage</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={busy}>Stage</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             {(Object.keys(LIFECYCLE) as LifecycleStage[]).map((k) => <DropdownMenuItem key={k} onSelect={() => bulk.mutate({action: 'stage', value: k})}>{LIFECYCLE[k].label}</DropdownMenuItem>)}
           </DropdownMenuContent>
         </DropdownMenu>
-        <BulkTagMenu onTag={(value) => bulk.mutate({action: 'tag', value})} />
+        <BulkTagMenu busy={busy} onTag={(value) => bulk.mutate({action: 'tag', value})} />
         <ListMenu
           label={`Add ${selected.size} to a list`}
           onPick={(l) => addToList.mutate(l.id)}
           onCreate={(name) => name && newList.mutate(name)}
-          trigger={<Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" aria-label="Add to list"><ListPlus /> <span className="hidden sm:inline">Add to list</span></Button>}
+          trigger={<Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" aria-label="Add to list" disabled={busy} aria-busy={addToList.isPending || newList.isPending || undefined}><ListPlus /> <span className="hidden sm:inline">Add to list</span></Button>}
         />
         <ListMenu
           label={`Remove ${selected.size} from a list`}
-          onPick={(l) => removeFromList.mutate(l.id)}
-          trigger={<Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" aria-label="Remove from list"><ListMinus /> <span className="hidden sm:inline">Remove from list</span></Button>}
+          onPick={async (l) =>
+            (await confirm({title: `Remove ${selected.size} contact${selected.size === 1 ? '' : 's'} from ${l.name}?`, description: 'The contacts stay in the CRM; only their place on this list goes.', confirmLabel: 'Remove', destructive: true})) &&
+            removeFromList.mutate(l.id)
+          }
+          trigger={<Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" aria-label="Remove from list" disabled={busy} aria-busy={removeFromList.isPending || undefined}><ListMinus /> <span className="hidden sm:inline">Remove from list</span></Button>}
         />
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200"><Trash2 /> Delete</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" disabled={busy} aria-busy={(bulk.isPending && bulk.variables?.action === 'delete') || undefined}><Trash2 /> Delete</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             <DropdownMenuLabel>Delete {selected.size} contacts?</DropdownMenuLabel>
             <DropdownMenuItem destructive onSelect={() => bulk.mutate({action: 'delete'})}>Yes, move to the recycle bin</DropdownMenuItem>
@@ -215,14 +227,14 @@ function ContactsPage() {
 }
 
 /** Tag the selection with an existing tag, or type a new one right in the menu. */
-function BulkTagMenu({onTag}: {onTag: (tag: string) => void}) {
+function BulkTagMenu({onTag, busy}: {onTag: (tag: string) => void; busy?: boolean}) {
   const [draft, setDraft] = useState('');
   const tags = useQuery({queryKey: [...keys.tags, 'CONTACT'], queryFn: () => api.get<{rows: {tag: string}[]}>('/tags', {entity: 'CONTACT'}), select: (d) => d.rows.map((r) => r.tag)});
   const q = draft.trim().toLowerCase();
   const shown = (tags.data ?? []).filter((t) => t.includes(q)).slice(0, 8);
   return (
     <DropdownMenu onOpenChange={(o) => !o && setDraft('')}>
-      <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white"><Tag /> Tag</Button></DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={busy}><Tag /> Tag</Button></DropdownMenuTrigger>
       <DropdownMenuContent align="center" className="w-60">
         <div className="p-1">
           <input
@@ -233,6 +245,7 @@ function BulkTagMenu({onTag}: {onTag: (tag: string) => void}) {
               e.stopPropagation(); // keep typing inside the menu
               if (e.key === 'Enter' && q) onTag(q);
             }}
+            aria-label="Find or create a tag"
             placeholder="Find or create a tag…"
             className="h-9 w-full rounded-lg border border-input bg-card px-2.5 text-sm outline-none focus:border-primary"
           />

@@ -15,7 +15,7 @@ import {emit} from '../lib/events';
 import {notFound, ownerScope, valid} from '../lib/http';
 import {mentionedUsers, notify, notifyMentions} from '../lib/notify';
 import {stripQuoted} from '../lib/ticket-mail';
-import {createTicket, ticketScope} from '../lib/tickets';
+import {createTicket} from '../lib/tickets';
 import {userSelect} from '../lib/users';
 import {sendEmail, usableAccounts} from '../email/service';
 import {
@@ -34,11 +34,14 @@ import {
   unsnoozeConversation,
   type Who,
 } from '../inbox/conversations';
-import {identityLabel, lastChannelMessages, linkChannelContact} from '../inbox/channel-messages';
-import {chatDetail} from '../inbox/chat-agent';
-import {sanitizeEmailHtml} from '../inbox/sanitize';
-import {channelWhere, inboxScope, viewWhere} from '../inbox/scope';
+import {ONLINE_MS} from '@/lib/chat';
+import {filesFor, identityLabel, lastChannelMessages, linkChannelContact} from '../inbox/channel-messages';
+import {agentCameOnline, getChatSettings} from '../inbox/chat';
+import {agentMessage, chatDetail, markSeenByTeam, visitorPresence} from '../inbox/chat-agent';
+import {receivedHtmlReader} from '../inbox/sanitize';
+import {channelWhere, findReadable, inboxScope, viewWhere, withVisibleTickets, type InboxScope} from '../inbox/scope';
 import {getInboxSettings, hasTeamAccess, saveInboxSettings} from '../inbox/settings';
+import {getSettings} from '../lib/settings';
 
 /**
  * Shared inbox (module 10). Every read and write goes through `inboxScope()`,
@@ -89,15 +92,30 @@ const listInclude = {
 /** One conversation the user may read, else 404. */
 export async function loadConversation(c: AppContext, id: string) {
   const scope = await inboxScope(c.var.db, currentUser(c));
-  const thread = await c.var.db.emailThread.findFirst({where: {AND: [{id}, scope.readable]}});
+  const thread = await findReadable(c.var.db, scope, id);
   if (!thread) throw notFound('Conversation');
   return {thread, scope};
 }
 
-/** Can this person read the conversation? (mentions only notify people who can open it) */
-async function canRead(db: AppContext['var']['db'], user: Pick<User, 'id' | 'role'>, threadId: string) {
-  const scope = await inboxScope(db, user);
-  return !!(await db.emailThread.findFirst({where: {AND: [{id: threadId}, scope.readable]}, select: {id: true}}));
+/** The agent "last seen" stamp (who is online for website chat): at most one write a minute per person. */
+export async function stampLastSeen(db: AppContext['var']['db'], me: Pick<User, 'id' | 'lastSeenAt'>) {
+  const last = me.lastSeenAt?.getTime() ?? 0;
+  if (Date.now() - last <= 60_000) return;
+  await db.member.update({where: {id: me.id}, data: {lastSeenAt: new Date()}});
+  if (Date.now() - last >= ONLINE_MS) await agentCameOnline(); // back after being away: visitors see the team as available
+}
+
+/** Email messages the detail sends at once (the newest); older ones come from `/messages?before=`. */
+const DETAIL_MESSAGES = 200;
+
+/**
+ * Of these people, who can read the conversation? (mentions only notify people who can open it)
+ * The inbox settings and shared accounts are read once for all of them, and the checks run side by side.
+ */
+async function readersOf(db: AppContext['var']['db'], users: Pick<User, 'id' | 'role'>[], threadId: string, ctx: InboxScope['ctx']) {
+  const ownerOnly = (await getSettings(db)).recordVisibility === 'owner';
+  const ok = await Promise.all(users.map(async (u) => !!(await findReadable(db, await inboxScope(db, u, ctx, ownerOnly), threadId))));
+  return users.filter((_, i) => ok[i]).map((u) => u.id);
 }
 
 const isPersonal = async (db: AppContext['var']['db'], t: EmailThread) =>
@@ -124,8 +142,8 @@ export const inbox = new Hono<AppEnv>()
     const scope = await inboxScope(db, me);
     const count = (where: Prisma.EmailThreadWhereInput) => db.emailThread.count({where: {AND: [scope.listable, where]}});
     const open = viewWhere('open', me);
-    // Agents with the app open count as online for website chat (the app polls these counts).
-    if (!me.lastSeenAt || Date.now() - me.lastSeenAt.getTime() > 60_000) await db.member.update({where: {id: me.id}, data: {lastSeenAt: new Date()}});
+    // Agents with the app open count as online for website chat (the inbox polls these counts, the shell the badges).
+    await stampLastSeen(db, me);
     const chatWaiting: Prisma.EmailThreadWhereInput = {AND: [open, channelWhere('chat', me, scope.ctx), {unread: true}, {OR: [{assigneeId: me.id}, {assigneeId: null}]}]};
     const [unassigned, mine, all, snoozed, closed, spam, trash, team, personal, form, chat, unread, chatUnread, chatLatest] = await Promise.all([
       count(viewWhere('unassigned', me)),
@@ -203,45 +221,63 @@ export const inbox = new Hono<AppEnv>()
   .get('/conversations/:id', async (c) => {
     const db = c.var.db;
     const me = currentUser(c);
-    const {thread: t, scope} = await loadConversation(c, c.req.param('id'));
-    const [messages, comments, account] = await Promise.all([
-      db.emailMessage.findMany({where: {threadId: t.id}, orderBy: {sentAt: 'asc'}, include: {sender: {select: userSelect}}}),
-      db.conversationComment.findMany({where: {threadId: t.id}, orderBy: {createdAt: 'asc'}, include: {author: {select: userSelect}}}),
-      t.accountId ? db.emailAccount.findUnique({where: {id: t.accountId}, select: {id: true, fromEmail: true, label: true, userId: true, provider: true}}) : null,
-    ]);
-    if (t.unread) await db.emailThread.update({where: {id: t.id}, data: {unread: false}});
+    const now = new Date(); // the client's first `after` for /updates
+    const id = c.req.param('id');
+    const scope = await inboxScope(db, me);
+    // The thread with its assignee and mailbox in one query (joined in the database).
+    const found = await db.emailThread.findFirst({
+      where: {AND: [{id}, scope.readable]},
+      include: {assignee: {select: userSelect}, account: {select: {id: true, fromEmail: true, label: true, userId: true, provider: true}}},
+    });
+    if (!found || !(await withVisibleTickets(db, scope, [found])).length) throw notFound('Conversation');
+    const {assignee, account, ...t} = found;
+    const owner = scope.owner;
 
-    // Sidebar: the contact and what hangs off it, within the viewer's record visibility.
-    const owner = await ownerScope(c);
-    const contact = t.contactId
-      ? await db.contact.findFirst({
-          where: {id: t.contactId, ...owner},
-          select: {id: true, firstName: true, lastName: true, email: true, phone: true, title: true, lifecycleStage: true, score: true, emailOptOut: true, owner: {select: userSelect}, companies: {orderBy: {isPrimary: 'desc'}, take: 1, select: {company: {select: {id: true, name: true, domain: true}}}}},
-        })
-      : null;
-    const companyId = t.companyId ?? contact?.companies[0]?.company.id ?? null;
-    const [company, deal, deals, tickets, activity] = await Promise.all([
-      companyId ? db.company.findFirst({where: {id: companyId, ...owner}, select: {id: true, name: true, domain: true, industry: true}}) : null,
+    // Everything that needs only the thread, side by side.
+    const [newest, comments, contact, deal, inInbox, ticket, chat, usable, html] = await Promise.all([
+      db.emailMessage.findMany({where: {threadId: t.id}, orderBy: [{sentAt: 'desc'}, {id: 'desc'}], take: DETAIL_MESSAGES + 1, include: {sender: {select: userSelect}}}),
+      db.conversationComment.findMany({where: {threadId: t.id}, orderBy: {createdAt: 'asc'}, include: {author: {select: userSelect}}}),
+      // Sidebar: the contact and what hangs off it, within the viewer's record visibility.
+      t.contactId
+        ? db.contact.findFirst({
+            where: {id: t.contactId, ...owner},
+            select: {id: true, firstName: true, lastName: true, email: true, phone: true, title: true, lifecycleStage: true, score: true, emailOptOut: true, owner: {select: userSelect}, companies: {orderBy: {isPrimary: 'desc'}, take: 1, select: {company: {select: {id: true, name: true, domain: true}}}}},
+          })
+        : null,
       t.dealId ? db.deal.findFirst({where: {id: t.dealId, ...owner}, select: {id: true, title: true, value: true, currency: true, status: true, stage: {select: {name: true}}}}) : null,
+      db.emailThread.findFirst({where: {AND: [{id: t.id}, scope.listable]}, select: {id: true}}),
+      t.channel === 'ticket' ? db.ticket.findUnique({where: {emailThreadId: t.id}, select: {id: true, number: true}}) : null,
+      isMessageChannel(t.channel) ? chatDetail(db, t) : null,
+      usableAccounts(db, me),
+      receivedHtmlReader(),
+      t.unread ? db.emailThread.update({where: {id: t.id}, data: {unread: false}}) : null,
+    ]);
+    const olderMessages = newest.length > DETAIL_MESSAGES;
+    const messages = newest.slice(0, DETAIL_MESSAGES).reverse();
+
+    // What hangs off the visible contact.
+    const companyId = t.companyId ?? contact?.companies[0]?.company.id ?? null;
+    const [company, deals, tickets, activity] = await Promise.all([
+      companyId ? db.company.findFirst({where: {id: companyId, ...owner}, select: {id: true, name: true, domain: true, industry: true}}) : null,
       contact ? db.deal.findMany({where: {status: 'OPEN', contacts: {some: {contactId: contact.id}}, ...owner}, orderBy: {updatedAt: 'desc'}, take: 5, select: {id: true, title: true, value: true, currency: true, status: true, stage: {select: {name: true}}}}) : [],
-      contact ? db.ticket.findMany({where: {AND: [await ticketScope(c), {contactId: contact.id}]}, orderBy: {createdAt: 'desc'}, take: 5, select: {id: true, number: true, subject: true, status: true}}) : [],
+      contact ? db.ticket.findMany({where: {AND: [scope.tickets ?? {}, {contactId: contact.id}]}, orderBy: {createdAt: 'desc'}, take: 5, select: {id: true, number: true, subject: true, status: true}}) : [],
       contact ? db.activity.findMany({where: {contactId: contact.id}, orderBy: {createdAt: 'desc'}, take: 6, select: {id: true, type: true, title: true, createdAt: true}}) : [],
     ]);
-    const lastIn = [...messages].reverse().find((m) => m.direction === 'INBOUND');
-    const chat = isMessageChannel(t.channel) ? await chatDetail(db, t) : null;
+    const lastIn = newest.find((m) => m.direction === 'INBOUND');
     const replyTo = lastIn && lastIn.fromEmail.includes('@') ? lastIn.fromEmail : (chat?.visitor?.email ?? contact?.email ?? null);
-    const usable = await usableAccounts(db, me);
     return c.json({
+      now: now.toISOString(),
       conversation: {
         ...t,
-        assignee: t.assigneeId ? await db.member.findUnique({where: {id: t.assigneeId}, select: userSelect}) : null,
+        assignee,
         account,
         personal: !!account?.userId,
-        inInbox: !!(await db.emailThread.findFirst({where: {AND: [{id: t.id}, scope.listable]}, select: {id: true}})),
-        ticket: t.channel === 'ticket' ? await db.ticket.findUnique({where: {emailThreadId: t.id}, select: {id: true, number: true}}) : null,
+        inInbox: !!inInbox,
+        ticket,
       },
-      // Received HTML is sanitised here and shown in a sandboxed frame; our own emails show their text.
-      messages: messages.map((m) => ({...m, html: m.direction === 'INBOUND' && m.html ? sanitizeEmailHtml(m.html) : null})),
+      // Received HTML was cleaned when it arrived (older mail is cleaned here) and shows in an EmailFrame; our own emails show their text.
+      messages: messages.map((m) => ({...m, html: m.direction === 'INBOUND' ? html(m.html) : null})),
+      olderMessages,
       comments,
       replyTo,
       // The conversation's mailbox when the viewer may send from it, else their default one.
@@ -257,6 +293,88 @@ export const inbox = new Hono<AppEnv>()
         sender: chat?.visitor ? {email: chat.visitor.email ?? '', name: chat.visitor.label} : lastIn ? {email: lastIn.fromEmail, name: lastIn.fromName} : null,
         contactHidden: !!t.contactId && !contact,
       },
+    });
+  })
+
+  /** Older email messages of a long conversation ("Load older"), newest first in pages of 200, by (sentAt, id). */
+  .get('/conversations/:id/messages', valid('query', z.object({before: z.iso.datetime({offset: true}), beforeId: z.string().max(60)})), async (c) => {
+    const db = c.var.db;
+    const q = c.req.valid('query');
+    const {thread: t} = await loadConversation(c, c.req.param('id'));
+    const before = new Date(q.before);
+    const [rows, html] = await Promise.all([
+      db.emailMessage.findMany({
+        where: {threadId: t.id, OR: [{sentAt: {lt: before}}, {sentAt: before, id: {lt: q.beforeId}}]},
+        orderBy: [{sentAt: 'desc'}, {id: 'desc'}],
+        take: DETAIL_MESSAGES + 1,
+        include: {sender: {select: userSelect}},
+      }),
+      receivedHtmlReader(),
+    ]);
+    const page = rows.slice(0, DETAIL_MESSAGES).reverse();
+    return c.json({messages: page.map((m) => ({...m, html: m.direction === 'INBOUND' ? html(m.html) : null})), more: rows.length > DETAIL_MESSAGES});
+  })
+
+  /**
+   * What changed in an open conversation since `after`, for the client's poll (every 3 s for a
+   * chat, 20 s for email); the full detail loads only on open, on focus and after a write. New chat
+   * messages and those whose delivery / read changed, new comments and events, typing, the
+   * visitor's presence, and the thread's state (the client reloads the detail when that moved or a
+   * new email arrived). The scope, then ONE query for the thread and all of it (joined in the database).
+   */
+  .get('/conversations/:id/updates', valid('query', z.object({after: z.iso.datetime({offset: true})})), async (c) => {
+    const db = c.var.db;
+    const me = currentUser(c);
+    const now = new Date();
+    // A little overlap: rows carry the database's or the Worker's clock; the client merges by id.
+    const since = new Date(new Date(c.req.valid('query').after).getTime() - 5_000);
+    const [scope, chatSettings] = await Promise.all([inboxScope(db, me), getChatSettings(db)]);
+    const found = await db.emailThread.findFirst({
+      where: {AND: [{id: c.req.param('id')}, scope.readable]},
+      select: {
+        id: true,
+        channel: true,
+        status: true,
+        assigneeId: true,
+        snoozedUntil: true,
+        spamAt: true,
+        trashedAt: true,
+        contactId: true,
+        dealId: true,
+        companyId: true,
+        unread: true,
+        contactTypingAt: true,
+        identity: {select: {lastSeenAt: true}},
+        channelMessages: {
+          where: {OR: [{createdAt: {gt: since}}, {direction: 'OUTBOUND', OR: [{deliveredAt: {gt: since}}, {readAt: {gt: since}}]}]},
+          orderBy: {createdAt: 'asc'},
+          take: 200,
+          include: {sender: {select: userSelect}},
+        },
+        comments: {where: {createdAt: {gt: since}}, orderBy: {createdAt: 'asc'}, take: 200, include: {author: {select: userSelect}}},
+        messages: {orderBy: [{sentAt: 'desc'}, {id: 'desc'}], take: 1, select: {id: true}},
+      },
+    });
+    if (!found || !(await withVisibleTickets(db, scope, [found])).length) throw notFound('Conversation');
+    const {identity, channelMessages, comments, messages, unread, contactTypingAt, ...state} = found;
+    const chat = isMessageChannel(found.channel);
+    // The agent is looking at it: the visitor's new messages count as read, and so does the conversation.
+    const [files] = await Promise.all([
+      chat ? filesFor(db, channelMessages) : new Map(),
+      chat ? markSeenByTeam(db, channelMessages) : null,
+      unread ? db.emailThread.update({where: {id: found.id}, data: {unread: false}}) : null,
+    ]);
+    return c.json({
+      now: now.toISOString(),
+      state: {...state, lastEmailId: messages[0]?.id ?? null},
+      chat: chat
+        ? {
+            messages: channelMessages.map((m) => agentMessage(m, files)),
+            typing: !!contactTypingAt && now.getTime() - contactTypingAt.getTime() < 8000,
+            visitor: identity ? visitorPresence(identity, chatSettings.awayAfterMin, now.getTime()) : null,
+          }
+        : null,
+      comments,
     });
   })
 
@@ -303,13 +421,12 @@ export const inbox = new Hono<AppEnv>()
   .post('/conversations/:id/comments', valid('json', z.object({body: z.string().trim().min(1, 'Write a comment').max(10_000)})), async (c) => {
     const db = c.var.db;
     const me = currentUser(c);
-    const {thread: t} = await loadConversation(c, c.req.param('id'));
+    const {thread: t, scope} = await loadConversation(c, c.req.param('id'));
     const {body} = c.req.valid('json');
     // Mentions only reach people who can open this conversation.
     const named = await mentionedUsers(db, body);
-    const users = named.length ? await db.member.findMany({where: {id: {in: named}}}) : [];
-    const allowed: string[] = [];
-    for (const u of users) if (await canRead(db, u, t.id)) allowed.push(u.id);
+    const users = named.length ? await db.member.findMany({where: {id: {in: named.slice(0, 50)}}, select: {id: true, role: true}}) : [];
+    const allowed = users.length ? await readersOf(db, users, t.id, scope.ctx) : [];
     const comment = await db.conversationComment.create({data: {threadId: t.id, kind: 'comment', body, authorId: me.id, data: {mentions: allowed}}, include: {author: {select: userSelect}}});
     await notifyMentions(db, body, {actorId: me.id, actorName: me.name, where: `on a conversation: ${t.subject}`, link: conversationLink(t.id), only: allowed});
     // On the contact's timeline like other notes, except comments on a personal mailbox (private).
@@ -358,7 +475,7 @@ export const inbox = new Hono<AppEnv>()
     const me = currentUser(c);
     const input = c.req.valid('json');
     const scope = await inboxScope(db, me);
-    const threads = await db.emailThread.findMany({where: {AND: [{id: {in: input.ids}}, scope.readable]}});
+    const threads = await withVisibleTickets(db, scope, await db.emailThread.findMany({where: {AND: [{id: {in: input.ids}}, scope.readable]}}));
     if (!threads.length) throw notFound('Conversation');
     const w = who(c);
     const errors: string[] = [];

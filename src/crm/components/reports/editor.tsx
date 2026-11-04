@@ -2,6 +2,7 @@ import {useNavigate} from '@tanstack/react-router';
 import {Copy, Download, LayoutGrid, MoreHorizontal, Save, Trash2} from 'lucide-react';
 import {useEffect, useMemo, useState} from 'react';
 
+import {LoadError} from '@/components/data-table';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {Card, CardContent, CardDescription, CardHeader, CardTitle} from '@/components/ui/card';
@@ -74,12 +75,22 @@ export function ReportEditor({report}: {report?: SavedReport}) {
     onSuccess: () => navigate({to: '/reports/saved'}),
   });
 
+  if (catalogue.isError) {
+    return (
+      <Card>
+        <h1 className="sr-only">{report?.name ?? 'New report'}</h1>
+        <LoadError error={catalogue.error} onRetry={() => catalogue.refetch()} />
+      </Card>
+    );
+  }
   if (!catalogue.data || !config) return <Skeleton className="h-[480px] rounded-xl" />;
 
   return (
     <div>
       <div className="flex flex-col gap-4 pb-6 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0 flex-1">
+          {/* The screen's heading: the name field below is what people see and edit. */}
+          <h1 className="sr-only">{name.trim() || report?.name || 'New report'}</h1>
           <label className="sr-only" htmlFor="report-name">Report name</label>
           <input
             id="report-name"
@@ -109,14 +120,14 @@ export function ReportEditor({report}: {report?: SavedReport}) {
             </Button>
           )}
           {canEdit && (owner || !report) && (
-            <Button onClick={() => save.mutate(false)} disabled={save.isPending || (!!report && !dirty)}>
+            <Button onClick={() => save.mutate(false)} disabled={!!report && !dirty} pending={save.isPending} pendingLabel="Saving…">
               <Save /> {report ? 'Save' : 'Save report'}
             </Button>
           )}
           {canEdit && report && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="More actions"><MoreHorizontal /></Button>
+                <Button variant="ghost" size="icon" aria-label="More actions" disabled={save.isPending} pending={remove.isPending}><MoreHorizontal /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent>
                 <DropdownMenuItem onSelect={() => save.mutate(true)}><Copy /> Save as a new report</DropdownMenuItem>
@@ -192,7 +203,7 @@ function AddToDashboardDialog({open, onOpenChange, report}: {open: boolean; onOp
     },
   });
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => !add.isPending && onOpenChange(o)}>
       <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>Add to dashboard</DialogTitle>
@@ -219,8 +230,8 @@ function AddToDashboardDialog({open, onOpenChange, report}: {open: boolean; onOp
           )}
         </DialogBody>
         <DialogFooter>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={() => add.mutate(undefined)} disabled={!target || add.isPending}>Add report</Button>
+          <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={add.isPending}>Cancel</Button>
+          <Button onClick={() => add.mutate(undefined)} disabled={!target} pending={add.isPending} pendingLabel="Adding…">Add report</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

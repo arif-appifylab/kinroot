@@ -1,6 +1,6 @@
 import {QueryClientProvider, type QueryClient} from '@tanstack/react-query';
 import {createRootRouteWithContext, Outlet, useRouterState} from '@tanstack/react-router';
-import {useEffect} from 'react';
+import {useEffect, useRef} from 'react';
 import {Toaster} from 'sonner';
 
 import {ConfirmHost} from '@/components/ui/confirm';
@@ -27,6 +27,7 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <DocumentTitle />
+      <RouteFocus />
       <Outlet />
       <ThemedToaster />
       <ConfirmHost />
@@ -53,5 +54,40 @@ function DocumentTitle() {
   useEffect(() => {
     if (title) document.title = title;
   }, [title]);
+  return null;
+}
+
+/**
+ * After a navigation to another screen, focus moves to that screen's `<h1>` so keyboard and
+ * screen-reader users start at the top of the new screen. Waits for the heading to render (data
+ * screens show it once loaded) and never takes focus from something the person moved it to.
+ */
+function RouteFocus() {
+  const path = useRouterState({select: (s) => s.location.pathname});
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    const before = document.activeElement;
+    let tries = 0;
+    let timer = 0;
+    const focusHeading = () => {
+      const now = document.activeElement;
+      // Focus already moved on (a dialog, a field with autoFocus): leave it there.
+      if (now && now !== before && now !== document.body && now.isConnected) return;
+      const heading = document.querySelector<HTMLElement>('main h1') ?? document.querySelector<HTMLElement>('h1');
+      if (!heading) {
+        if (++tries < 20) timer = window.setTimeout(focusHeading, 100);
+        return;
+      }
+      if (!heading.hasAttribute('tabindex')) heading.setAttribute('tabindex', '-1');
+      heading.classList.add('outline-none');
+      heading.focus({preventScroll: true});
+    };
+    timer = window.setTimeout(focusHeading, 0);
+    return () => window.clearTimeout(timer);
+  }, [path]);
   return null;
 }

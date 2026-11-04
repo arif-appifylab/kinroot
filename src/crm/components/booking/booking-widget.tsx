@@ -8,6 +8,7 @@ import {cn} from '@/lib/utils';
 
 import {Button} from '../ui/button';
 import {Field, Input, Textarea} from '../ui/form';
+import {is, useFormState} from '../ui/form-state';
 import {Avatar, IconBadge} from '../ui/misc';
 import {SlotPicker, useVisitorTimeZone} from './slot-picker';
 
@@ -158,6 +159,13 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
   const [booked, setBooked] = useState<{booking: BookedMeeting; token: string} | null>(null);
   const startedAt = useRef(Date.now());
   const qs = link.questions;
+  const f = useFormState(form, {
+    name: [is.required('Enter your name.'), is.maxLength(200)],
+    email: [is.required('Enter your email address.'), is.email(), is.maxLength(200)],
+    phone: [(v) => qs.phone === 'required' && !v.trim() && 'Enter your phone number.', is.maxLength(40)],
+    company: [(v) => qs.company === 'required' && !v.trim() && 'Enter your company.', is.maxLength(200)],
+    notes: [(v) => qs.notes === 'required' && !v.trim() && 'Tell us a little about the meeting.', is.maxLength(5000)],
+  });
 
   async function submit() {
     if (!start || !tz) return;
@@ -178,10 +186,12 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
         hp,
         startedAt: startedAt.current,
       });
+      f.reset();
       setBooked(r);
       setStep('done');
       onBooked?.(r.booking);
     } catch (e) {
+      if (f.fail(e)) return;
       setError((e as Error).message);
       // The slot was taken meanwhile: back to the calendar.
       if (/no longer available/.test((e as Error).message)) {
@@ -216,7 +226,7 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
     <div className={cn('grid grid-cols-1 gap-6 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-8', className)}>
       <LinkHeader link={link} duration={duration} onDuration={(d) => (setDuration(d), setStart(null))} />
       <div className="min-w-0 border-slate-100 lg:border-l lg:pl-8">
-        {error && <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{error}</p>}
+        {error && <p role="alert" className="mb-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{error}</p>}
         {step === 'pick' && (
           !tz ? (
             <div className="flex justify-center py-10 text-slate-400"><Loader2 className="size-5 animate-spin" /></div>
@@ -231,38 +241,38 @@ function Flow({link, onBooked, className}: {link: PublicBookingLink; onBooked?: 
           )
         )}
         {step === 'details' && start && tz && (
-          <form onSubmit={(e) => (e.preventDefault(), submit())} className="grid gap-4">
-            <button type="button" onClick={() => setStep('pick')} className="flex w-fit cursor-pointer items-center gap-1.5 text-sm font-semibold text-primary hover:underline">
+          <form {...f.form(() => void submit())} className="grid gap-4">
+            <button type="button" disabled={busy} onClick={() => setStep('pick')} className="flex w-fit disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer items-center gap-1.5 text-sm font-semibold text-primary hover:underline">
               <ArrowLeft className="size-4" /> Back
             </button>
             <p className="rounded-xl bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground">{whenIn(start, tz)} · {durationLabel(duration)}</p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Your name" htmlFor="bk-name">
-                <Input id="bk-name" required autoComplete="name" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} />
+              <Field label="Your name" htmlFor="bk-name" error={f.error('name')}>
+                <Input id="bk-name" autoComplete="name" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} onBlur={f.blur('name')} />
               </Field>
-              <Field label="Email" htmlFor="bk-email">
-                <Input id="bk-email" type="email" required autoComplete="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} />
+              <Field label="Email" htmlFor="bk-email" error={f.error('email')}>
+                <Input id="bk-email" type="email" autoComplete="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} onBlur={f.blur('email')} />
               </Field>
               {qs.phone !== 'off' && (
-                <Field label={`Phone${qs.phone === 'optional' ? ' (optional)' : ''}`} htmlFor="bk-phone">
-                  <Input id="bk-phone" type="tel" autoComplete="tel" required={qs.phone === 'required'} value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} />
+                <Field label={`Phone${qs.phone === 'optional' ? ' (optional)' : ''}`} htmlFor="bk-phone" error={f.error('phone')}>
+                  <Input id="bk-phone" type="tel" autoComplete="tel" value={form.phone} onChange={(e) => setForm({...form, phone: e.target.value})} onBlur={f.blur('phone')} />
                 </Field>
               )}
               {qs.company !== 'off' && (
-                <Field label={`Company${qs.company === 'optional' ? ' (optional)' : ''}`} htmlFor="bk-company">
-                  <Input id="bk-company" autoComplete="organization" required={qs.company === 'required'} value={form.company} onChange={(e) => setForm({...form, company: e.target.value})} />
+                <Field label={`Company${qs.company === 'optional' ? ' (optional)' : ''}`} htmlFor="bk-company" error={f.error('company')}>
+                  <Input id="bk-company" autoComplete="organization" value={form.company} onChange={(e) => setForm({...form, company: e.target.value})} onBlur={f.blur('company')} />
                 </Field>
               )}
             </div>
             {qs.notes !== 'off' && (
-              <Field label={`Anything we should know?${qs.notes === 'optional' ? ' (optional)' : ''}`} htmlFor="bk-notes">
-                <Textarea id="bk-notes" rows={3} required={qs.notes === 'required'} value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} />
+              <Field label={`Anything we should know?${qs.notes === 'optional' ? ' (optional)' : ''}`} htmlFor="bk-notes" error={f.error('notes')}>
+                <Textarea id="bk-notes" rows={3} value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})} onBlur={f.blur('notes')} />
               </Field>
             )}
             {/* Honeypot: hidden from people, filled by bots. */}
             <input type="text" name="website" tabIndex={-1} autoComplete="off" aria-hidden value={hp} onChange={(e) => setHp(e.target.value)} className="absolute -left-[9999px] h-0 w-0 opacity-0" />
             <div className="flex justify-end">
-              <Button type="submit" disabled={busy}>{busy && <Loader2 className="animate-spin" />} Confirm booking</Button>
+              <Button type="submit" pending={busy} pendingLabel="Booking…">Confirm booking</Button>
             </div>
           </form>
         )}

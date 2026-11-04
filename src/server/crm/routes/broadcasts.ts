@@ -8,7 +8,7 @@ import {publicOrigin} from '../kit/config';
 import {currentUser, isAdmin, type AppContext, type AppEnv} from '../kit/guards';
 import {broadcastStats, cancelBroadcast, emptyStats, MAX_RECIPIENTS, resolveAudience} from '../lib/broadcasts';
 import {notFound, ownerScope, valid} from '../lib/http';
-import {enqueue, kickJobs} from '../lib/jobs';
+import {enqueue} from '../lib/jobs';
 import {userSelect} from '../lib/users';
 import {usableAccounts} from '../email/service';
 
@@ -118,7 +118,6 @@ export const broadcasts = new Hono<AppEnv>()
       include,
     });
     await enqueue(db, 'broadcast.start', {broadcastId: broadcast.id}, {runAt: at});
-    if (at.getTime() <= Date.now()) kickJobs();
     const {html: _h, origin: _o, ...rest} = broadcast;
     return c.json({broadcast: {...rest, stats: emptyStats()}}, 201);
   })

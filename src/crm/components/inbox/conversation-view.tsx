@@ -1,4 +1,4 @@
-import {useQuery} from '@tanstack/react-query';
+import {useQuery, useQueryClient} from '@tanstack/react-query';
 import {Link} from '@tanstack/react-router';
 import {
   AlarmClock,
@@ -22,9 +22,9 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import {useEffect, useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 
-import {api} from '@/lib/api';
+import {api, ApiError} from '@/lib/api';
 import {ago, dateTime, toLocalInput} from '@/lib/format';
 import {keys, useApiMutation, useMe, useTeam} from '@/lib/queries';
 import type {ConversationComment, ConversationDetail, EmailMessage} from '@/lib/types';
@@ -37,6 +37,8 @@ import {Button} from '../ui/button';
 import {confirm} from '../ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '../ui/dialog';
 import {Field, Input} from '../ui/form';
+import {is, useFormState} from '../ui/form-state';
+import {LoadError} from '../data-table';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip} from '../ui/menu';
 import {Avatar, EmptyState, Skeleton} from '../ui/misc';
 import {useChimeOn} from './chat-sound';
@@ -46,6 +48,68 @@ import {ChannelIcon, MessageFrame} from './parts';
 import {ReplyComposer, type ComposerMode} from './reply-composer';
 
 const invalidate = [keys.inbox, keys.timeline, keys.email];
+
+/** The detail as the server sends it: plus its own time (the first `after`) and whether older emails exist. */
+type Detail = ConversationDetail & {now?: string; olderMessages?: boolean};
+type ChatMessage = NonNullable<ConversationDetail['chat']>['messages'][number];
+type Updates = {
+  now: string;
+  state: Record<(typeof STATE_FIELDS)[number], string | null> & {lastEmailId: string | null};
+  chat: {messages: ChatMessage[]; typing: boolean; visitor: {lastSeenAt: string; online: boolean; away: boolean} | null} | null;
+  comments: ConversationComment[];
+};
+/** The thread's state: when one of these moved, the whole detail is loaded again. */
+const STATE_FIELDS = ['status', 'assigneeId', 'snoozedUntil', 'spamAt', 'trashedAt', 'contactId', 'dealId', 'companyId'] as const;
+const NO_MESSAGES: EmailMessage[] = [];
+
+function mergeById<T extends {id: string}>(old: T[], fresh: T[], at: (x: T) => string) {
+  if (!fresh.length) return old;
+  const byId = new Map(old.map((x) => [x.id, x]));
+  for (const x of fresh) byId.set(x.id, x);
+  return [...byId.values()].sort((a, b) => at(a).localeCompare(at(b)));
+}
+
+/**
+ * Keeps an open conversation live without downloading it again and again (AUDIT P2-20): polls
+ * `/updates` since the last answer (every 3 s for a chat, 20 s for email, only while the tab is
+ * visible) and merges new chat messages, delivery / read changes, comments, typing and presence into
+ * the cached detail. When the state moved (assigned, closed, linked…) or a new email arrived, the
+ * full detail is loaded again; it also loads on open, on focus and after a write.
+ */
+function useConversationUpdates(id: string, detail: Detail | undefined) {
+  const qc = useQueryClient();
+  const cursor = useRef<string | null>(null);
+  useEffect(() => {
+    cursor.current = detail?.now ?? null;
+  }, [detail?.now]);
+  useQuery({
+    queryKey: [...keys.inbox, 'conversation', id, 'updates'],
+    enabled: !!detail?.now,
+    refetchInterval: detail?.chat ? 3000 : 20_000,
+    queryFn: async () => {
+      const key = [...keys.inbox, 'conversation', id];
+      const after = cursor.current;
+      if (!after) return null;
+      const u = await api.get<Updates>(`/inbox/conversations/${id}/updates`, {after});
+      cursor.current = u.now;
+      const cur = qc.getQueryData<Detail>(key);
+      if (!cur) return u;
+      const moved = STATE_FIELDS.some((f) => (cur.conversation[f] ?? null) !== (u.state[f] ?? null)) || (cur.messages.at(-1)?.id ?? null) !== u.state.lastEmailId;
+      if (moved) {
+        void qc.invalidateQueries({queryKey: key, exact: true});
+        return u;
+      }
+      qc.setQueryData<Detail>(key, (old) => {
+        if (!old) return old;
+        const chat = old.chat && u.chat
+          ? {...old.chat, typing: u.chat.typing, messages: mergeById(old.chat.messages, u.chat.messages, (m) => m.createdAt), visitor: old.chat.visitor && u.chat.visitor ? {...old.chat.visitor, ...u.chat.visitor} : old.chat.visitor}
+          : old.chat;
+        return {...old, chat, comments: mergeById(old.comments, u.comments, (c) => c.createdAt)};
+      });
+      return u;
+    },
+  });
+}
 
 /** Splits the quoted history off a plain-text reply ("On … wrote:", "> …"). */
 function splitQuoted(text: string): [string, string] {
@@ -108,8 +172,10 @@ function CommentCard({c, threadId}: {c: ConversationComment; threadId: string}) 
             <button
               type="button"
               aria-label="Delete comment"
+              disabled={remove.isPending}
+              aria-busy={remove.isPending || undefined}
               onClick={async () => (await confirm({title: 'Delete this comment?', confirmLabel: 'Delete', destructive: true})) && remove.mutate(undefined)}
-              className="cursor-pointer rounded p-0.5 text-slate-300 opacity-0 group-hover:opacity-100 hover:text-destructive focus-visible:opacity-100"
+              className="cursor-pointer rounded p-0.5 text-slate-300 opacity-0 outline-none group-hover:opacity-100 hover:text-destructive focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed"
             >
               <X className="size-3.5" />
             </button>
@@ -173,16 +239,17 @@ function EventLine({c}: {c: ConversationComment}) {
 
 function SnoozeDrawer({onPick, onClose}: {onPick: (iso: string) => void; onClose: () => void}) {
   const [value, setValue] = useState(toLocalInput(new Date(Date.now() + 24 * 3600_000).toISOString()));
+  const f = useFormState({value}, {value: [is.required('Choose when it comes back.'), (v) => (v && new Date(v).getTime() <= Date.now() ? 'Choose a time in the future.' : null)]});
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent size="sm">
-        <form onSubmit={(e) => (e.preventDefault(), value && (onPick(new Date(value).toISOString()), onClose()))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => (onPick(new Date(value).toISOString()), onClose()))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>Snooze until…</DialogTitle>
             <DialogDescription>It leaves the open views and comes back, unread, at this time.</DialogDescription>
           </DialogHeader>
           <DialogBody>
-            <Field label="Date and time" htmlFor="snooze-at"><Input id="snooze-at" type="datetime-local" required min={toLocalInput(new Date().toISOString())} value={value} onChange={(e) => setValue(e.target.value)} /></Field>
+            <Field label="Date and time" htmlFor="snooze-at" error={f.error('value')}><Input id="snooze-at" type="datetime-local" value={value} onChange={(e) => setValue(e.target.value)} onBlur={f.blur('value')} /></Field>
           </DialogBody>
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
@@ -237,12 +304,31 @@ export function ConversationView({id, onBack, onGone}: {id: string; onBack: () =
   const [assignOpen, setAssignOpen] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
   const [details, setDetails] = useState(false);
-  // An open chat polls quickly (only while the tab is visible); email keeps the inbox rhythm.
+  // The full detail loads on open, on focus and after a write; what changes meanwhile comes from
+  // the light `/updates` poll (useConversationUpdates), quick for a chat, at the inbox rhythm for email.
   const q = useQuery({
     queryKey: [...keys.inbox, 'conversation', id],
-    queryFn: () => api.get<ConversationDetail>(`/inbox/conversations/${id}`),
-    refetchInterval: (query) => (query.state.data?.chat ? 3000 : 20_000),
+    queryFn: () => api.get<Detail>(`/inbox/conversations/${id}`),
   });
+  useConversationUpdates(id, q.data);
+  // "Load older": email messages before the newest 200 the detail brings, kept for this conversation.
+  const [older, setOlder] = useState<{id: string; rows: EmailMessage[]; more: boolean; error: string | null} | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const olderRows = older?.id === id ? older.rows : NO_MESSAGES;
+  const hasOlder = older?.id === id ? older.more : !!q.data?.olderMessages;
+  async function loadOlder() {
+    const first = olderRows[0] ?? q.data?.messages[0];
+    if (!first) return;
+    setLoadingOlder(true);
+    try {
+      const r = await api.get<{messages: EmailMessage[]; more: boolean}>(`/inbox/conversations/${id}/messages`, {before: first.sentAt, beforeId: first.id});
+      setOlder({id, rows: [...r.messages, ...olderRows], more: r.more, error: null});
+    } catch (e) {
+      setOlder({id, rows: olderRows, more: true, error: (e as Error).message || 'Could not load older messages. Try again.'});
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
   const act = useApiMutation((body: {action: string; assigneeId?: string | null; until?: string; block?: 'address' | 'domain' | 'visitor' | null}) => api.post<{binIds?: string[]}>('/inbox/conversations/actions', {ids: [id], ...body}), {invalidate});
   const detail = q.data;
   const t = detail?.conversation;
@@ -253,16 +339,17 @@ export function ConversationView({id, onBack, onGone}: {id: string; onBack: () =
   const items = useMemo(() => {
     if (!detail) return [];
     return [
-      ...(detail.chat ? [] : detail.messages.map((m) => ({at: m.sentAt, key: `m${m.id}`, node: <MessageCard key={`m${m.id}`} m={m} />}))),
+      ...(detail.chat ? [] : [...olderRows, ...detail.messages].map((m) => ({at: m.sentAt, key: `m${m.id}`, node: <MessageCard key={`m${m.id}`} m={m} />}))),
       ...detail.comments.map((c) => ({at: c.createdAt, key: `c${c.id}`, node: c.kind === 'event' ? <EventLine key={`c${c.id}`} c={c} /> : <CommentCard key={`c${c.id}`} c={c} threadId={detail.conversation.id} />})),
     ].sort((a, b) => a.at.localeCompare(b.at));
-  }, [detail]);
+  }, [detail, olderRows]);
 
   const ask = (m: ComposerMode) => (setMode(m), setFocusKey((k) => k + 1));
   const toggleStatus = () => t && canEdit && act.mutate({action: t.status === 'OPEN' ? 'close' : 'reopen'});
   useConversationKeys(t && canEdit && t.channel !== 'ticket' ? {e: toggleStatus, a: () => setAssignOpen(true), r: () => ask('reply'), c: () => ask('comment')} : {});
 
   if (q.isLoading) return <div className="space-y-3 p-5"><Skeleton className="h-10" /><Skeleton className="h-40" /></div>;
+  if (!detail && q.isError && !(q.error instanceof ApiError && q.error.status === 404)) return <LoadError className="h-full" error={q.error} onRetry={() => q.refetch()} />;
   if (!detail || !t) return <EmptyState className="h-full" icon={<Inbox />} title="Conversation not found" description={(q.error as Error | null)?.message ?? 'It may have been deleted, or you no longer have access.'} />;
 
   const users = (team.data ?? []).filter((u) => u.active && (!t.personal || u.id === t.account?.userId));
@@ -328,9 +415,9 @@ export function ConversationView({id, onBack, onGone}: {id: string; onBack: () =
               </DropdownMenuContent>
             </DropdownMenu>
             {t.status === 'OPEN' ? (
-              <Button variant="success" size="sm" onClick={toggleStatus} disabled={act.isPending} aria-label="Close (e)"><CheckCircle2 /> Close</Button>
+              <Button variant="success" size="sm" onClick={toggleStatus} disabled={act.isPending} pending={act.isPending && act.variables?.action === 'close'} pendingLabel="Closing…" aria-label="Close (e)"><CheckCircle2 /> Close</Button>
             ) : (
-              <Button variant="secondary" size="sm" onClick={toggleStatus} disabled={act.isPending} aria-label="Reopen (e)"><RotateCcw /> Reopen</Button>
+              <Button variant="secondary" size="sm" onClick={toggleStatus} disabled={act.isPending} pending={act.isPending && act.variables?.action === 'reopen'} pendingLabel="Reopening…" aria-label="Reopen (e)"><RotateCcw /> Reopen</Button>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -405,6 +492,12 @@ export function ConversationView({id, onBack, onGone}: {id: string; onBack: () =
             <ChatTimeline detail={detail} extra={items} />
           ) : (
             <ol className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto bg-slate-50/50 p-4 scrollbar-thin">
+              {hasOlder && (
+                <li className="flex flex-wrap items-center justify-center gap-2">
+                  <Button type="button" variant="ghost" size="sm" onClick={loadOlder} pending={loadingOlder} pendingLabel="Loading…">Load older messages</Button>
+                  {older?.id === id && older.error && <span role="alert" className="text-xs text-destructive">{older.error}</span>}
+                </li>
+              )}
               {items.map((i) => i.node)}
             </ol>
           )}

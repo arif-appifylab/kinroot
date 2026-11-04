@@ -9,7 +9,6 @@ import {currentUser, isAdmin, requireRole, type AppEnv, type AppContext} from '.
 import {audit} from '../lib/audit';
 import {parseCsv} from '../lib/csv';
 import {addNewOptions, errorCsv, queuePhase} from '../lib/imports';
-import {kickJobs} from '../lib/jobs';
 import {notFound, valid} from '../lib/http';
 import {purgeFiles, readBytes} from '../kit/storage';
 import {checkUpload, completeUpload, startUpload, uploadBody} from '../lib/uploads';
@@ -101,7 +100,6 @@ export const imports = new Hono<AppEnv>()
 
   .get('/:id', async (c) => {
     const imp = await mine(c);
-    if (isActive(imp.status)) kickJobs(); // keeps the batches moving while someone watches
     const phase = ['draft', 'validating', 'ready'].includes(imp.status) ? 'validate' : 'run';
     const [issues, issueCount] = await Promise.all([
       c.var.db.importIssue.findMany({where: {importId: imp.id, phase}, orderBy: [{row: 'asc'}, {level: 'asc'}], take: 200}),

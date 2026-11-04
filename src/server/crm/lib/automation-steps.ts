@@ -34,7 +34,7 @@ import {addToList, isContactInList, removeFromList} from './segments';
 import {assignTicket, changePriority, changeStatus, createTicket} from './tickets';
 import {signPayload} from './webhooks';
 import {memberWithEmail} from './users';
-import {WEBHOOK_SERVICE_NAMES, webhookTarget} from '@/lib/webhook-targets';
+import {WEBHOOK_SERVICE_NAMES, webhookLabel, webhookTarget} from '@/lib/webhook-targets';
 
 const DAY = 86_400_000;
 
@@ -538,7 +538,8 @@ const EXECUTORS: Record<Step['type'], Executor> = {
     const target = webhookTarget(step.url);
     if (!target) throw new StepError(`This webhook URL is not one Kinroot can send to. Use a URL from ${WEBHOOK_SERVICE_NAMES}.`);
     const url = target.url.href;
-    if (ctx.dry) return done(`Would POST the record to ${url} (signed)`);
+    // Summaries name the service, never the URL: run history is read by people who may not see the URL (it works like a password).
+    if (ctx.dry) return done(`Would POST the record to ${webhookLabel(url)} (signed)`);
     const object = ctx.run.object;
     const deliveryId = `${ctx.run.id}:${step.id}`;
     const body = JSON.stringify({
@@ -575,7 +576,7 @@ const EXECUTORS: Record<Step['type'], Executor> = {
       if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) throw new StepError(message);
       throw new Error(message);
     }
-    return done(`Delivered to ${url} (HTTP ${res.status})`, {status: res.status, ms: Date.now() - started, response: text});
+    return done(`Delivered to ${webhookLabel(url)} (HTTP ${res.status})`, {status: res.status, ms: Date.now() - started, response: text});
   },
 
   async wait(ctx, step) {

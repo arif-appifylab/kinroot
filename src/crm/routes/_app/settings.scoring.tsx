@@ -9,6 +9,7 @@ import {useLists} from '@/components/lists/list-picker';
 import {RulesSummary, SegmentBuilder, SegmentPreview} from '@/components/lists/segment-builder';
 import {SingleContactPicker} from '@/components/pickers';
 import {ScoreBadge, useScoringSettings} from '@/components/scoring/score';
+import {LoadError} from '@/components/data-table';
 import {AdminOnly, SettingsSection} from '@/components/settings-section';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
@@ -16,6 +17,7 @@ import {Card} from '@/components/ui/card';
 import {confirm} from '@/components/ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Field, Input, NativeSelect, Switch} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/menu';
 import {EmptyState, IconBadge} from '@/components/ui/misc';
 import {api} from '@/lib/api';
@@ -100,11 +102,12 @@ function Overview() {
       title="Lead scoring"
       description="Score contacts on who they are (property rules) and what they do (behaviour rules). Points add up and can go negative; bands turn the score into Cold, Warm or Hot."
       actions={
-        <Button size="sm" variant="secondary" onClick={() => recalc.mutate(undefined)} disabled={recalc.isPending || running}>
-          {running || recalc.isPending ? <Loader2 className="animate-spin" /> : <RefreshCw />} Recalculate all
+        <Button size="sm" variant="secondary" onClick={() => recalc.mutate(undefined)} pending={recalc.isPending || running} pendingLabel="Recalculating…">
+          <RefreshCw /> Recalculate all
         </Button>
       }
     >
+      {(settings.isError || status.isError) && <LoadError error={settings.error ?? status.error} onRetry={() => (settings.refetch(), status.refetch())} />}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {bands.map((b) => (
           <Link key={b.key} to="/contacts" search={{scoreBand: b.key, sort: 'score', dir: 'desc'}} className="rounded-xl border border-slate-200 p-3 transition-colors hover:border-primary/50">
@@ -139,7 +142,8 @@ function RulesSection() {
         actions={<Button size="sm" onClick={() => setEditing({kind: 'property', rule: null})}><Plus /> Property rule</Button>}
       >
         {rules.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
-        {!rules.isLoading && property.length === 0 && (
+        {rules.isError && <LoadError error={rules.error} onRetry={() => rules.refetch()} />}
+        {!rules.isLoading && !rules.isError && property.length === 0 && (
           <EmptyState icon={<SlidersHorizontal />} title="No property rules yet" description="Reward the people who fit your ideal customer: title, lifecycle, company size or industry, custom fields, deals…" />
         )}
         <div className="grid gap-3">
@@ -152,7 +156,7 @@ function RulesSection() {
         description="Points each time a contact does something, e.g. opens an email (+5), submits a form (+20) or books a meeting (+30). They count from when the rule is created."
         actions={<Button size="sm" onClick={() => setEditing({kind: 'behavior', rule: null})}><Plus /> Behaviour rule</Button>}
       >
-        {!rules.isLoading && behavior.length === 0 && (
+        {!rules.isLoading && !rules.isError && behavior.length === 0 && (
           <EmptyState icon={<Activity />} title="No behaviour rules yet" description="Pick the actions that show buying intent and how many points each one is worth." />
         )}
         <div className="grid gap-3">
@@ -218,9 +222,9 @@ function RuleRow({rule, onEdit}: {rule: ScoreRule; onEdit: () => void}) {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <Switch checked={rule.enabled} onCheckedChange={(v) => toggle.mutate(v)} aria-label={rule.enabled ? 'Turn off' : 'Turn on'} />
+        <Switch checked={rule.enabled} disabled={toggle.isPending || remove.isPending} aria-busy={toggle.isPending || undefined} onCheckedChange={(v) => toggle.mutate(v)} aria-label={`${rule.enabled ? 'Turn off' : 'Turn on'} “${rule.name}”`} />
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild disabled={remove.isPending}><Button variant="ghost" size="icon-sm" pending={remove.isPending} aria-label={remove.isPending ? `Deleting ${rule.name}…` : `Actions for “${rule.name}”`}><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent>
             <DropdownMenuItem onSelect={onEdit}><Pencil /> Edit</DropdownMenuItem>
             <DropdownMenuSeparator />
@@ -266,6 +270,14 @@ function RuleDialog({kind, rule, onClose}: {kind: ScoreRuleKind; rule: ScoreRule
     {invalidate: [rulesKey, statusKey], success: rule ? 'Rule saved' : 'Rule added', onSuccess: onClose},
   );
 
+  const f = useFormState({name, pts, mode, count, days}, {
+    name: [(v) => (kind === 'property' && !v.trim() ? 'Give the rule a name.' : null), is.maxLength(120)],
+    pts: [is.required('Enter the points, like 10 or -5.'), is.number({min: -1000, max: 1000, integer: true, message: 'Use a whole number from -1000 to 1000.'}), (v) => (Number(v) === 0 ? 'Use a number other than 0.' : null)],
+    count: [(v, all) => (all.mode === 'limited' ? is.required('Enter how many times it counts.')(v) || is.number({min: 1, max: 1000, integer: true, message: 'Use a whole number from 1 to 1000.'})(v) : null)],
+    days: [(v, all) => (all.mode === 'limited' ? is.number({min: 1, max: 3650, integer: true, message: 'Use a whole number of days from 1 to 3650, or leave it empty for ever.'})(v) : null)],
+  });
+  const limitError = f.error('count') || f.error('days');
+
   const pickEvent = (type: string) => {
     const next = scoreEventDef(type);
     setEvent(type);
@@ -274,9 +286,9 @@ function RuleDialog({kind, rule, onClose}: {kind: ScoreRuleKind; rule: ScoreRule
   };
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !save.isPending && onClose()}>
       <DialogContent size={kind === 'property' ? 'lg' : 'md'}>
-        <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>{rule ? 'Edit rule' : kind === 'property' ? 'New property rule' : 'New behaviour rule'}</DialogTitle>
             <DialogDescription>
@@ -285,11 +297,11 @@ function RuleDialog({kind, rule, onClose}: {kind: ScoreRuleKind; rule: ScoreRule
           </DialogHeader>
           <DialogBody>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_120px]">
-              <Field label="Name">
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === 'property' ? 'e.g. Decision makers' : def?.label} required={kind === 'property'} maxLength={120} autoFocus />
+              <Field label="Name" error={f.error('name')}>
+                <Input value={name} onChange={(e) => setName(e.target.value)} onBlur={f.blur('name')} placeholder={kind === 'property' ? 'e.g. Decision makers' : def?.label} maxLength={120} autoFocus />
               </Field>
-              <Field label="Points" hint="Negative takes points off">
-                <Input type="number" value={pts} onChange={(e) => setPts(e.target.value)} min={-1000} max={1000} required />
+              <Field label="Points" hint="Negative takes points off" error={f.error('pts')}>
+                <Input type="number" inputMode="numeric" value={pts} onChange={(e) => setPts(e.target.value)} onBlur={f.blur('pts')} />
               </Field>
             </div>
             {kind === 'property' ? (
@@ -321,20 +333,23 @@ function RuleDialog({kind, rule, onClose}: {kind: ScoreRuleKind; rule: ScoreRule
                   </NativeSelect>
                 </Field>
                 {mode === 'limited' && (
-                  <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
-                    Up to
-                    <Input className="h-9 w-20" type="number" min={1} value={count} onChange={(e) => setCount(e.target.value)} aria-label="Times" />
-                    times per
-                    <Input className="h-9 w-20" type="number" min={1} value={days} onChange={(e) => setDays(e.target.value)} aria-label="Days" placeholder="ever" />
-                    days
+                  <div className="grid gap-1.5">
+                    <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+                      Up to
+                      <Input className="h-9 w-20" type="number" inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value)} onBlur={f.blur('count')} aria-label="Times" aria-invalid={f.invalid('count') || undefined} aria-describedby={limitError ? 'score-limit-error' : undefined} />
+                      times per
+                      <Input className="h-9 w-20" type="number" inputMode="numeric" value={days} onChange={(e) => setDays(e.target.value)} onBlur={f.blur('days')} aria-label="Days" placeholder="ever" aria-invalid={f.invalid('days') || undefined} aria-describedby={limitError ? 'score-limit-error' : undefined} />
+                      days
+                    </div>
+                    {limitError && <p id="score-limit-error" role="alert" className="text-xs font-medium text-destructive">{limitError}</p>}
                   </div>
                 )}
               </>
             )}
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending || !pts || Number(pts) === 0}>{save.isPending && <Loader2 className="animate-spin" />} {rule ? 'Save rule' : 'Add rule'}</Button>
+            <Button type="button" variant="secondary" disabled={save.isPending} onClick={onClose}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel={rule ? 'Saving…' : 'Adding…'}>{rule ? 'Save rule' : 'Add rule'}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -369,6 +384,8 @@ function DraftTest({rules, points: pts}: {rules: SegmentRules; points: number}) 
 
 // ─── Bands, decay, notifications ───
 
+const EMPTY_SETTINGS: ScoringSettings = {bands: [], decay: {mode: 'off', days: 30}, notify: 'up'};
+
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30) || 'band';
 
 function BandsSection() {
@@ -380,7 +397,16 @@ function BandsSection() {
     success: (r) => (r.recalculating ? 'Saved, recalculating scores' : 'Saved'),
     onSuccess: (r) => setDraft(r.settings),
   });
+  const f = useFormState(draft ?? EMPTY_SETTINGS, {
+    bands: [
+      (bands) => (bands.some((b) => !b.name.trim()) ? 'Give every band a name.' : null),
+      (bands) => (bands.some((b, i) => i > 0 && (b.min === null || !Number.isInteger(b.min) || Math.abs(b.min) > 100_000)) ? 'Give every band after the first a whole-number starting score.' : null),
+    ],
+    decay: [(d) => (d.mode !== 'off' && (!Number.isInteger(d.days) || d.days < 1 || d.days > 3650) ? 'Use a whole number of days from 1 to 3650.' : null)],
+  });
+  if (settings.isError && !draft) return <SettingsSection title="Bands & decay"><LoadError error={settings.error} onRetry={() => settings.refetch()} /></SettingsSection>;
   if (!draft) return null;
+  const bandsError = f.error('bands');
 
   const setBand = (i: number, patch: Partial<ScoreBand>) => setDraft({...draft, bands: draft.bands.map((b, j) => (j === i ? {...b, ...patch} : b))});
   const addBand = () => {
@@ -391,10 +417,11 @@ function BandsSection() {
   };
 
   return (
+    <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))}>
     <SettingsSection
       title="Bands & decay"
       description="Bands are score ranges. Crossing into another band writes a timeline entry, notifies the contact owner and fires the “Lead score band changed” event for webhooks (and automations later). Lifecycle stages are never changed automatically."
-      actions={<Button size="sm" onClick={() => save.mutate(undefined)} disabled={save.isPending}>{save.isPending && <Loader2 className="animate-spin" />} Save</Button>}
+      actions={<Button type="submit" size="sm" pending={save.isPending} pendingLabel="Saving…">Save</Button>}
     >
       <div className="grid gap-6">
         <div className="grid gap-2">
@@ -405,13 +432,16 @@ function BandsSection() {
                 onChange={(e) => setBand(i, {name: e.target.value, ...(settings.data?.bands.some((x) => x.key === b.key) ? {} : {key: slug(e.target.value)})})}
                 aria-label="Band name"
                 maxLength={30}
+                onBlur={f.blur('bands')}
+                aria-invalid={bandsError && !b.name.trim() ? true : undefined}
+                aria-describedby={bandsError ? 'bands-error' : undefined}
               />
               {i === 0 ? (
                 <span className="px-1 text-xs text-muted-foreground">Everything below the next band</span>
               ) : (
                 <label className="flex items-center gap-2 text-xs text-slate-600">
                   from
-                  <Input type="number" className="h-9" value={b.min ?? ''} onChange={(e) => setBand(i, {min: e.target.value === '' ? null : Math.round(Number(e.target.value))})} aria-label="Minimum score" />
+                  <Input type="number" inputMode="numeric" className="h-9" value={b.min ?? ''} onChange={(e) => setBand(i, {min: e.target.value === '' ? null : Math.round(Number(e.target.value))})} onBlur={f.blur('bands')} aria-label="Minimum score" aria-invalid={bandsError && (b.min === null || !Number.isInteger(b.min)) ? true : undefined} aria-describedby={bandsError ? 'bands-error' : undefined} />
                 </label>
               )}
               <NativeSelect value={b.tone} onChange={(e) => setBand(i, {tone: e.target.value as ScoreBand['tone']})} aria-label="Colour">
@@ -423,11 +453,12 @@ function BandsSection() {
               </div>
             </div>
           ))}
+          {bandsError && <p id="bands-error" role="alert" className="text-xs font-medium text-destructive">{bandsError}</p>}
           {draft.bands.length < 8 && <Button type="button" variant="secondary" size="sm" className="justify-self-start" onClick={addBand}><Plus /> Add band</Button>}
         </div>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Field label="Decay" hint="Applies to behaviour points; property points last as long as the contact matches.">
+          <Field label="Decay" hint="Applies to behaviour points; property points last as long as the contact matches." error={f.error('decay')}>
             <div className="flex flex-wrap items-center gap-2">
               <NativeSelect className="w-auto" value={draft.decay.mode} onChange={(e) => setDraft({...draft, decay: {...draft.decay, mode: e.target.value as ScoringSettings['decay']['mode']}})}>
                 <option value="off">Points never expire</option>
@@ -436,7 +467,7 @@ function BandsSection() {
               </NativeSelect>
               {draft.decay.mode !== 'off' && (
                 <span className="flex items-center gap-2 text-sm text-slate-600">
-                  <Input type="number" className="w-20" min={1} value={draft.decay.days} onChange={(e) => setDraft({...draft, decay: {...draft.decay, days: Math.max(1, Math.round(Number(e.target.value) || 1))}})} aria-label="Days" />
+                  <Input type="number" inputMode="numeric" className="w-20" value={draft.decay.days} onChange={(e) => setDraft({...draft, decay: {...draft.decay, days: Math.max(1, Math.round(Number(e.target.value) || 1))}})} aria-label="Days" />
                   days
                 </span>
               )}
@@ -452,6 +483,7 @@ function BandsSection() {
         </div>
       </div>
     </SettingsSection>
+    </form>
   );
 }
 

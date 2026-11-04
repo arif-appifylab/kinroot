@@ -1,6 +1,6 @@
 import {useInfiniteQuery, useQuery} from '@tanstack/react-query';
 import {Link} from '@tanstack/react-router';
-import {CheckCircle2, ChevronDown, Clock, Copy, ExternalLink, Eye, EyeOff, KeyRound, Loader2, Plus, RefreshCw, ScrollText, Trash2, TriangleAlert} from 'lucide-react';
+import {CheckCircle2, ChevronDown, Clock, Copy, ExternalLink, Eye, EyeOff, KeyRound, Plus, RefreshCw, ScrollText, Trash2, TriangleAlert} from 'lucide-react';
 import {useState, type ReactNode} from 'react';
 import {toast} from 'sonner';
 
@@ -27,7 +27,7 @@ import {ago, dateTime} from '@/lib/format';
 import {keys, useApiMutation} from '@/lib/queries';
 import {cn} from '@/lib/utils';
 
-import {SearchInput} from '../data-table';
+import {LoadError, SearchInput} from '../data-table';
 import {FilterBar, FilterDateRange} from '../filter-bar';
 import {SettingsSection} from '../settings-section';
 import {Badge} from '../ui/badge';
@@ -36,6 +36,7 @@ import {Card} from '../ui/card';
 import {confirm, prompt} from '../ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '../ui/dialog';
 import {Field, Input, NativeSelect} from '../ui/form';
+import {is, useFormState} from '../ui/form-state';
 import {EmptyState, Tabs, TabsContent, TabsList, TabsTrigger} from '../ui/misc';
 import {CodeBlock, copy} from './shared';
 
@@ -53,7 +54,11 @@ export function DataInSettings() {
   if (overview.isLoading || !data) {
     return (
       <SettingsSection title="Data in API">
-        <p className="text-sm text-muted-foreground">{overview.isError ? 'Could not load the Data in settings.' : 'Loading…'}</p>
+        {overview.isError ? (
+          <LoadError error={overview.error} onRetry={() => overview.refetch()} title="The Data in settings could not be loaded" />
+        ) : (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        )}
       </SettingsSection>
     );
   }
@@ -131,7 +136,9 @@ function ConnectCard({overview, onLogs}: {overview: DataInOverview; onLogs: () =
         </span>
         <span>
           {overview.rateLimit} requests per minute per key ·{' '}
-          <button type="button" className="cursor-pointer font-semibold text-primary hover:underline" onClick={changeLimit}>change</button>
+          <button type="button" className="cursor-pointer font-semibold text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50" onClick={changeLimit} disabled={setLimit.isPending} aria-busy={setLimit.isPending || undefined}>
+            {setLimit.isPending ? 'saving…' : 'change'}
+          </button>
         </span>
         <span>{DATA_IN_MAX_BYTES / 1024} KB per request · optional <Mono>Idempotency-Key</Mono> header ({IDEMPOTENCY_HOURS} h)</span>
       </div>
@@ -162,9 +169,9 @@ function SigningSecretCard({overview}: {overview: DataInOverview}) {
               <Button size="sm" variant="ghost" onClick={() => setSecret(null)}><EyeOff /> Hide</Button>
             </>
           ) : (
-            <Button size="sm" variant="secondary" onClick={() => reveal.mutate(undefined)} disabled={reveal.isPending}>{reveal.isPending ? <Loader2 className="animate-spin" /> : <Eye />} Show</Button>
+            <Button size="sm" variant="secondary" onClick={() => reveal.mutate(undefined)} pending={reveal.isPending} pendingLabel="Showing…"><Eye /> Show</Button>
           )}
-          <Button size="sm" variant="ghost" onClick={onRegenerate} disabled={regenerate.isPending}><RefreshCw /> Regenerate</Button>
+          <Button size="sm" variant="ghost" onClick={onRegenerate} pending={regenerate.isPending} pendingLabel="Regenerating…"><RefreshCw /> Regenerate</Button>
         </div>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
@@ -238,7 +245,7 @@ function ApiKeysCard({rows}: {rows: ApiKeyRow[]}) {
                     </p>
                   </div>
                   {!k.revokedAt && (
-                    <Button size="sm" variant="ghost" className="self-start text-rose-600 hover:bg-rose-50 hover:text-rose-700 sm:self-auto" onClick={() => onRevoke(k)}><Trash2 /> Revoke</Button>
+                    <Button size="sm" variant="ghost" className="self-start text-rose-600 hover:bg-rose-50 hover:text-rose-700 sm:self-auto" onClick={() => onRevoke(k)} disabled={revoke.isPending} pending={revoke.isPending && revoke.variables === k.id} pendingLabel="Revoking…"><Trash2 /> Revoke</Button>
                   )}
                 </li>
               );
@@ -255,17 +262,11 @@ function CreateKeyDialog({onClose}: {onClose: () => void}) {
   const [name, setName] = useState('');
   const [plain, setPlain] = useState<string | null>(null);
   const create = useApiMutation((n: string) => api.post<{key: ApiKeyRow; plain: string}>('/data-in/keys', {name: n}), {invalidate: [keys.dataIn], onSuccess: (r) => setPlain(r.plain)});
+  const f = useFormState({name}, {name: [is.required('Name the key after the platform that uses it.'), is.maxLength(80)]});
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !create.isPending && onClose()}>
       <DialogContent size="sm">
-        <form
-          className="flex min-h-0 flex-1 flex-col"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (plain) onClose();
-            else if (name.trim()) create.mutate(name.trim());
-          }}
-        >
+        <form className="flex min-h-0 flex-1 flex-col" {...f.form(() => (plain ? onClose() : create.mutate(name.trim(), {onError: f.fail})))}>
           <DialogHeader>
             <DialogTitle>{plain ? 'Copy your API key' : 'Create API key'}</DialogTitle>
             <DialogDescription>{plain ? 'This is the only time the full key is shown.' : 'Name it after the platform that will use it.'}</DialogDescription>
@@ -283,8 +284,8 @@ function CreateKeyDialog({onClose}: {onClose: () => void}) {
                 </p>
               </>
             ) : (
-              <Field label="Name" htmlFor="api-key-name">
-                <Input id="api-key-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} placeholder="e.g. Website, Billing app" autoFocus />
+              <Field label="Name" htmlFor="api-key-name" error={f.error('name')}>
+                <Input id="api-key-name" value={name} onChange={(e) => setName(e.target.value)} onBlur={f.blur('name')} maxLength={80} placeholder="e.g. Website, Billing app" autoFocus />
               </Field>
             )}
           </DialogBody>
@@ -293,8 +294,8 @@ function CreateKeyDialog({onClose}: {onClose: () => void}) {
               <Button type="submit">Done</Button>
             ) : (
               <>
-                <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-                <Button type="submit" disabled={!name.trim() || create.isPending}>{create.isPending && <Loader2 className="animate-spin" />} Create key</Button>
+                <Button type="button" variant="ghost" onClick={onClose} disabled={create.isPending}>Cancel</Button>
+                <Button type="submit" pending={create.isPending} pendingLabel="Creating…">Create key</Button>
               </>
             )}
           </DialogFooter>
@@ -507,7 +508,8 @@ function DataInLogDialog({initialAction, onClose}: {initialAction: string; onClo
             <FilterDateRange from={f.from} to={f.to} onChange={(r) => setF({...f, ...r})} />
           </FilterBar>
           {list.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
-          {!list.isLoading && rows.length === 0 && <EmptyState icon={<Clock />} title={active ? 'No requests match' : 'No requests yet'} description={active ? 'Try other filters.' : 'Requests show up here as soon as a platform sends one.'} />}
+          {list.isError && !list.data && <LoadError error={list.error} onRetry={() => list.refetch()} title="The logs could not be loaded" />}
+          {!list.isLoading && !list.isError && rows.length === 0 && <EmptyState icon={<Clock />} title={active ? 'No requests match' : 'No requests yet'} description={active ? 'Try other filters.' : 'Requests show up here as soon as a platform sends one.'} />}
           <ul className="divide-y divide-slate-100">
             {rows.map((r) => {
               const ok = r.status < 400;
@@ -535,7 +537,7 @@ function DataInLogDialog({initialAction, onClose}: {initialAction: string; onClo
           </ul>
           {list.hasNextPage && (
             <div className="mt-3 flex justify-center">
-              <Button size="sm" variant="secondary" onClick={() => list.fetchNextPage()} disabled={list.isFetchingNextPage}>{list.isFetchingNextPage && <Loader2 className="animate-spin" />} Load more</Button>
+              <Button size="sm" variant="secondary" onClick={() => list.fetchNextPage()} pending={list.isFetchingNextPage} pendingLabel="Loading…">Load more</Button>
             </div>
           )}
         </DialogBody>

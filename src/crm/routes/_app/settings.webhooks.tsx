@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/react-query';
 import {createFileRoute} from '@tanstack/react-router';
-import {ArrowDownToLine, ArrowUpFromLine, CheckCircle2, ChevronDown, ChevronRight, Clock, Copy, Eye, FlaskConical, Info, KeyRound, Loader2, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Send, ShieldCheck, Trash2, TriangleAlert, Webhook as WebhookIcon} from 'lucide-react';
-import {useId, useMemo, useRef, useState} from 'react';
+import {ArrowDownToLine, ArrowUpFromLine, CheckCircle2, ChevronDown, ChevronRight, Clock, Copy, Eye, FlaskConical, Info, KeyRound, MoreHorizontal, Pencil, Plus, RefreshCw, Search, Send, ShieldCheck, Trash2, TriangleAlert, Webhook as WebhookIcon} from 'lucide-react';
+import {useId, useMemo, useState} from 'react';
 import {toast} from 'sonner';
 import {z} from 'zod';
 
@@ -12,6 +12,8 @@ import {Card} from '@/components/ui/card';
 import {confirm} from '@/components/ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Checkbox, Field, Input, NativeSelect, Switch} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
+import {LoadError} from '@/components/data-table';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/menu';
 import {EmptyState, IconBadge, Tabs, TabsList, TabsTrigger} from '@/components/ui/misc';
 import {DataInSettings} from '@/components/webhooks/data-in';
@@ -95,7 +97,8 @@ function OutgoingWebhooks() {
         actions={<Button size="sm" onClick={() => setEditing('new')}><Plus /> Add webhook</Button>}
       >
         {list.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
-        {!list.isLoading && rows.length === 0 && (
+        {list.isError && <LoadError error={list.error} onRetry={() => list.refetch()} title="The webhooks could not be loaded" />}
+        {!list.isLoading && !list.isError && rows.length === 0 && (
           <EmptyState
             icon={<WebhookIcon />}
             title="No webhooks yet"
@@ -169,13 +172,13 @@ function WebhookRow({hook: w, onEdit, onDeliveries, onSecret}: {hook: Webhook; o
         </div>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <Switch checked={w.active} onCheckedChange={(v) => toggle.mutate(v)} aria-label={w.active ? 'Turn off' : 'Turn on'} />
-        <Button variant="secondary" size="sm" onClick={() => test.mutate(firstEvent(w))} disabled={!w.active || test.isPending} title={`Send a signed example of ${firstEvent(w)}`}>
-          {test.isPending ? <Loader2 className="animate-spin" /> : <Send />} Test
+        <Switch checked={w.active} onCheckedChange={(v) => toggle.mutate(v)} disabled={toggle.isPending} aria-busy={toggle.isPending || undefined} aria-label={w.active ? 'Turn off' : 'Turn on'} />
+        <Button variant="secondary" size="sm" onClick={() => test.mutate(firstEvent(w))} disabled={!w.active} pending={test.isPending} pendingLabel="Sending…" title={`Send a signed example of ${firstEvent(w)}`}>
+          <Send /> Test
         </Button>
         <Button variant="secondary" size="sm" onClick={onDeliveries}><Clock /> Log</Button>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="More" pending={remove.isPending || rotate.isPending || reveal.isPending}><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent>
             <DropdownMenuItem onSelect={onEdit}><Pencil /> Edit and preview payload</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => reveal.mutate(undefined)}><Eye /> Show signing secret</DropdownMenuItem>
@@ -194,9 +197,6 @@ function WebhookRow({hook: w, onEdit, onDeliveries, onSecret}: {hook: Webhook; o
 function WebhookDialog({hook, onClose, onCreated, onDeliveries}: {hook: Webhook | null; onClose: () => void; onCreated: (secret: string) => void; onDeliveries: (w: Webhook) => void}) {
   const ids = useId();
   const [url, setUrl] = useState(hook?.url ?? '');
-  const [urlTouched, setUrlTouched] = useState(false);
-  const urlError = !url.trim() ? 'Enter the webhook URL' : webhookTarget(url) ? null : `Use a webhook URL from ${WEBHOOK_SERVICE_NAMES}`;
-  const urlRef = useRef<HTMLInputElement>(null);
   const [description, setDescription] = useState(hook?.description ?? '');
   const [all, setAll] = useState(hook ? hook.events.includes('*') : false);
   const [events, setEvents] = useState<string[]>(hook && !hook.events.includes('*') ? hook.events : []);
@@ -214,21 +214,17 @@ function WebhookDialog({hook, onClose, onCreated, onDeliveries}: {hook: Webhook 
     },
   );
   // Order follows the catalogue, so "first selected" is stable whatever order they were ticked in.
+  const f = useFormState({url, description}, {
+    url: [is.required('Enter the webhook URL.'), is.maxLength(2000), (v) => (webhookTarget(v) ? null : `Use a webhook URL from ${WEBHOOK_SERVICE_NAMES}.`)],
+    description: [is.maxLength(200)],
+  });
   const ordered = EVENT_TYPES.filter((t) => events.includes(t));
   const previewType = hovered ?? (picked && (all || !events.length || events.includes(picked)) ? picked : null) ?? ordered[0] ?? 'contact.created';
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !save.isPending && onClose()}>
       <DialogContent size="xl">
-        <form
-          noValidate
-          onSubmit={(e) => {
-            e.preventDefault();
-            setUrlTouched(true);
-            if (urlError) return urlRef.current?.focus();
-            save.mutate(undefined);
-          }}
-          className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>{hook ? 'Edit webhook' : 'Add webhook'}</DialogTitle>
             <DialogDescription>We POST a signed JSON payload to this URL whenever one of the chosen events happens.</DialogDescription>
@@ -236,21 +232,19 @@ function WebhookDialog({hook, onClose, onCreated, onDeliveries}: {hook: Webhook 
           <DialogBody>
             <div className="grid grid-cols-1 gap-6 @4xl:grid-cols-[minmax(0,1fr)_400px]">
               <div className="grid min-w-0 content-start gap-5">
-                <Field label="Endpoint URL" htmlFor={`${ids}-url`} error={urlTouched ? urlError : null} hint={`Webhooks go to ${WEBHOOK_SERVICE_NAMES}.`}>
+                <Field label="Endpoint URL" htmlFor={`${ids}-url`} error={f.error('url')} hint={`Webhooks go to ${WEBHOOK_SERVICE_NAMES}.`}>
                   <Input
-                    ref={urlRef}
                     id={`${ids}-url`}
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    onBlur={() => setUrlTouched(true)}
+                    onBlur={f.blur('url')}
                     placeholder="https://hooks.zapier.com/hooks/catch/…"
                     type="url"
-                    aria-invalid={urlTouched && !!urlError}
                     autoFocus
                   />
                 </Field>
-                <Field label="Description" htmlFor={`${ids}-desc`} hint="Optional, e.g. “Zapier: post won deals to Slack”">
-                  <Input id={`${ids}-desc`} value={description} onChange={(e) => setDescription(e.target.value)} maxLength={200} />
+                <Field label="Description" htmlFor={`${ids}-desc`} hint="Optional, e.g. “Zapier: post won deals to Slack”" error={f.error('description')}>
+                  <Input id={`${ids}-desc`} value={description} onChange={(e) => setDescription(e.target.value)} onBlur={f.blur('description')} maxLength={200} />
                 </Field>
 
                 <section aria-labelledby={`${ids}-events`} className="grid gap-3">
@@ -277,9 +271,9 @@ function WebhookDialog({hook, onClose, onCreated, onDeliveries}: {hook: Webhook 
             </div>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending || (!all && !events.length)}>
-              {save.isPending && <Loader2 className="animate-spin" />} {hook ? 'Save' : 'Add webhook'}
+            <Button type="button" variant="secondary" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+            <Button type="submit" disabled={!all && !events.length} pending={save.isPending} pendingLabel={hook ? 'Saving…' : 'Adding…'}>
+              {hook ? 'Save' : 'Add webhook'}
             </Button>
           </DialogFooter>
         </form>
@@ -416,8 +410,8 @@ function PayloadPreview({type, hovering, onPick, hook, urlChanged, onDeliveries}
       </div>
 
       <div className="grid gap-1.5 border-t border-slate-200 pt-3">
-        <Button type="button" variant="secondary" size="sm" className="justify-self-start" onClick={() => test.mutate(type)} disabled={!!testBlocked || test.isPending}>
-          {test.isPending ? <Loader2 className="animate-spin" /> : <Send />} Send test event
+        <Button type="button" variant="secondary" size="sm" className="justify-self-start" onClick={() => test.mutate(type)} disabled={!!testBlocked} pending={test.isPending} pendingLabel="Sending…">
+          <Send /> Send test event
         </Button>
         {testBlocked ? (
           <p className="text-xs text-muted-foreground">{testBlocked}</p>
@@ -482,7 +476,8 @@ function DeliveriesDialog({hook, onClose}: {hook: Webhook; onClose: () => void})
         </DialogHeader>
         <DialogBody>
           {list.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
-          {!list.isLoading && rows.length === 0 && <EmptyState icon={<Clock />} title="No deliveries yet" description="Send a test, or wait for one of the subscribed events." />}
+          {list.isError && !list.data && <LoadError error={list.error} onRetry={() => list.refetch()} title="The delivery log could not be loaded" />}
+          {!list.isLoading && !list.isError && rows.length === 0 && <EmptyState icon={<Clock />} title="No deliveries yet" description="Send a test, or wait for one of the subscribed events." />}
           <ul className="divide-y divide-slate-100">
             {rows.map((d) => (
               <li key={d.id}>
@@ -505,7 +500,7 @@ function DeliveriesDialog({hook, onClose}: {hook: Webhook; onClose: () => void})
                       <span>Attempts: {d.attempts}</span>
                       {d.deliveredAt && <span>Delivered {dateTime(d.deliveredAt)}</span>}
                       {d.error && <span className="font-semibold text-rose-600">{d.error}</span>}
-                      <Button size="sm" variant="secondary" className="ml-auto h-7" onClick={() => redeliver.mutate(d.id)} disabled={redeliver.isPending}><RefreshCw /> Redeliver</Button>
+                      <Button size="sm" variant="secondary" className="ml-auto h-7" onClick={() => redeliver.mutate(d.id)} disabled={redeliver.isPending} pending={redeliver.isPending && redeliver.variables === d.id} pendingLabel="Queuing…"><RefreshCw /> Redeliver</Button>
                     </div>
                     <div className="grid grid-cols-1 gap-3 @2xl:grid-cols-2">
                       <div className="min-w-0">
@@ -561,6 +556,19 @@ function JobsCard({jobs}: {jobs: JobsStatus}) {
         <Stat label="Waiting" value={count(jobs.pending)} hint="Queued or retrying" />
         <Stat label="Failed (7 days)" value={count(jobs.failed)} tone={jobs.failed ? 'rose' : undefined} hint="Deliveries that gave up after all retries" />
       </div>
+      {jobs.failedJobs > 0 && (
+        <p className="mt-4 flex items-start gap-2 text-xs text-rose-700">
+          <TriangleAlert className="mt-px size-3.5 shrink-0" />
+          {count(jobs.failedJobs)} background job{jobs.failedJobs === 1 ? ' was' : 's were'} refused for good by the platform and set aside (kept 30 days). Check the Jobs tab of this app in your dashboard.
+        </p>
+      )}
+      {jobs.note && (
+        <p className="mt-4 flex items-start gap-2 text-xs text-amber-700">
+          <Info className="mt-px size-3.5 shrink-0" />
+          {jobs.note}
+        </p>
+      )}
+      <JobsRate perMinute={jobs.perMinute} />
       {!running && (
         <p className={cn('mt-4 flex items-start gap-2 text-xs', jobs.devTicker ? 'text-muted-foreground' : 'text-amber-700')}>
           {jobs.devTicker ? <Info className="mt-px size-3.5 shrink-0" /> : <TriangleAlert className="mt-px size-3.5 shrink-0" />}
@@ -573,6 +581,24 @@ function JobsCard({jobs}: {jobs: JobsStatus}) {
         The site's background jobs retry failed webhook deliveries, send scheduled and waiting work (broadcasts, report emails, reminders) and sync connected mailboxes, every minute. Nothing to set up; their history is in the Jobs tab of this app in your dashboard.
       </p>
     </SettingsSection>
+  );
+}
+
+/** The site's job rate: the same number the owner set in the dashboard's Jobs tab (10 by default, up to 50). */
+function JobsRate({perMinute}: {perMinute: number}) {
+  const ids = useId();
+  const [value, setValue] = useState(String(perMinute));
+  const f = useFormState({perMinute: value}, {perMinute: [is.required('Enter how many new jobs a minute this site may send.'), is.number({min: 1, max: 1000, integer: true})]});
+  const save = useApiMutation(() => api.put<{perMinute: number}>('/webhooks/jobs-rate', {perMinute: Number(value)}), {invalidate: [keys.webhooks], success: 'Job rate saved'});
+  return (
+    <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="mt-4 flex flex-wrap items-end gap-3">
+      <Field label="New jobs a minute" htmlFor={`${ids}-rate`} error={f.error('perMinute')} hint="Match the limit in the Jobs tab of your dashboard (10 unless you raised it).">
+        <Input id={`${ids}-rate`} value={value} onChange={(e) => setValue(e.target.value.replace(/[^0-9]/g, ''))} onBlur={f.blur('perMinute')} inputMode="numeric" className="w-28" />
+      </Field>
+      <Button type="submit" variant="secondary" size="sm" pending={save.isPending} pendingLabel="Saving…" disabled={value === String(perMinute)}>
+        Save
+      </Button>
+    </form>
   );
 }
 

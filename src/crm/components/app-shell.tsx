@@ -1,12 +1,13 @@
 import {useQuery, useQueryClient} from '@tanstack/react-query';
 import {Link, useNavigate, useRouterState} from '@tanstack/react-router';
 import {BarChart3, Building2, CalendarDays, CheckSquare, ChevronDown, ClipboardList, Handshake, Inbox, LayoutDashboard, LifeBuoy, ListChecks, LogOut, Menu, Plus, Search, Settings, User, UserCog, Workflow, X} from 'lucide-react';
-import {useEffect, useState, type ReactNode} from 'react';
+import {Dialog as DialogPrimitive} from 'radix-ui';
+import {useEffect, useRef, useState, type ReactNode} from 'react';
 import {toast} from 'sonner';
 
 import {api} from '@/lib/api';
-import {keys, useMe} from '@/lib/queries';
-import type {InboxCounts, Task, TicketCounts} from '@/lib/types';
+import {badgesQuery, badgeText, keys, useMe} from '@/lib/queries';
+import type {Task} from '@/lib/types';
 import {useBrand} from '@/lib/use-brand';
 import {cn} from '@/lib/utils';
 import {logout} from '../../platform/browser';
@@ -36,11 +37,19 @@ const NAV = [
 ] as const;
 
 function useBadges() {
-  const tasks = useQuery({queryKey: [...keys.tasks, 'counts'], queryFn: () => api.get<{overdue: number; open: number}>('/tasks/counts'), refetchInterval: 60_000});
-  // Unread conversations waiting on me or on the team queue (shared inbox counts, same privacy rules).
-  const inbox = useQuery({queryKey: [...keys.inbox, 'counts'], queryFn: () => api.get<InboxCounts>('/inbox/counts'), refetchInterval: 60_000});
-  const tickets = useQuery({queryKey: [...keys.tickets, 'counts'], queryFn: () => api.get<TicketCounts>('/tickets/counts'), refetchInterval: 60_000});
-  return {tasks: tasks.data?.overdue ?? 0, inbox: inbox.data?.unread ?? 0, tickets: tickets.data?.mine ?? 0};
+  // One capped request for every number (GET /badges); the full inbox / ticket counts load on their own screens.
+  const qc = useQueryClient();
+  const q = useQuery(badgesQuery);
+  // A successful write (read a conversation, finish a task…) refreshes the numbers right away.
+  useEffect(
+    () =>
+      qc.getMutationCache().subscribe((e) => {
+        if (e.type === 'updated' && e.action.type === 'success') void qc.invalidateQueries({queryKey: keys.badges});
+      }),
+    [qc],
+  );
+  // Unread conversations waiting on me or on the team queue (same privacy rules as the inbox).
+  return {tasks: q.data?.tasks ?? 0, inbox: q.data?.inbox ?? 0, tickets: q.data?.tickets ?? 0, reminders: q.data?.reminders ?? 0};
 }
 
 function Sidebar({onNavigate}: {onNavigate?: () => void}) {
@@ -77,7 +86,7 @@ function Sidebar({onNavigate}: {onNavigate?: () => void}) {
               {item.label}
               {count > 0 && (
                 <span className={cn('ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-bold', badge === 'tasks' ? 'bg-rose-500 text-white' : 'bg-blue-500 text-white')}>
-                  {count}
+                  {badgeText(count)}
                 </span>
               )}
             </Link>
@@ -180,11 +189,13 @@ function TopBar({onMenu, onSearch}: {onMenu: () => void; onSearch: () => void}) 
 function Reminders() {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  // Fetched only when the badges say some are due (no request a minute per tab for nothing).
+  const waiting = useQuery({...badgesQuery, select: (b) => b.reminders}).data ?? 0;
   const due = useQuery({
     queryKey: [...keys.tasks, 'reminders'],
     queryFn: () => api.get<{rows: Task[]}>('/tasks/reminders'),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: true,
+    enabled: waiting > 0,
+    refetchInterval: waiting > 0 ? 60_000 : false,
   });
   useEffect(() => {
     for (const t of due.data?.rows ?? []) {
@@ -196,13 +207,14 @@ function Reminders() {
           : () => navigate({to: '/tasks'});
       toast(`⏰ ${t.title}`, {description: t.dueAt ? `Due ${new Date(t.dueAt).toLocaleString('en-US', {dateStyle: 'medium', timeStyle: 'short'})}` : undefined, duration: 20_000, action: {label: 'Open', onClick: target}});
     }
-    if (due.data?.rows.length) qc.invalidateQueries({queryKey: [...keys.tasks, 'counts']});
+    if (due.data?.rows.length) qc.invalidateQueries({queryKey: keys.badges});
   }, [due.data, navigate, qc]);
   return null;
 }
 
 function Shell({children}: {children: ReactNode}) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const navigatedRef = useRef(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
@@ -221,17 +233,24 @@ function Shell({children}: {children: ReactNode}) {
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 lg:block">
         <Sidebar />
       </aside>
-      {mobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <div className="absolute inset-0 bg-black/50 animate-in fade-in-0" onClick={() => setMobileOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 w-72 animate-in slide-in-from-left">
-            <Sidebar onNavigate={() => setMobileOpen(false)} />
-            <button onClick={() => setMobileOpen(false)} className="absolute top-4 right-3 cursor-pointer rounded-md p-1.5 text-slate-400 hover:text-white" aria-label="Close menu">
+      {/* The phone menu is a real dialog: focus moves in and stays there, Esc and the scrim close it. */}
+      <DialogPrimitive.Root open={mobileOpen} onOpenChange={setMobileOpen}>
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 animate-in fade-in-0 lg:hidden" />
+          <DialogPrimitive.Content
+            aria-describedby={undefined}
+            // After following a link, focus goes to the new screen's heading, not back to the menu button.
+            onCloseAutoFocus={(e) => navigatedRef.current && (e.preventDefault(), (navigatedRef.current = false))}
+            className="fixed inset-y-0 left-0 z-50 w-72 outline-none animate-in slide-in-from-left lg:hidden"
+          >
+            <DialogPrimitive.Title className="sr-only">Menu</DialogPrimitive.Title>
+            <Sidebar onNavigate={() => ((navigatedRef.current = true), setMobileOpen(false))} />
+            <DialogPrimitive.Close className="absolute top-4 right-3 cursor-pointer rounded-md p-1.5 text-slate-400 outline-none hover:text-white focus-visible:ring-2 focus-visible:ring-white/40" aria-label="Close menu">
               <X className="size-5" />
-            </button>
-          </aside>
-        </div>
-      )}
+            </DialogPrimitive.Close>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
       <TopBar onMenu={() => setMobileOpen(true)} onSearch={() => setPaletteOpen(true)} />
       <main className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:py-8">{children}</main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />

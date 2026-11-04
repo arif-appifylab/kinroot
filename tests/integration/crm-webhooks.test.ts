@@ -36,7 +36,7 @@ describe.skipIf(!DATABASE_URL)('Kinroot webhooks (integration, real Postgres)', 
   it('saves outgoing webhooks only for the listed services, and keeps the hook path out of the audit log', async () => {
     const browser = await admin();
     const refused = await browser.post('/site-api/crm/webhooks', {url: 'https://example.com/hooks/crm', events: ['contact.created']});
-    expect(refused.status).toBe(400);
+    expect(refused.status).toBe(422);
     expect(JSON.stringify(refused.json)).toMatch(/Zapier/);
 
     const saved = await browser.post('/site-api/crm/webhooks', {url: 'https://hooks.zapier.com/hooks/catch/123/s3cr3tpath/', events: ['contact.created']});
@@ -82,7 +82,7 @@ describe.skipIf(!DATABASE_URL)('Kinroot webhooks (integration, real Postgres)', 
     }
 
     // Only INCOMING_ names: never another service's key.
-    expect((await browser.request('PATCH', `/site-api/crm/incoming-webhooks/${hook.id}`, {secretName: 'RESEND_API_KEY'})).status).toBe(400);
+    expect((await browser.request('PATCH', `/site-api/crm/incoming-webhooks/${hook.id}`, {secretName: 'RESEND_API_KEY'})).status).toBe(422);
   });
 
   it('refuses a request to a webhook saved without a sender check', async () => {

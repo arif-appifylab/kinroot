@@ -3,6 +3,7 @@ import {CheckCircle2, Download, Loader2, Mail, XCircle} from 'lucide-react';
 import {useEffect, useMemo, useState} from 'react';
 import {toast} from 'sonner';
 
+import {LoadError} from '@/components/data-table';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
@@ -94,11 +95,13 @@ export function ExportDrawer({entity, open, onOpenChange, filters, listId, scope
         <DialogHeader>
           <DialogTitle>Export {noun.many}</DialogTitle>
           <DialogDescription>
-            {count.isLoading ? 'Counting…' : `${(count.data ?? 0).toLocaleString()} ${noun.many}`} · {scopeLabel}
+            {count.isLoading ? 'Counting…' : count.isError ? 'Could not count the rows' : `${(count.data ?? 0).toLocaleString()} ${noun.many}`} · {scopeLabel}
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
-          {exp ? (
+          {running && job.isError && !exp ? (
+            <LoadError error={job.error} onRetry={() => job.refetch()} title="The export's progress could not be loaded" />
+          ) : exp ? (
             <div className="grid gap-2 rounded-xl bg-slate-50 p-4">
               <p className="flex items-center gap-2 text-sm font-semibold text-slate-800">
                 {ACTIVE_EXPORT.has(exp.status) ? <Loader2 className="size-4 animate-spin text-primary" /> : exp.status === 'done' ? <CheckCircle2 className="size-4 text-emerald-600" /> : <XCircle className="size-4 text-rose-600" />}
@@ -175,9 +178,9 @@ export function ExportDrawer({entity, open, onOpenChange, filters, listId, scope
             </>
           ) : (
             <>
-              <Button variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button>
-              <Button onClick={run} disabled={busy || !order.length || count.data === 0}>
-                {busy ? <Loader2 className="animate-spin" /> : <Download />} {big ? 'Export in the background' : 'Export CSV'}
+              <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
+              <Button onClick={run} disabled={!order.length || count.data === 0} pending={busy} pendingLabel="Exporting…">
+                <Download /> {big ? 'Export in the background' : 'Export CSV'}
               </Button>
             </>
           )}

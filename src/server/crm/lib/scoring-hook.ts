@@ -5,13 +5,13 @@
  * write never waits for it and a failure retries with backoff.
  */
 import type {Db} from '../kit/db';
-import {enqueue, kickJobs} from './jobs';
+import {enqueue} from './jobs';
 
 /**
  * Events that can change whether a contact matches a property rule. With any
  * property rule switched on, the contacts behind these are re-evaluated right
  * away; everything else (time passing, bulk edits without events) is caught by
- * the periodic recompute in /jobs/run.
+ * the periodic recompute in the `crm-tick` schedule.
  */
 export const RESCORE_EVENTS = new Set<string>([
   'contact.created',
@@ -57,7 +57,7 @@ async function load(db: Db): Promise<Interest> {
   return interest;
 }
 
-/** Queues scoring for the events any enabled rule cares about. Returns true when a job was queued (the caller kicks the runner). */
+/** Queues scoring for the events any enabled rule cares about. Returns true when a job was queued. */
 export async function queueScoring(db: Db, events: {id: string; type: string}[]) {
   if (!events.length) return false;
   const i = await load(db);
@@ -74,7 +74,6 @@ export async function queueRescore(db: Db, contactIds: string[]) {
     const ids = [...new Set(contactIds)];
     if (!ids.length || !(await load(db)).property) return;
     for (let k = 0; k < ids.length; k += 200) await enqueue(db, 'scoring.rescore', {contactIds: ids.slice(k, k + 200)});
-    kickJobs();
   } catch (e) {
     console.error('[scoring]', String((e as Error)?.message ?? e).slice(0, 200));
   }

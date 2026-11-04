@@ -1,11 +1,12 @@
 import {useQuery} from '@tanstack/react-query';
 import {createFileRoute, Link, useNavigate} from '@tanstack/react-router';
 import {format, isToday, isTomorrow} from 'date-fns';
-import {CalendarCheck2, CalendarClock, CalendarDays, CalendarX2, Code2, Copy, ExternalLink, Link2, Loader2, MoreHorizontal, Pencil, Plus, Trash2, Users, Video} from 'lucide-react';
+import {CalendarCheck2, CalendarClock, CalendarDays, CalendarX2, Code2, Copy, ExternalLink, Link2, MoreHorizontal, Pencil, Plus, Trash2, Users, Video} from 'lucide-react';
 import {useState} from 'react';
 import {z} from 'zod';
 
 import {copyText as copy, useBookingLinks, useCalendarState} from '@/components/booking/hooks';
+import {LoadError} from '@/components/data-table';
 import {MEETING_TYPES, type MeetingType} from '@/components/activity-log';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
@@ -13,6 +14,7 @@ import {Card} from '@/components/ui/card';
 import {confirm} from '@/components/ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Field, Input, Switch, Textarea} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip} from '@/components/ui/menu';
 import {Avatar, EmptyState, IconBadge, PageHeader, Skeleton, Tabs, TabsList, TabsTrigger} from '@/components/ui/misc';
 import {api} from '@/lib/api';
@@ -103,13 +105,18 @@ function MeetingsList({when}: {when: 'upcoming' | 'past'}) {
     <div className="grid gap-4">
       <div className="inline-flex w-fit rounded-lg bg-slate-100 p-0.5">
         {(['mine', 'all'] as const).map((s) => (
-          <button key={s} type="button" onClick={() => setScope(s)} className={cn('cursor-pointer rounded-md px-3 py-1 text-xs font-semibold transition-all', scope === s ? 'bg-card text-slate-900 shadow-soft' : 'text-slate-500')}>
+          <button key={s} type="button" aria-pressed={scope === s} onClick={() => setScope(s)} className={cn('cursor-pointer rounded-md px-3 py-1 text-xs font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30', scope === s ? 'bg-card text-slate-900 shadow-soft' : 'text-slate-500')}>
             {s === 'mine' ? 'My meetings' : 'Everyone'}
           </button>
         ))}
       </div>
       {q.isLoading && <Card className="grid gap-3 p-5">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-12" />)}</Card>}
-      {!q.isLoading && !rows.length && (
+      {q.isError && (
+        <Card>
+          <LoadError error={q.error} onRetry={() => q.refetch()} />
+        </Card>
+      )}
+      {!q.isLoading && !q.isError && !rows.length && (
         <Card>
           <EmptyState
             icon={<CalendarClock />}
@@ -194,20 +201,25 @@ function CancelDialog({bookingId, name, onClose}: {bookingId: string; name: stri
     success: `Canceled · ${name} has been told`,
     onSuccess: onClose,
   });
+  const f = useFormState({reason}, {reason: [is.maxLength(1000)]});
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !cancel.isPending && onClose()}>
       <DialogContent size="sm">
-        <DialogHeader>
-          <DialogTitle>Cancel this booking?</DialogTitle>
-          <DialogDescription>{name} gets a cancellation email and the calendar event is removed.</DialogDescription>
-        </DialogHeader>
-        <DialogBody>
-          <Textarea aria-label="Reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (included in the email)" />
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="secondary" onClick={onClose}>Keep it</Button>
-          <Button variant="destructive" onClick={() => cancel.mutate(undefined)} disabled={cancel.isPending}>{cancel.isPending && <Loader2 className="animate-spin" />} Cancel booking</Button>
-        </DialogFooter>
+        <form {...f.form(() => cancel.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
+          <DialogHeader>
+            <DialogTitle>Cancel this booking?</DialogTitle>
+            <DialogDescription>{name} gets a cancellation email and the calendar event is removed.</DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            <Field label="Reason (optional)" hint="Included in the email." error={f.error('reason')}>
+              <Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} onBlur={f.blur('reason')} />
+            </Field>
+          </DialogBody>
+          <DialogFooter>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={cancel.isPending}>Keep it</Button>
+            <Button type="submit" variant="destructive" pending={cancel.isPending} pendingLabel="Canceling…">Cancel booking</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
   );
@@ -219,6 +231,13 @@ function LinksTab({onCreate}: {onCreate: () => void}) {
   const {canEdit} = useMe();
   const links = useBookingLinks();
   const rows = links.data ?? [];
+  if (links.isError && !links.data) {
+    return (
+      <Card>
+        <LoadError error={links.error} onRetry={() => links.refetch()} />
+      </Card>
+    );
+  }
   if (links.isLoading) return <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-44" />)}</div>;
   if (!rows.length) {
     return (
@@ -255,18 +274,18 @@ function LinkCard({link: l}: {link: BookingLinkRow}) {
             {l.durations.map(durationLabel).join(' / ')} · {type?.label ?? 'Meeting'}{l.kind === 'team' ? ` · ${l.hostIds.length} in rotation` : ''}
           </p>
         </div>
-        {l.canEdit && <Switch checked={l.active} onCheckedChange={(v) => toggle.mutate(v)} aria-label={l.active ? 'Turn off' : 'Turn on'} />}
+        {l.canEdit && <Switch checked={l.active} disabled={toggle.isPending} aria-busy={toggle.isPending || undefined} onCheckedChange={(v) => toggle.mutate(v)} aria-label={l.active ? `Turn off ${l.name}` : `Turn on ${l.name}`} />}
       </div>
       <p className="mx-5 truncate rounded-lg bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600">{l.url.replace(/^https?:\/\//, '')}</p>
       <div className="mt-auto flex items-center gap-1.5 p-4 pt-3">
         <Button size="sm" variant="secondary" onClick={() => copy(l.url, 'Link copied')}><Copy /> Copy link</Button>
         <Button size="icon-sm" variant="ghost" asChild aria-label="Open booking page"><a href={l.url} target="_blank" rel="noopener noreferrer"><ExternalLink /></a></Button>
-        <Button size="icon-sm" variant="ghost" onClick={() => setEmbed(true)} aria-label="Embed"><Code2 /></Button>
+        <Button size="icon-sm" variant="ghost" onClick={() => setEmbed(true)} aria-label="Share on a website"><Code2 /></Button>
         <span className="ml-auto text-xs text-muted-foreground">{l.bookingCount} booked</span>
         {l.canEdit && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label={`Options for ${l.name}`}><MoreHorizontal /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label={`Options for ${l.name}`} pending={remove.isPending}><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
               <DropdownMenuItem onSelect={() => navigate({to: '/meetings/links/$linkId', params: {linkId: l.id}})}><Pencil /> Edit</DropdownMenuItem>
@@ -327,20 +346,21 @@ function NewLinkDialog({onClose}: {onClose: () => void}) {
     () => api.post<{link: {id: string}}>('/scheduling/links', {name: name.trim(), kind, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}),
     {invalidate: [keys.scheduling], onSuccess: (r) => navigate({to: '/meetings/links/$linkId', params: {linkId: r.link.id}})},
   );
+  const f = useFormState({name}, {name: [is.required('Give the meeting a name, like Intro call.'), is.maxLength(120)]});
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !create.isPending && onClose()}>
       <DialogContent size="md">
-        <form onSubmit={(e) => (e.preventDefault(), name.trim() && create.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => create.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>New booking link</DialogTitle>
             <DialogDescription>Weekdays 9–5 to start with; set your hours next.</DialogDescription>
           </DialogHeader>
           <DialogBody>
-            <Field label="Meeting name" htmlFor="nl-name">
-              <Input id="nl-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={120} required autoFocus />
+            <Field label="Meeting name" htmlFor="nl-name" error={f.error('name')}>
+              <Input id="nl-name" value={name} onChange={(e) => setName(e.target.value)} onBlur={f.blur('name')} maxLength={120} autoFocus />
             </Field>
             {isAdmin && (
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Who people book with">
                 {([
                   ['personal', 'Just me', 'People book time with you.', CalendarClock],
                   ['team', 'Team round robin', 'Rotates among the people you pick.', Users],
@@ -348,8 +368,10 @@ function NewLinkDialog({onClose}: {onClose: () => void}) {
                   <button
                     key={k}
                     type="button"
+                    role="radio"
+                    aria-checked={kind === k}
                     onClick={() => setKind(k)}
-                    className={cn('cursor-pointer rounded-xl border p-3 text-left transition-all', kind === k ? 'border-primary bg-primary/[0.06] ring-1 ring-primary' : 'border-slate-200 hover:border-primary/50')}
+                    className={cn('cursor-pointer rounded-xl border p-3 text-left transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30', kind === k ? 'border-primary bg-primary/[0.06] ring-1 ring-primary' : 'border-slate-200 hover:border-primary/50')}
                   >
                     <Icon className="size-4 text-primary" />
                     <p className="mt-1.5 text-sm font-semibold text-slate-900">{title}</p>
@@ -360,8 +382,8 @@ function NewLinkDialog({onClose}: {onClose: () => void}) {
             )}
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={!name.trim() || create.isPending}>{create.isPending && <Loader2 className="animate-spin" />} Create link</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={create.isPending}>Cancel</Button>
+            <Button type="submit" pending={create.isPending} pendingLabel="Creating…">Create link</Button>
           </DialogFooter>
         </form>
       </DialogContent>

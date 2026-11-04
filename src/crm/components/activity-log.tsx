@@ -1,4 +1,4 @@
-import {BriefcaseBusiness, Building2, CalendarClock, Handshake, Loader2, Mail, Mailbox, MapPin, MessageCircle, MessageSquare, Phone, User, Video, X} from 'lucide-react';
+import {BriefcaseBusiness, Building2, CalendarClock, Handshake, Mail, Mailbox, MapPin, MessageCircle, MessageSquare, Phone, User, Video, X} from 'lucide-react';
 import {useState} from 'react';
 
 import {api} from '@/lib/api';
@@ -11,6 +11,7 @@ import {useCalendarState} from './booking/hooks';
 import {ContactsPicker} from './pickers';
 import {Button} from './ui/button';
 import {Checkbox, Field, Input, Label, NativeSelect, Textarea} from './ui/form';
+import {is, useFormState} from './ui/form-state';
 
 /** Per-channel copy and icon, shared by the composer and the timeline. */
 export const KINDS: Record<InteractionKind, {label: string; log: string; icon: typeof Phone; cls: string}> = {
@@ -108,11 +109,16 @@ export function LogForm({kind, links, onDone}: {kind: Exclude<InteractionKind, '
     {invalidate: recordKeys, success: `${meta.label} logged`, onSuccess: () => (setForm((f) => ({...f, body: '', outcome: '', durationMin: ''})), onDone?.())},
   );
 
+  const f = useFormState(form, {
+    occurredAt: [is.required('Choose when it happened.')],
+    durationMin: [is.number({min: 0, max: 24 * 60, integer: true, message: 'Use whole minutes between 0 and 1440, like 15.'})],
+  });
+
   return (
-    <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="grid gap-3">
+    <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="grid gap-3">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Field label={kind === 'CALL' ? 'Call date' : 'Activity date'} htmlFor="log-at">
-          <Input id="log-at" type="datetime-local" required value={form.occurredAt} onChange={(e) => setForm({...form, occurredAt: e.target.value})} />
+        <Field label={kind === 'CALL' ? 'Call date' : 'Activity date'} htmlFor="log-at" error={f.error('occurredAt')}>
+          <Input id="log-at" type="datetime-local" value={form.occurredAt} onChange={(e) => setForm({...form, occurredAt: e.target.value})} onBlur={f.blur('occurredAt')} />
         </Field>
         {kind !== 'POSTAL' && (
           <Field label="Direction" htmlFor="log-dir">
@@ -130,8 +136,8 @@ export function LogForm({kind, links, onDone}: {kind: Exclude<InteractionKind, '
                 {CALL_OUTCOMES.map((o) => <option key={o}>{o}</option>)}
               </NativeSelect>
             </Field>
-            <Field label="Duration (min)" htmlFor="log-dur">
-              <Input id="log-dur" type="number" min={0} value={form.durationMin} onChange={(e) => setForm({...form, durationMin: e.target.value})} />
+            <Field label="Duration (min)" htmlFor="log-dur" error={f.error('durationMin')}>
+              <Input id="log-dur" type="number" inputMode="numeric" value={form.durationMin} onChange={(e) => setForm({...form, durationMin: e.target.value})} onBlur={f.blur('durationMin')} />
             </Field>
           </>
         )}
@@ -140,8 +146,8 @@ export function LogForm({kind, links, onDone}: {kind: Exclude<InteractionKind, '
       <Associations links={links} value={assoc} onChange={setAssoc} />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <FollowUp value={followUp} onChange={setFollowUp} />
-        <Button type="submit" size="sm" disabled={save.isPending}>
-          {save.isPending ? <Loader2 className="animate-spin" /> : <meta.icon />} {meta.log}
+        <Button type="submit" size="sm" pending={save.isPending} pendingLabel="Saving…">
+          <meta.icon /> {meta.log}
         </Button>
       </div>
     </form>
@@ -215,21 +221,26 @@ export function MeetingForm({links, onDone, initialMode = 'schedule'}: {links: R
     },
   );
 
+  const f = useFormState(form, {
+    title: [is.required('Give the meeting a title.'), is.maxLength(5000)],
+    start: [is.required('Choose when the meeting starts.')],
+  });
+
   return (
-    <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="grid gap-3">
+    <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="grid gap-3">
       <div className="inline-flex w-fit rounded-lg bg-slate-100 p-0.5">
         {(['schedule', 'log'] as const).map((m) => (
-          <button key={m} type="button" onClick={() => setMode(m)} className={cn('cursor-pointer rounded-md px-3 py-1 text-xs font-semibold transition-all', mode === m ? 'bg-card text-slate-900 shadow-soft' : 'text-slate-500')}>
+          <button key={m} type="button" aria-pressed={mode === m} onClick={() => setMode(m)} className={cn('cursor-pointer rounded-md px-3 py-1 text-xs font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30', mode === m ? 'bg-card text-slate-900 shadow-soft' : 'text-slate-500')}>
             {m === 'schedule' ? 'Schedule a meeting' : 'Log a past meeting'}
           </button>
         ))}
       </div>
-      <Field label="Meeting title" htmlFor="mt-title">
-        <Input id="mt-title" required value={form.title} onChange={(e) => setForm({...form, title: e.target.value})} placeholder="e.g. Product demo" />
+      <Field label="Meeting title" htmlFor="mt-title" error={f.error('title')}>
+        <Input id="mt-title" value={form.title} onChange={(e) => setForm({...form, title: e.target.value})} onBlur={f.blur('title')} placeholder="e.g. Product demo" />
       </Field>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Field label="Start" htmlFor="mt-start">
-          <Input id="mt-start" type="datetime-local" required value={form.start} onChange={(e) => setForm({...form, start: e.target.value})} />
+        <Field label="Start" htmlFor="mt-start" error={f.error('start')}>
+          <Input id="mt-start" type="datetime-local" value={form.start} onChange={(e) => setForm({...form, start: e.target.value})} onBlur={f.blur('start')} />
         </Field>
         <Field label="Duration" htmlFor="mt-dur">
           <NativeSelect id="mt-dur" value={form.durationMin} onChange={(e) => setForm({...form, durationMin: Number(e.target.value)})}>
@@ -275,6 +286,7 @@ export function MeetingForm({links, onDone, initialMode = 'schedule'}: {links: R
             );
           })}
         </div>
+        <Field error={f.error('location')}>
         <div className="relative">
           {(() => {
             const Icon = MEETING_TYPES[form.locationType].icon;
@@ -289,6 +301,7 @@ export function MeetingForm({links, onDone, initialMode = 'schedule'}: {links: R
             placeholder={MEETING_TYPES[form.locationType].placeholder}
           />
         </div>
+        </Field>
         {mode === 'schedule' && calendar && (
           <p className="text-xs text-muted-foreground">
             Added to your {calendar === 'google' ? 'Google' : 'Outlook'} calendar with the attendees{form.locationType === 'VIDEO' && !form.location ? `, with a ${calendar === 'google' ? 'Google Meet' : 'Teams'} link` : ''}.
@@ -325,8 +338,8 @@ export function MeetingForm({links, onDone, initialMode = 'schedule'}: {links: R
         </div>
       )}
       <div className="flex justify-end">
-        <Button type="submit" size="sm" disabled={save.isPending}>
-          {save.isPending ? <Loader2 className="animate-spin" /> : <CalendarClock />} {mode === 'schedule' ? 'Schedule meeting' : 'Log meeting'}
+        <Button type="submit" size="sm" pending={save.isPending} pendingLabel={mode === 'schedule' ? 'Scheduling…' : 'Saving…'}>
+          <CalendarClock /> {mode === 'schedule' ? 'Schedule meeting' : 'Log meeting'}
         </Button>
       </div>
     </form>

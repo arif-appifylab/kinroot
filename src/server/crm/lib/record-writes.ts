@@ -13,7 +13,7 @@ import {contactName} from '../routes/contacts';
 import {customDiff, diff, logActivity} from './activity';
 import {audit} from './audit';
 import {adoptContactsForDomain, associateByDomain, nameFromDomain} from './domains';
-import {checkDuplicates, phoneKey} from './duplicates';
+import {phoneKey, queueDuplicateCheck} from './duplicates';
 import {emit} from './events';
 import {notify, recordLink} from './notify';
 import {rememberOption} from './settings';
@@ -107,7 +107,8 @@ export async function updateContactRecord(db: Db, w: Writer, before: Contact, da
   await audit(db, null, {action: 'contact.updated', entity: 'contact', recordId: contact.id, label: contactName(contact), meta: {changes, ...w.meta}, ...auditActor(w)});
   if (typeof writes.source === 'string') await rememberOption(db, 'sources', writes.source);
   if (writes.email) await associateByDomain(db, contact.id, actorId(w));
-  if (changes.some((c) => ['firstName', 'lastName', 'email', 'phone'].includes(c.field))) await checkDuplicates(db, 'contact', contact.id);
+  // Compared with every contact: a job, not this request (P2-25).
+  if (changes.some((c) => ['firstName', 'lastName', 'email', 'phone'].includes(c.field))) await queueDuplicateCheck(db, 'contact', contact.id);
   if (writes.ownerId) await notify(db, [contact.ownerId], {type: 'assigned', title: assignedTitle(w, 'contact', contactName(contact)), link: recordLink.contact(contact.id), actorId: actorId(w)});
   return {contact, changes};
 }
@@ -130,7 +131,7 @@ export async function createCompanyRecord(db: Db, w: Writer, data: Prisma.Compan
   await rememberOption(db, 'industries', company.industry);
   await rememberOption(db, 'companyTypes', company.type);
   await adoptContactsForDomain(db, company.id, company.domain, actorId(w));
-  await checkDuplicates(db, 'company', company.id);
+  await queueDuplicateCheck(db, 'company', company.id);
   return company;
 }
 
@@ -144,7 +145,7 @@ export async function updateCompanyRecord(db: Db, w: Writer, before: Company, da
   await rememberOption(db, 'industries', writes.industry as string | undefined);
   await rememberOption(db, 'companyTypes', writes.type as string | undefined);
   if (writes.domain && !before.domain) await adoptContactsForDomain(db, company.id, company.domain, actorId(w));
-  if (changes.some((c) => ['name', 'domain', 'website'].includes(c.field))) await checkDuplicates(db, 'company', company.id);
+  if (changes.some((c) => ['name', 'domain', 'website'].includes(c.field))) await queueDuplicateCheck(db, 'company', company.id);
   if (writes.ownerId) await notify(db, [company.ownerId], {type: 'assigned', title: assignedTitle(w, 'company', company.name), link: recordLink.company(company.id), actorId: actorId(w)});
   return {company, changes};
 }

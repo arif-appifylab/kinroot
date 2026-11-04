@@ -6,11 +6,11 @@ import type {Interaction, InteractionKind, Prisma} from '../../../generated/pris
 import {publicOrigin} from '../kit/config';
 import {sign, verifySignature} from '../kit/crypto';
 import type {Db} from '../kit/db';
-import {currentUser, isAdmin, type AppEnv} from '../kit/guards';
+import {currentUser, isAdmin, type AppContext, type AppEnv} from '../kit/guards';
 import {logActivity} from '../lib/activity';
 import {emit} from '../lib/events';
 import {notifyWatchers} from '../lib/notify';
-import {isoDate, notFound, optStr, valid} from '../lib/http';
+import {assertVisible, attachedWhere, isoDate, notFound, optStr, ownerScope, textOrHttpUrl, valid} from '../lib/http';
 import {getSettings} from '../lib/settings';
 import {userSelect} from '../lib/users';
 import {sendEmail} from '../email/service';
@@ -38,11 +38,11 @@ const body = z.object({
   outcome: optStr,
   direction: z.enum(['INBOUND', 'OUTBOUND']).nullish(),
   locationType: z.enum(['VIDEO', 'PHONE', 'IN_PERSON', 'OTHER']).nullish(),
-  location: optStr,
-  attendeeIds: z.array(z.string()).max(50).optional(),
-  contactId: z.string().nullish(),
-  companyId: z.string().nullish(),
-  dealId: z.string().nullish(),
+  location: textOrHttpUrl,
+  attendeeIds: z.array(z.string().max(40)).max(50).optional(),
+  contactId: z.string().max(40).nullish(),
+  companyId: z.string().max(40).nullish(),
+  dealId: z.string().max(40).nullish(),
   /** "Create a to-do to follow up in N business days" */
   followUp: z.object({days: z.number().int().min(0).max(90), type: z.enum(['TODO', 'CALL', 'EMAIL', 'MEETING']).default('TODO')}).optional(),
   /** Meetings: email the details + calendar links to attendees from this account. */
@@ -141,7 +141,8 @@ export async function refreshInteractionActivity(db: Db, interaction: Interactio
 // ─── Calendar helpers ───
 
 const icsDate = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-const icsText = (s: string) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (m) => `\\${m}`);
+// A bare \r would end the property line and start a new one (property injection): CRLF and CR become \n too.
+const icsText = (s: string) => s.replace(/\\/g, '\\\\').replace(/\r\n|\r|\n/g, '\\n').replace(/[,;]/g, (m) => `\\${m}`);
 
 function buildIcs(i: Interaction, organizer: {name: string; email: string}, people: {name: string; email: string | null}[], brand: string) {
   const end = new Date(i.occurredAt.getTime() + (i.durationMin ?? 30) * 60_000);
@@ -191,6 +192,12 @@ export const meetingsPublic = new Hono<AppEnv>().get('/meetings/:id/invite.ics',
   return new Response(ics, {headers: {'content-type': 'text/calendar; charset=utf-8', 'content-disposition': 'attachment; filename="meeting.ics"'}});
 });
 
+/** An interaction the user may change: logged by them (or they are an admin), on records they may see; else 404. */
+async function ownInteraction(c: AppContext, id: string): Promise<Prisma.InteractionWhereInput> {
+  const me = currentUser(c);
+  return {id, AND: [attachedWhere(await ownerScope(c))], ...(isAdmin(me) ? {} : {authorId: me.id})};
+}
+
 export const interactions = new Hono<AppEnv>()
   .get('/', valid('query', z.object({
     contactId: z.string().optional(),
@@ -200,14 +207,18 @@ export const interactions = new Hono<AppEnv>()
     upcoming: z.string().optional(),
   })), async (c) => {
     const q = c.req.valid('query');
-    const where: Prisma.InteractionWhereInput = {};
+    const scope = await ownerScope(c);
+    const recordScoped = q.contactId || q.companyId || q.dealId;
+    // A record's activity: the record must be visible. Across records: only the user's or on records they may see.
+    if (recordScoped) await assertVisible(c, q, scope);
+    const where: Prisma.InteractionWhereInput = recordScoped || !scope.ownerId ? {} : {AND: [{OR: [{authorId: scope.ownerId}, attachedWhere(scope)]}]};
     if (q.contactId) where.OR = [{contactId: q.contactId}, {attendeeIds: {has: q.contactId}}];
     if (q.companyId) where.companyId = q.companyId;
     if (q.dealId) where.dealId = q.dealId;
     if (q.kind) where.kind = q.kind;
     if (q.upcoming === '1') {
       where.occurredAt = {gte: new Date()};
-      where.AND = [{OR: [{outcome: null}, {outcome: {not: 'Canceled'}}]}];
+      where.AND = [...((where.AND as Prisma.InteractionWhereInput[] | undefined) ?? []), {OR: [{outcome: null}, {outcome: {not: 'Canceled'}}]}];
     }
     const rows = await c.var.db.interaction.findMany({
       where,
@@ -224,6 +235,8 @@ export const interactions = new Hono<AppEnv>()
     const {followUp, invite, ...input} = c.req.valid('json');
     if (!input.contactId && !input.companyId && !input.dealId) throw new HTTPException(400, {message: 'Log it against a contact, company or deal'});
     if (input.kind === 'MEETING' && !input.title) throw new HTTPException(400, {message: 'Give the meeting a title'});
+    // The records and attendees must be ones the user may see (an invite emails the attendees).
+    await assertVisible(c, {...input, contactIds: input.attendeeIds});
 
     const attendeeIds = [...new Set([...(input.attendeeIds ?? []), ...(input.contactId ? [input.contactId] : [])])];
     const interaction = await logInteraction(db, {...input, occurredAt: input.occurredAt ?? new Date(), attendeeIds}, me);
@@ -281,12 +294,12 @@ export const interactions = new Hono<AppEnv>()
   })
 
   .patch('/:id', valid('json', body.omit({kind: true, followUp: true, invite: true}).partial()), async (c) => {
-    const me = currentUser(c);
     const db = c.var.db;
-    const existing = await db.interaction.findUnique({where: {id: c.req.param('id')}});
+    const existing = await db.interaction.findFirst({where: await ownInteraction(c, c.req.param('id'))});
     if (!existing) throw notFound('Activity');
-    if (existing.authorId !== me.id && !isAdmin(me)) throw new HTTPException(403, {message: 'Only the person who logged this can edit it'});
-    let interaction = await db.interaction.update({where: {id: existing.id}, data: c.req.valid('json') as Prisma.InteractionUncheckedUpdateInput});
+    const patch = c.req.valid('json');
+    await assertVisible(c, {contactId: patch.contactId, companyId: patch.companyId, dealId: patch.dealId, contactIds: patch.attendeeIds?.filter((id) => !existing.attendeeIds.includes(id))});
+    let interaction = await db.interaction.update({where: {id: existing.id}, data: patch as Prisma.InteractionUncheckedUpdateInput});
     // Keep the connected calendar in step: cancel, or move / rename the event.
     if (interaction.kind === 'MEETING') {
       if (interaction.outcome === 'Canceled' && existing.outcome !== 'Canceled') await cancelMeetingEvents(db, interaction.id);
@@ -300,10 +313,8 @@ export const interactions = new Hono<AppEnv>()
   })
 
   .delete('/:id', async (c) => {
-    const me = currentUser(c);
-    const existing = await c.var.db.interaction.findUnique({where: {id: c.req.param('id')}});
+    const existing = await c.var.db.interaction.findFirst({where: await ownInteraction(c, c.req.param('id'))});
     if (!existing) throw notFound('Activity');
-    if (existing.authorId !== me.id && !isAdmin(me)) throw new HTTPException(403, {message: 'Only the person who logged this can delete it'});
     if (existing.kind === 'MEETING' && existing.occurredAt > new Date()) await cancelMeetingEvents(c.var.db, existing.id);
     await c.var.db.activity.deleteMany({where: {refId: existing.id, type: `interaction_${existing.kind}`}});
     await c.var.db.interaction.delete({where: {id: existing.id}});

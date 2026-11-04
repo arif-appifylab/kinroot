@@ -17,6 +17,7 @@ import {FollowButton} from '@/components/notifications';
 import {Badge} from '@/components/ui/badge';
 import {useBinToast} from '@/components/recycle-bin-toast';
 import {Button} from '@/components/ui/button';
+import {LoadError} from '@/components/data-table';
 import {Card} from '@/components/ui/card';
 import {confirm} from '@/components/ui/confirm';
 import {Input, NativeSelect} from '@/components/ui/form';
@@ -35,7 +36,7 @@ export const Route = createFileRoute('/_app/deals/$dealId')({
 });
 
 /** Chevron stage track: click a stage to move the deal there. */
-function StageTrack({deal, onMove}: {deal: DealDetail; onMove: (stageId: string) => void}) {
+function StageTrack({deal, onMove, busy}: {deal: DealDetail; onMove: (stageId: string) => void; busy?: boolean}) {
   const {canEdit} = useMe();
   const current = deal.pipeline.stages.findIndex((s) => s.id === deal.stageId);
   const closed = deal.status !== 'OPEN';
@@ -48,10 +49,13 @@ function StageTrack({deal, onMove}: {deal: DealDetail; onMove: (stageId: string)
         return (
           <Tooltip key={s.id} content={`${s.name} · ${s.probability}%${days !== null ? ` · ${days}d in stage` : ''}`}>
             <button
-              disabled={!canEdit || closed || active}
+              type="button"
+              aria-current={active ? 'step' : undefined}
+              disabled={!canEdit || closed || active || busy}
+              aria-busy={busy || undefined}
               onClick={() => onMove(s.id)}
               className={cn(
-                'relative flex min-w-28 flex-1 cursor-pointer items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold whitespace-nowrap transition-all first:rounded-l-lg last:rounded-r-lg disabled:cursor-default',
+                'relative flex min-w-28 flex-1 cursor-pointer items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold whitespace-nowrap transition-all outline-none first:rounded-l-lg last:rounded-r-lg focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-default',
                 active ? 'z-10 rounded-lg bg-brand text-white shadow-btn' : done ? 'text-primary hover:bg-card/60' : 'text-slate-400 hover:bg-card/60 hover:text-slate-600',
               )}
             >
@@ -84,7 +88,14 @@ function DealPage() {
   const remove = useApiMutation(() => api.del<{binId: string | null}>(`/deals/${dealId}`), {invalidate: [keys.deals, keys.dashboard, keys.recycleBin], onSuccess: (r) => (binToast('Deal', r.binId), navigate({to: '/deals'}))});
 
   const d = q.data;
-  if (!d) return q.error ? <p className="text-sm text-destructive">{(q.error as Error).message}</p> : <Skeleton className="h-64 rounded-2xl" />;
+  if (!d)
+    return q.error ? (
+      <Card className="overflow-hidden">
+        <LoadError error={q.error} onRetry={() => q.refetch()} title={(q.error as {status?: number}).status === 404 ? 'This deal was not found' : 'This deal could not be loaded'} />
+      </Card>
+    ) : (
+      <Skeleton className="h-64 rounded-2xl" />
+    );
 
   const record = {dealId};
   const taskDefaults = {
@@ -134,11 +145,11 @@ function DealPage() {
               <>
                 {d.status === 'OPEN' ? (
                   <>
-                    <Button variant="success" onClick={() => status.mutate({status: 'WON'})}><Trophy /> Won</Button>
-                    <Button variant="secondary" className="text-destructive hover:text-destructive" onClick={() => setLosing(true)}><XCircle /> Lost</Button>
+                    <Button variant="success" pending={status.isPending && status.variables?.status === 'WON'} pendingLabel="Saving…" disabled={status.isPending} onClick={() => status.mutate({status: 'WON'})}><Trophy /> Won</Button>
+                    <Button variant="secondary" className="text-destructive hover:text-destructive" disabled={status.isPending} onClick={() => setLosing(true)}><XCircle /> Lost</Button>
                   </>
                 ) : (
-                  <Button variant="secondary" onClick={() => status.mutate({status: 'OPEN'})}><RotateCcw /> Reopen</Button>
+                  <Button variant="secondary" pending={status.isPending} pendingLabel="Reopening…" onClick={() => status.mutate({status: 'OPEN'})}><RotateCcw /> Reopen</Button>
                 )}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild><Button variant="secondary" size="icon" aria-label="More actions"><MoreHorizontal /></Button></DropdownMenuTrigger>
@@ -151,7 +162,7 @@ function DealPage() {
           </div>
         </div>
         <div className="relative mt-5">
-          <StageTrack deal={d} onMove={(stageId) => save.mutate({stageId})} />
+          <StageTrack deal={d} busy={save.isPending} onMove={(stageId) => save.mutate({stageId})} />
         </div>
         <div className="relative mt-4">
           <ActivityButtons taskDefaults={taskDefaults} />
@@ -166,7 +177,7 @@ function DealPage() {
               label="Value" field="value"
               value={String(d.value)}
               display={<span className="font-semibold">{money(d.value, d.currency)}</span>}
-              editor={({value, onChange, onCommit}) => <Input autoFocus type="number" min={0} step="any" className="h-8" value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && onCommit()} />}
+              editor={({value, onChange, onCommit}) => <Input autoFocus aria-label="Amount" type="number" inputMode="decimal" step="any" className="h-8" value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && onCommit()} />}
               onSave={(v) => save.mutate({value: Number(v || 0)})}
             />
             <EditableProperty
@@ -253,7 +264,7 @@ function DealPage() {
         </div>
       </div>
 
-      {losing && <LostDialog onClose={() => setLosing(false)} onConfirm={(reason) => (status.mutate({status: 'LOST', lostReason: reason}), setLosing(false))} />}
+      {losing && <LostDialog pending={status.isPending} onClose={() => setLosing(false)} onConfirm={(reason) => status.mutate({status: 'LOST', lostReason: reason}, {onSuccess: () => setLosing(false)})} />}
     </div>
     </PropertyHistoryProvider>
   );
@@ -305,7 +316,13 @@ function DealContactsCard({deal}: {deal: DealDetail}) {
               {contact.phone && <p className="truncate text-xs text-muted-foreground">{contact.phone}</p>}
             </Link>
             {canEdit && (
-              <button aria-label={`Remove ${fullName(contact)}`} onClick={() => save.mutate(ids.filter((x) => x !== contact.id))} className="cursor-pointer rounded p-1 text-slate-300 opacity-0 group-hover:opacity-100 hover:text-destructive">
+              <button
+                type="button"
+                aria-label={`Remove ${fullName(contact)} from this deal`}
+                disabled={save.isPending}
+                onClick={() => save.mutate(ids.filter((x) => x !== contact.id))}
+                className="cursor-pointer rounded p-1 text-slate-300 opacity-0 outline-none group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed pointer-coarse:opacity-100"
+              >
                 <X className="size-4" />
               </button>
             )}
@@ -344,11 +361,11 @@ function DealCompaniesCard({deal}: {deal: DealDetail}) {
               {isPrimary && <Badge tone="green" className="mt-1">Primary</Badge>}
             </Link>
             {canEdit && (
-              <div className="flex gap-0.5 opacity-0 group-hover:opacity-100">
+              <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 pointer-coarse:opacity-100">
                 {!isPrimary && (
-                  <button aria-label={`Make ${company.name} primary`} onClick={() => save.mutate({companyIds: ids, companyId: company.id})} className="cursor-pointer rounded px-1.5 py-0.5 text-[11px] font-semibold text-primary hover:bg-accent">Make primary</button>
+                  <button type="button" aria-label={`Make ${company.name} primary`} disabled={save.isPending} onClick={() => save.mutate({companyIds: ids, companyId: company.id})} className="cursor-pointer rounded px-1.5 py-0.5 text-[11px] font-semibold text-primary outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed">Make primary</button>
                 )}
-                <button aria-label={`Remove ${company.name}`} onClick={() => save.mutate({companyIds: ids.filter((x) => x !== company.id), companyId: isPrimary ? null : primary})} className="cursor-pointer rounded p-1 text-slate-300 hover:text-destructive">
+                <button type="button" aria-label={`Remove ${company.name} from this deal`} disabled={save.isPending} onClick={() => save.mutate({companyIds: ids.filter((x) => x !== company.id), companyId: isPrimary ? null : primary})} className="cursor-pointer rounded p-1 text-slate-300 outline-none hover:text-destructive focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed">
                   <X className="size-4" />
                 </button>
               </div>

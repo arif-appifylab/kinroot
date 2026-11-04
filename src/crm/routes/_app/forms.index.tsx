@@ -1,8 +1,9 @@
 import {useQuery} from '@tanstack/react-query';
 import {createFileRoute, Link, useNavigate} from '@tanstack/react-router';
-import {ClipboardList, Copy, ExternalLink, Loader2, MoreHorizontal, Plus, Trash2} from 'lucide-react';
+import {ClipboardList, Copy, ExternalLink, MoreHorizontal, Plus, Trash2} from 'lucide-react';
 import {useState} from 'react';
 
+import {LoadError} from '@/components/data-table';
 import {Badge} from '@/components/ui/badge';
 import {useBinToast} from '@/components/recycle-bin-toast';
 import {Button} from '@/components/ui/button';
@@ -10,6 +11,7 @@ import {Card} from '@/components/ui/card';
 import {confirm} from '@/components/ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Field, Input} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/menu';
 import {EmptyState, PageHeader} from '@/components/ui/misc';
 import {api} from '@/lib/api';
@@ -48,12 +50,17 @@ function FormsPage() {
         actions={canEdit && <Button onClick={() => setCreating(true)}><Plus /> New form</Button>}
       />
       {list.isLoading && <Card className="p-6 text-sm text-muted-foreground">Loading…</Card>}
-      {!list.isLoading && rows.length === 0 && (
+      {list.isError && (
+        <Card>
+          <LoadError error={list.error} onRetry={() => list.refetch()} />
+        </Card>
+      )}
+      {!list.isLoading && !list.isError && rows.length === 0 && (
         <Card>
           <EmptyState
             icon={<ClipboardList />}
             title="No forms yet"
-            description="Start from a template like Contact us or Demo request, share the link or embed it on your site."
+            description="Start from a template like Contact us or Demo request, share the link or add it to your website as a button."
             action={canEdit && <Button onClick={() => setCreating(true)}><Plus /> Create your first form</Button>}
           />
         </Card>
@@ -112,7 +119,7 @@ function FormRowItem({form: f}: {form: FormRow}) {
       <td className="px-2 py-3">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label={`Options for ${f.name}`}><MoreHorizontal /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label={`Options for ${f.name}`} pending={duplicate.isPending || remove.isPending}><MoreHorizontal /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
             {f.status === 'PUBLISHED' && (
@@ -145,26 +152,29 @@ function NewFormDialog({onClose}: {onClose: () => void}) {
     invalidate: [keys.forms],
     onSuccess: (r) => navigate({to: '/forms/$formId', params: {formId: r.form.id}}),
   });
+  const f = useFormState({name}, {name: [is.required('Give the form a name.'), is.maxLength(120)]});
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !create.isPending && onClose()}>
       <DialogContent size="md">
-        <form onSubmit={(e) => (e.preventDefault(), name.trim() && create.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => create.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>New form</DialogTitle>
             <DialogDescription>Pick a starting point. You can change every question afterwards.</DialogDescription>
           </DialogHeader>
           <DialogBody>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Starting point">
               {FORM_TEMPLATES.map((t) => (
                 <button
                   key={t.id}
                   type="button"
+                  role="radio"
+                  aria-checked={template === t.id}
                   onClick={() => {
                     setTemplate(t.id);
                     if (!touched) setName(t.id === 'blank' ? 'Untitled form' : t.name);
                   }}
                   className={cn(
-                    'cursor-pointer rounded-xl border p-3 text-left transition-all',
+                    'cursor-pointer rounded-xl border p-3 text-left transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
                     template === t.id ? 'border-primary bg-primary/[0.06] ring-1 ring-primary' : 'border-slate-200 hover:border-primary/50',
                   )}
                 >
@@ -173,14 +183,14 @@ function NewFormDialog({onClose}: {onClose: () => void}) {
                 </button>
               ))}
             </div>
-            <Field label="Form name">
-              <Input value={name} onChange={(e) => (setName(e.target.value), setTouched(true))} maxLength={120} required />
+            <Field label="Form name" error={f.error('name')}>
+              <Input value={name} onChange={(e) => (setName(e.target.value), setTouched(true))} onBlur={f.blur('name')} maxLength={120} />
             </Field>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={!name.trim() || create.isPending}>
-              {create.isPending && <Loader2 className="animate-spin" />} Create form
+            <Button type="button" variant="secondary" onClick={onClose} disabled={create.isPending}>Cancel</Button>
+            <Button type="submit" pending={create.isPending} pendingLabel="Creating…">
+              Create form
             </Button>
           </DialogFooter>
         </form>

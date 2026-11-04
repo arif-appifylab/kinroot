@@ -6,13 +6,17 @@ import type {ContactList, Prisma} from '../../../generated/prisma/client';
 import {asRules, referencedLists} from '@/lib/segments';
 import {currentUser, isAdmin, type AppContext, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
-import {notFound, optStr, ownerScope, sortBy, valid} from '../lib/http';
+import {intParam, MAX_PAGE, notFound, optStr, ownerScope, sortBy, valid} from '../lib/http';
 import {moveToBin} from '../lib/recycle-bin';
 import {addToList, assertNoCycle, listContactWhere, loadSegmentDefs, removeFromList, segmentRulesSchema, segmentWhere, type CustomDefs} from '../lib/segments';
 import {userSelect} from '../lib/users';
 import {contactInclude, contactWhere} from './contacts';
 
 const kind = z.enum(['STATIC', 'DYNAMIC']);
+
+/** Lists returned at most (most recently changed first), and segment counts run side by side. */
+const MAX_LISTS = 500;
+const SEGMENT_COUNTS_AT_ONCE = 4;
 const ids = z.array(z.string()).min(1).max(500);
 
 const listBody = z.object({
@@ -58,19 +62,28 @@ async function visibleIds(c: AppContext, contactIds: string[]) {
 }
 
 export const lists = new Hono<AppEnv>()
-  .get('/', valid('query', z.object({q: z.string().trim().max(100).optional(), kind: kind.optional()})), async (c) => {
-    const {q, kind: k} = c.req.valid('query');
+  // `counts=0` (pickers): names only, no member counts.
+  .get('/', valid('query', z.object({q: z.string().trim().max(100).optional(), kind: kind.optional(), counts: z.enum(['0', '1']).default('1')})), async (c) => {
+    const {q, kind: k, counts: withCounts} = c.req.valid('query');
     const rows = await c.var.db.contactList.findMany({
       where: {...(q ? {name: {contains: q, mode: 'insensitive'}} : {}), ...(k ? {kind: k} : {})},
       select: listSelect,
       orderBy: {updatedAt: 'desc'},
+      take: MAX_LISTS,
     });
-    // Static lists in one grouped query; segments one count each (in sequence: local Postgres has few connections).
+    if (withCounts === '0') return c.json({rows: rows.map((l) => ({...l, count: null}))});
+    // Static lists in one grouped query; segments one count each, a few at a time (each is a scan).
     const scope = await ownerScope(c);
-    const grouped = await c.var.db.contactListMember.groupBy({by: ['listId'], where: {listId: {in: rows.filter((l) => l.kind === 'STATIC').map((l) => l.id)}, contact: scope}, _count: {_all: true}});
+    const statics = rows.filter((l) => l.kind === 'STATIC').map((l) => l.id);
+    const grouped = statics.length ? await c.var.db.contactListMember.groupBy({by: ['listId'], where: {listId: {in: statics}, contact: scope}, _count: {_all: true}}) : [];
     const counts = new Map(grouped.map((g) => [g.listId, g._count._all]));
-    const defs = await loadSegmentDefs(c.var.db);
-    for (const l of rows) if (l.kind === 'DYNAMIC') counts.set(l.id, await c.var.db.contact.count({where: await scopedWhere(c, l, defs)}));
+    const segments = rows.filter((l) => l.kind === 'DYNAMIC');
+    if (segments.length) {
+      const defs = await loadSegmentDefs(c.var.db);
+      for (let i = 0; i < segments.length; i += SEGMENT_COUNTS_AT_ONCE) {
+        await Promise.all(segments.slice(i, i + SEGMENT_COUNTS_AT_ONCE).map(async (l) => counts.set(l.id, await c.var.db.contact.count({where: await scopedWhere(c, l, defs)}))));
+      }
+    }
     return c.json({rows: rows.map((l) => ({...l, count: counts.get(l.id) ?? 0}))});
   })
 
@@ -163,8 +176,8 @@ export const lists = new Hono<AppEnv>()
     q: z.string().optional(),
     sort: z.string().optional(),
     dir: z.enum(['asc', 'desc']).optional(),
-    page: z.coerce.number().int().min(1).default(1),
-    pageSize: z.coerce.number().int().min(1).max(200).default(50),
+    page: intParam(1, MAX_PAGE).default(1),
+    pageSize: intParam(1, 200).default(50),
   })), async (c) => {
     const db = c.var.db;
     const q = c.req.valid('query');
@@ -183,8 +196,10 @@ export const lists = new Hono<AppEnv>()
     return c.json({rows, total, page: q.page, pageSize: q.pageSize});
   })
 
+  // Changing a static list's members is editing the list: its owner or an admin.
   .post('/:id/members', valid('json', z.object({contactIds: ids})), async (c) => {
     const list = await findList(c);
+    assertCanEdit(c, list);
     if (list.kind !== 'STATIC') throw new HTTPException(400, {message: 'Segments update themselves from their rules'});
     const added = await addToList(c.var.db, list.id, await visibleIds(c, c.req.valid('json').contactIds), {actorId: currentUser(c).id});
     if (added) await audit(c.var.db, c, {action: 'list.members_added', entity: 'list', recordId: list.id, label: list.name, meta: {count: added}});
@@ -193,6 +208,7 @@ export const lists = new Hono<AppEnv>()
 
   .post('/:id/members/remove', valid('json', z.object({contactIds: ids})), async (c) => {
     const list = await findList(c);
+    assertCanEdit(c, list);
     if (list.kind !== 'STATIC') throw new HTTPException(400, {message: 'Segments update themselves from their rules'});
     const removed = await removeFromList(c.var.db, list.id, await visibleIds(c, c.req.valid('json').contactIds), {actorId: currentUser(c).id});
     if (removed) await audit(c.var.db, c, {action: 'list.members_removed', entity: 'list', recordId: list.id, label: list.name, meta: {count: removed}});

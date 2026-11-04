@@ -6,6 +6,7 @@ import {toast} from 'sonner';
 import {z} from 'zod';
 
 import {Flow} from '@/components/automations/flow';
+import {LoadError} from '@/components/data-table';
 import {automationKey, useAutomation, useNames, type Automation, type Problem} from '@/components/automations/hooks';
 import {ManualRunDialog} from '@/components/automations/record-tools';
 import {RunsPanel} from '@/components/automations/runs';
@@ -128,6 +129,14 @@ function AutomationPage({automationId}: {automationId: string}) {
     return [...local, ...serverProblems.filter((p) => !seen.has(`${p.stepId}|${p.message}`) && (!p.stepId || findStep(draft.steps, p.stepId)))];
   }, [draft, serverProblems]);
 
+  if (q.isError && !a) {
+    return (
+      <Card>
+        <h1 className="sr-only">Automation</h1>
+        <LoadError error={q.error} onRetry={() => q.refetch()} />
+      </Card>
+    );
+  }
   if (q.isLoading || !a || !draft) {
     return (
       <div className="grid gap-4">
@@ -151,6 +160,8 @@ function AutomationPage({automationId}: {automationId: string}) {
             <Link to="/automations" aria-label="Back to automations"><ArrowLeft /></Link>
           </Button>
           <div className="min-w-0 flex-1">
+            {/* The screen's heading; the name field below is what people see and edit. */}
+            <h1 className="sr-only">{draft.name.trim() || a.name}</h1>
             <div className="flex items-center gap-2">
               <input
                 value={draft.name}
@@ -163,7 +174,7 @@ function AutomationPage({automationId}: {automationId: string}) {
               <Badge tone={enabled ? 'green' : 'neutral'}>{enabled ? 'On' : 'Off'}</Badge>
             </div>
             {isAdmin && (
-              <p className="mt-0.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
+              <p role="status" className="mt-0.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
                 {saveState === 'saving' && <><Loader2 className="size-3 animate-spin" /> Saving…</>}
                 {saveState === 'saved' && <><Check className="size-3 text-emerald-500" /> All changes saved{enabled && ' · live'}</>}
                 {saveState === 'error' && <><CloudOff className="size-3 text-destructive" /> {enabled ? 'Not saved: a live automation only saves without problems (or switch it off)' : 'Not saved, check the last change'}</>}
@@ -186,14 +197,14 @@ function AutomationPage({automationId}: {automationId: string}) {
           {isAdmin && <TestButton />}
           {isAdmin && (
             <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-card px-3 py-2 text-sm font-semibold text-slate-700">
-              <Switch checked={enabled} disabled={toggle.isPending} onCheckedChange={(on) => toggle.mutate(on)} aria-label="Switch the automation on or off" />
+              <Switch checked={enabled} disabled={toggle.isPending} aria-busy={toggle.isPending || undefined} onCheckedChange={(on) => toggle.mutate(on)} aria-label="Switch the automation on or off" />
               {enabled ? 'On' : 'Off'}
             </label>
           )}
           {isAdmin && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="More"><MoreHorizontal /></Button>
+                <Button variant="ghost" size="icon" aria-label="More actions" pending={duplicate.isPending || remove.isPending}><MoreHorizontal /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent>
                 <DropdownMenuItem onSelect={() => duplicate.mutate(undefined)}><Copy /> Duplicate</DropdownMenuItem>
@@ -225,7 +236,7 @@ function AutomationPage({automationId}: {automationId: string}) {
                 <ul className="mt-1 grid gap-0.5">
                   {problems.slice(0, 5).map((p, i) => (
                     <li key={i}>
-                      <button type="button" className="cursor-pointer text-left hover:underline" onClick={() => setSelected(p.stepId ?? 'trigger')}>{p.message}</button>
+                      <button type="button" className="cursor-pointer rounded text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-amber-400" onClick={() => setSelected(p.stepId ?? 'trigger')}>{p.message}</button>
                     </li>
                   ))}
                 </ul>
@@ -249,7 +260,7 @@ function AutomationPage({automationId}: {automationId: string}) {
             <Card className="min-w-0 self-start p-5 xl:sticky xl:top-20 xl:max-h-[calc(100dvh-6rem)] xl:overflow-y-auto xl:scrollbar-thin">
               {selected === 'trigger' && (
                 <>
-                  <h3 className="mb-4 text-base font-bold text-slate-900">Trigger</h3>
+                  <h2 className="mb-4 text-base font-bold text-slate-900">Trigger</h2>
                   <TriggerPanel object={draft.object} trigger={draft.trigger} onChange={(object: AutoObject, trigger: Trigger) => set({object, trigger})} readOnly={!isAdmin} />
                 </>
               )}
@@ -294,7 +305,7 @@ function SettingsPanel({draft, onChange, readOnly}: {draft: Draft; onChange: (p:
   return (
     <div className={cn('grid max-w-2xl grid-cols-1 gap-6', readOnly && 'pointer-events-none opacity-80')}>
       <Card className="grid gap-4 p-5">
-        <h3 className="text-base font-bold text-slate-900">About</h3>
+        <h2 className="text-base font-bold text-slate-900">About</h2>
         <Field label="Description" hint="Shown in the automation list and on record pages for manual automations.">
           <Textarea value={draft.description ?? ''} onChange={(e) => onChange({description: e.target.value})} className="min-h-20" />
         </Field>
@@ -306,22 +317,22 @@ function SettingsPanel({draft, onChange, readOnly}: {draft: Draft; onChange: (p:
         </Field>
       </Card>
       <Card className="grid gap-4 p-5">
-        <h3 className="text-base font-bold text-slate-900">Re-enrollment</h3>
+        <h2 className="text-base font-bold text-slate-900">Re-enrollment</h2>
         <p className="-mt-2 text-sm text-muted-foreground">Can a record go through this automation more than once? Manual runs on one record always start.</p>
-        <NativeSelect value={draft.reenroll} onChange={(e) => onChange({reenroll: e.target.value as Draft['reenroll'], reenrollDays: e.target.value === 'after' ? draft.reenrollDays ?? 30 : null})}>
+        <NativeSelect aria-label="Re-enrollment" value={draft.reenroll} onChange={(e) => onChange({reenroll: e.target.value as Draft['reenroll'], reenrollDays: e.target.value === 'after' ? draft.reenrollDays ?? 30 : null})}>
           <option value="always">Every time the trigger fires</option>
           <option value="never">Only once per record, ever</option>
           <option value="after">Again after a number of days</option>
         </NativeSelect>
         {draft.reenroll === 'after' && (
           <span className="flex items-center gap-2 text-sm text-slate-600">
-            At most once every <Input type="number" min={1} className="w-24" value={draft.reenrollDays ?? 30} onChange={(e) => onChange({reenrollDays: Math.max(1, Math.round(Number(e.target.value) || 1))})} /> days per record
+            At most once every <Input type="number" inputMode="numeric" aria-label="Days between runs for the same record" className="w-24" value={draft.reenrollDays ?? 30} onChange={(e) => onChange({reenrollDays: Math.max(1, Math.round(Number(e.target.value) || 1))})} /> days per record
           </span>
         )}
         <p className="text-xs text-muted-foreground">Loop protection is always on: runs caused by other automations stop after 5 in a row, and an automation runs at most 10 times an hour for the same record.</p>
       </Card>
       <Card className="grid gap-4 p-5">
-        <h3 className="text-base font-bold text-slate-900">Active dates</h3>
+        <h2 className="text-base font-bold text-slate-900">Active dates</h2>
         <p className="-mt-2 text-sm text-muted-foreground">Optional. Outside these dates the trigger starts no runs (runs already waiting carry on).</p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <Field label="From"><Input type="datetime-local" value={toLocalInput(draft.activeFrom)} onChange={(e) => onChange({activeFrom: toIso(e.target.value)})} /></Field>

@@ -33,7 +33,7 @@ export async function portalConfig(db: Db): Promise<PortalConfig> {
 export type CsatState = {number: number; subject: string; firstName: string | null; rating: number | null; comment: string | null} | null;
 
 export async function csatState(db: Db, token: string): Promise<CsatState> {
-  const id = await ticketFromCsatToken(token);
+  const id = await ticketFromCsatToken(db, token);
   const t = id ? await db.ticket.findUnique({where: {id}, include: {contact: {select: {firstName: true}}}}) : null;
   return t ? {number: t.number, subject: t.subject, firstName: t.contact?.firstName ?? null, rating: t.csatRating, comment: t.csatComment} : null;
 }
@@ -101,6 +101,9 @@ async function portalTicket(db: Db, origin: string, contactIds: string[], number
 
 const spam = (hp?: string, startedAt?: number) => !!hp || (!!startedAt && Date.now() - startedAt < 1500);
 
+/** A request number from the URL: digits only (`1.5`, `1e3` or `-1` are no request), else 0, which matches none. */
+const ticketNumber = (v: string) => (/^\d{1,9}$/.test(v) ? Number(v) : 0);
+
 /** The /support portal (the site's sign-in, see portalSession) and the CSAT page (a signed token). */
 export const supportPublic = new Hono<AppEnv>()
   .get('/support/config', async (c) => c.json(await portalConfig(c.var.db)))
@@ -164,7 +167,7 @@ export const supportPublic = new Hono<AppEnv>()
     await requirePortal(c);
     const session = await portalSession(c);
     if (!session) return c.json({session: null, ticket: null});
-    const ticket = await portalTicket(c.var.db, publicOrigin(c.req.raw), session.contactIds, Number(c.req.param('number')) || 0);
+    const ticket = await portalTicket(c.var.db, publicOrigin(c.req.raw), session.contactIds, ticketNumber(c.req.param('number')));
     return c.json({session: {firstName: session.contact?.firstName ?? null, email: session.email}, ticket});
   })
 
@@ -173,7 +176,8 @@ export const supportPublic = new Hono<AppEnv>()
     const db = c.var.db;
     const session = await portalSession(c);
     if (!session?.contact) throw new HTTPException(403, {message: 'Sign in with the email address of your request to reply.'});
-    const ticket = await db.ticket.findUnique({where: {number: Number(c.req.param('number')) || 0}});
+    const number = ticketNumber(c.req.param('number'));
+    const ticket = number ? await db.ticket.findUnique({where: {number}}) : null;
     if (!ticket || !ticket.contactId || !session.contactIds.includes(ticket.contactId)) throw notFound('Request');
     if (ticket.status === 'CLOSED') throw new HTTPException(400, {message: 'This request is closed. Please open a new one.'});
     const input = c.req.valid('json');
@@ -198,7 +202,7 @@ export const supportPublic = new Hono<AppEnv>()
 
   .post('/csat/:token', valid('json', z.object({rating: z.number().int().min(1).max(5), comment: z.string().trim().max(5000).optional()})), async (c) => {
     const db = c.var.db;
-    const id = await ticketFromCsatToken(c.req.param('token'));
+    const id = await ticketFromCsatToken(db, c.req.param('token'));
     const before = id ? await db.ticket.findUnique({where: {id}}) : null;
     if (!before) throw notFound('Link');
     const {rating, comment} = c.req.valid('json');

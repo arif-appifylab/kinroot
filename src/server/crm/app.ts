@@ -1,10 +1,11 @@
-import {Hono, type ErrorHandler, type MiddlewareHandler} from 'hono';
+import {Hono, type Context, type ErrorHandler, type MiddlewareHandler} from 'hono';
 import {bodyLimit} from 'hono/body-limit';
 import {HTTPException} from 'hono/http-exception';
 
 import {runsJobsLocally} from '../../platform/background';
 import {getDb} from '../../platform/db';
 import {problem} from '../../platform/guards';
+import {CRM_API} from './kit/config';
 import {loadUser, requireRole, requireWrite, type AppEnv} from './kit/guards';
 import {auth} from './routes/auth';
 import {bookingPublic} from './routes/booking-public';
@@ -16,6 +17,7 @@ import {deals} from './routes/deals';
 import {email} from './routes/email';
 import {inbox} from './routes/inbox';
 import {inboxChat} from './routes/inbox-chat';
+import {badges} from './routes/badges';
 import {chatPublic} from './routes/chat-public';
 import {website, websitePublic} from './routes/website';
 import './inbox/reports'; // registers the Conversations report object
@@ -68,8 +70,8 @@ import {drainBacklog, withOutbox} from './lib/jobs';
 
 /**
  * Kinroot's Site API, mounted at `/site-api/crm/*` by the site's Hono app (src/server/app.ts),
- * so it shares the template's guards (`sameOrigin`, `csrf`, the body limit) and never collides
- * with its routes. Two apps:
+ * so it shares the template's guards (`sameOrigin`, `csrf`) and never collides with its routes. Its
+ * request size limits are its own (`withBodyLimit` below; the site's 64 KB limit skips `/crm`). Two apps:
  *
  *   crmHooks  mounted BEFORE `csrf`: requests other services send (inbound email, incoming
  *             webhooks, the Data in API) and the tracking pixel / click links. They carry no CSRF
@@ -115,9 +117,33 @@ crmHooks
   .route('/public', dataInPublic)
   .onError(onError);
 
+/**
+ * Request size: 64 KB like the rest of the Site API, and 512 KB on the routes that save HTML or a
+ * logo (Settings → Branding, email templates / sending / design / signatures, inbox replies,
+ * broadcasts, ticket replies, forms): what worked in Kinroot before. Files never come through here.
+ */
+const LARGE_BODIES: [method: string, path: RegExp][] = [
+  ['PATCH', /^\/settings\/?$/],
+  ['*', /^\/email\/(?:send|design|templates(?:\/[^/]+)*|accounts(?:\/[^/]+)?)$/],
+  ['POST', /^\/inbox\/conversations\/[^/]+\/reply$/],
+  ['*', /^\/broadcasts(?:\/[^/]+)*$/],
+  ['POST', /^\/tickets\/[^/]+\/messages$/],
+  ['*', /^\/forms(?:\/[^/]+)?$/],
+];
+// The same words as the site's own limit (src/server/app.ts).
+const onTooLarge = (c: Context) => c.json(problem('too_large', 'That request is too large.'), 413);
+const smallBody = bodyLimit({maxSize: 64 * 1024, onError: onTooLarge});
+const largeBody = bodyLimit({maxSize: 512 * 1024, onError: onTooLarge});
+const withBodyLimit: MiddlewareHandler<AppEnv> = (c, next) => {
+  const path = c.req.path.startsWith(CRM_API) ? c.req.path.slice(CRM_API.length) : c.req.path;
+  const large = LARGE_BODIES.some(([method, re]) => (method === '*' || method === c.req.method) && re.test(path));
+  return (large ? largeBody : smallBody)(c, next);
+};
+
 const app = new Hono<AppEnv>();
 
-app.use('*', withCrmDb, withJobs);
+// The size limit first: before a body is read or a database client made.
+app.use('*', withBodyLimit, withCrmDb, withJobs);
 app.get('/health', (c) => c.json({ok: true}));
 
 // Public: signed file links and the calls of public pages (unsubscribe, forms, support, booking, chat).
@@ -161,6 +187,7 @@ app.route('/settings', settings);
 app.route('/email', email);
 app.route('/inbox', inbox);
 app.route('/inbox', inboxChat);
+app.route('/badges', badges);
 app.route('/files', files);
 app.route('/forms', forms);
 app.route('/lists', lists);

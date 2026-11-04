@@ -65,6 +65,8 @@ import {Card} from '../ui/card';
 import {confirm} from '../ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '../ui/dialog';
 import {Checkbox, Field, Input, NativeSelect, Switch} from '../ui/form';
+import {is, useFormState, type FormState} from '../ui/form-state';
+import {LoadError} from '../data-table';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger} from '../ui/menu';
 import {EmptyState, IconBadge, Tabs, TabsList, TabsTrigger} from '../ui/misc';
 import {CodeBlock, copy, Disclosure} from './shared';
@@ -103,7 +105,8 @@ export function IncomingWebhooks() {
               </div>
             )}
             {list.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
-            {!list.isLoading && rows.length === 0 && (
+            {list.isError && <LoadError error={list.error} onRetry={() => list.refetch()} title="The custom webhooks could not be loaded" />}
+            {!list.isLoading && !list.isError && rows.length === 0 && (
               <EmptyState
                 icon={<ArrowDownToLine />}
                 title="No custom webhooks yet"
@@ -138,8 +141,9 @@ export function IncomingWebhooks() {
 
 function useRegenerate(hook: IncomingWebhookRow) {
   const regenerate = useApiMutation(() => api.post(`/incoming-webhooks/${hook.id}/regenerate`), {invalidate: [keys.incomingWebhooks], success: 'New URL ready: update it in the sending tool'});
-  return async () =>
+  const run = async () =>
     (await confirm({title: 'Regenerate the URL?', description: 'The current URL stops working at once. Paste the new one into every tool that sends to it.', confirmLabel: 'Regenerate URL', destructive: true})) && regenerate.mutate(undefined);
+  return {run, pending: regenerate.isPending};
 }
 
 function HookRow({hook: h, onEdit, onLog}: {hook: IncomingWebhookRow; onEdit: () => void; onLog: () => void}) {
@@ -172,14 +176,14 @@ function HookRow({hook: h, onEdit, onLog}: {hook: IncomingWebhookRow; onEdit: ()
         </div>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <Switch checked={h.active} onCheckedChange={(v) => toggle.mutate(v)} aria-label={h.active ? 'Turn off' : 'Turn on'} />
+        <Switch checked={h.active} onCheckedChange={(v) => toggle.mutate(v)} disabled={toggle.isPending} aria-busy={toggle.isPending || undefined} aria-label={h.active ? 'Turn off' : 'Turn on'} />
         <Button variant="secondary" size="sm" onClick={onEdit}><Pencil /> Set up</Button>
         <Button variant="secondary" size="sm" onClick={onLog}><Clock /> Log</Button>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="More"><MoreHorizontal /></Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label="More" pending={remove.isPending || regenerate.pending}><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent>
             <DropdownMenuItem onSelect={() => copy(h.url, 'URL copied')}><Copy /> Copy URL</DropdownMenuItem>
-            <DropdownMenuItem onSelect={regenerate}><KeyRound /> Regenerate URL</DropdownMenuItem>
+            <DropdownMenuItem onSelect={regenerate.run}><KeyRound /> Regenerate URL</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem destructive onSelect={async () => (await confirm({title: `Delete “${h.name}”?`, description: 'Its URL stops working and its request log is deleted.', confirmLabel: 'Delete', destructive: true})) && remove.mutate(undefined)}>
               <Trash2 /> Delete
@@ -219,18 +223,19 @@ function NewHookDialog({onClose, onCreated}: {onClose: () => void; onCreated: (h
     success: 'Created: copy the URL, then map the fields',
     onSuccess: (r) => onCreated(r.webhook),
   });
+  const f = useFormState({name}, {name: [is.required('Give the webhook a name.'), is.maxLength(100)]});
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !create.isPending && onClose()}>
       <DialogContent size="md">
-        <form onSubmit={(e) => (e.preventDefault(), create.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => create.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>Add custom webhook</DialogTitle>
             <DialogDescription>You get a secret URL to paste into the other tool. Map its fields in the next step.</DialogDescription>
           </DialogHeader>
           <DialogBody>
             <div className="grid gap-5">
-              <Field label="Name" htmlFor={`${ids}-name`} hint="e.g. “Stripe checkouts” or “Website sign-ups (Zapier)”">
-                <Input id={`${ids}-name`} value={name} onChange={(e) => setName(e.target.value)} maxLength={100} required autoFocus />
+              <Field label="Name" htmlFor={`${ids}-name`} hint="e.g. “Stripe checkouts” or “Website sign-ups (Zapier)”" error={f.error('name')}>
+                <Input id={`${ids}-name`} value={name} onChange={(e) => setName(e.target.value)} onBlur={f.blur('name')} maxLength={100} autoFocus />
               </Field>
               <Field label="What it does">
                 <ActionPicker value={action} onChange={setAction} />
@@ -238,8 +243,8 @@ function NewHookDialog({onClose, onCreated}: {onClose: () => void; onCreated: (h
             </div>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={create.isPending || !name.trim()}>{create.isPending && <Loader2 className="animate-spin" />} Create</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={create.isPending}>Cancel</Button>
+            <Button type="submit" pending={create.isPending} pendingLabel="Creating…">Create</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -277,6 +282,8 @@ function Section({title, hint, children, actions}: {title: string; hint?: ReactN
 function randomSecret() {
   return [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+type HookFields = {name: string; verifyHeader: string; secretName: string; idempotencyPath: string};
 
 function HookDialog({hook, onClose, onLog}: {hook: IncomingWebhookRow; onClose: () => void; onLog: () => void}) {
   const ids = useId();
@@ -326,6 +333,13 @@ function HookDialog({hook, onClose, onLog}: {hook: IncomingWebhookRow; onClose: 
     {invalidate: [keys.incomingWebhooks], success: 'Incoming webhook saved', onSuccess: onClose},
   );
 
+  const f = useFormState<HookFields>({name, verifyHeader, secretName, idempotencyPath: config.idempotencyPath}, {
+    name: [is.required('Give the webhook a name.'), is.maxLength(100)],
+    verifyHeader: [is.required('Enter the header the sending tool uses.'), is.maxLength(100), is.pattern(/^[A-Za-z0-9-]*$/, 'Use letters, digits and dashes only.')],
+    secretName: [(v) => (INCOMING_SECRET_NAME.test(v.trim()) ? null : 'Use capital letters, digits and _ after INCOMING_, e.g. INCOMING_STRIPE_SECRET.')],
+    idempotencyPath: [is.maxLength(200)],
+  });
+
   const changeAction = (a: InAction) => {
     setAction(a);
     // Fields the new action can't write are dropped.
@@ -334,9 +348,9 @@ function HookDialog({hook, onClose, onLog}: {hook: IncomingWebhookRow; onClose: 
   };
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !save.isPending && onClose()}>
       <DialogContent size="xl">
-        <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>Set up incoming webhook</DialogTitle>
             <DialogDescription>Map what the other tool sends onto CRM fields. Changes apply to requests received after you save.</DialogDescription>
@@ -344,8 +358,8 @@ function HookDialog({hook, onClose, onLog}: {hook: IncomingWebhookRow; onClose: 
           <DialogBody>
             <div className="grid grid-cols-1 gap-6 @4xl:grid-cols-[minmax(0,1fr)_360px]">
               <div className="grid min-w-0 content-start gap-6">
-                <Field label="Name" htmlFor={`${ids}-name`}>
-                  <Input id={`${ids}-name`} value={name} onChange={(e) => setName(e.target.value)} maxLength={100} required />
+                <Field label="Name" htmlFor={`${ids}-name`} error={f.error('name')}>
+                  <Input id={`${ids}-name`} value={name} onChange={(e) => setName(e.target.value)} onBlur={f.blur('name')} maxLength={100} />
                 </Field>
                 <Section title="What it does">
                   <ActionPicker value={action} onChange={changeAction} />
@@ -355,6 +369,7 @@ function HookDialog({hook, onClose, onLog}: {hook: IncomingWebhookRow; onClose: 
                 <OptionsEditor action={action} config={config} onChange={set} />
                 <SecurityEditor
                   ids={ids}
+                  form={f}
                   verify={verify}
                   setVerify={setVerify}
                   header={verifyHeader}
@@ -372,8 +387,8 @@ function HookDialog({hook, onClose, onLog}: {hook: IncomingWebhookRow; onClose: 
             </div>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending || !name.trim()}>{save.isPending && <Loader2 className="animate-spin" />} Save</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel="Saving…">Save</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -509,7 +524,7 @@ function Chips<T extends string>({value, options, onChange, label}: {value: T; o
           role="radio"
           aria-checked={value === v}
           onClick={() => onChange(v)}
-          className={cn('cursor-pointer rounded-full border px-3 py-1.5 text-sm font-medium transition-colors', value === v ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-600 hover:border-primary/50')}
+          className={cn('cursor-pointer rounded-full border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/30', value === v ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-600 hover:border-primary/50')}
         >
           {text}
         </button>
@@ -630,6 +645,7 @@ function OptionsEditor({action, config, onChange}: {action: InAction; config: In
 
 function SecurityEditor(p: {
   ids: string;
+  form: FormState<HookFields>;
   verify: InVerify;
   setVerify: (v: InVerify) => void;
   header: string;
@@ -644,7 +660,7 @@ function SecurityEditor(p: {
 }) {
   const {ids, verify} = p;
   const [generated, setGenerated] = useState('');
-  const nameError = INCOMING_SECRET_NAME.test(p.secretName.trim()) ? null : 'Use capital letters, digits and _ after INCOMING_, e.g. INCOMING_STRIPE_SECRET';
+  const f = p.form;
   const pickVerify = (v: InVerify) => {
     p.setVerify(v);
     if (!p.header.trim()) p.setHeader(v === 'hmac' ? 'X-Signature' : 'X-Webhook-Secret');
@@ -664,8 +680,8 @@ function SecurityEditor(p: {
           ))}
         </div>
         <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
-            <Field label={verify === 'hmac' ? 'Signature header' : 'Header name'} htmlFor={`${ids}-header`} hint={verify === 'hmac' ? 'An optional sha256= prefix is accepted.' : undefined}>
-              <Input id={`${ids}-header`} value={p.header} onChange={(e) => p.setHeader(e.target.value.replace(/[^A-Za-z0-9-]/g, ''))} placeholder={verify === 'hmac' ? 'X-Signature' : 'X-Webhook-Secret'} className="font-mono text-xs" required />
+            <Field label={verify === 'hmac' ? 'Signature header' : 'Header name'} htmlFor={`${ids}-header`} hint={verify === 'hmac' ? 'An optional sha256= prefix is accepted.' : undefined} error={f.error('verifyHeader')}>
+              <Input id={`${ids}-header`} value={p.header} onChange={(e) => p.setHeader(e.target.value.replace(/[^A-Za-z0-9-]/g, ''))} onBlur={f.blur('verifyHeader')} placeholder={verify === 'hmac' ? 'X-Signature' : 'X-Webhook-Secret'} className="font-mono text-xs" maxLength={100} />
             </Field>
             {verify === 'hmac' && (
               <Field label="Signature encoding">
@@ -679,11 +695,11 @@ function SecurityEditor(p: {
               label={verify === 'hmac' ? 'Site secret with the signing key' : 'Site secret with the secret'}
               htmlFor={`${ids}-secret`}
               className="@xl:col-span-2"
-              error={nameError}
+              error={f.error('secretName')}
               hint={p.secretAdded ? 'Added in your dashboard. Requests must match its value.' : 'Not added yet: until it is, every request is refused. In your dashboard, add a secret with this name and the value the sending tool uses.'}
             >
               <div className="flex flex-wrap items-center gap-2">
-                <Input id={`${ids}-secret`} value={p.secretName} onChange={(e) => p.setSecretName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))} aria-invalid={!!nameError} className="min-w-0 flex-1 font-mono text-xs" autoComplete="off" spellCheck={false} />
+                <Input id={`${ids}-secret`} value={p.secretName} onChange={(e) => p.setSecretName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))} onBlur={f.blur('secretName')} className="min-w-0 flex-1 font-mono text-xs" autoComplete="off" spellCheck={false} />
                 <Badge tone={p.secretAdded ? 'green' : 'amber'}>{p.secretAdded ? 'Added' : 'Not added'}</Badge>
               </div>
             </Field>
@@ -701,11 +717,11 @@ function SecurityEditor(p: {
             </div>
         </div>
         <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2">
-          <Field label="Idempotency path" hint="A unique id in the payload, e.g. id. Repeats with the same value are ignored. An Idempotency-Key header works too.">
-            <Input value={p.config.idempotencyPath} onChange={(e) => p.onChange({idempotencyPath: e.target.value})} placeholder="id" className="font-mono text-xs" maxLength={200} />
+          <Field label="Idempotency path" hint="A unique id in the payload, e.g. id. Repeats with the same value are ignored. An Idempotency-Key header works too." error={f.error('idempotencyPath')}>
+            <Input value={p.config.idempotencyPath} onChange={(e) => p.onChange({idempotencyPath: e.target.value})} onBlur={f.blur('idempotencyPath')} placeholder="id" className="font-mono text-xs" maxLength={200} />
           </Field>
           <Field label="Requests per minute" hint="More are refused with 429 so the sender retries later.">
-            <Input type="number" min={1} max={1000} value={p.config.rateLimit} onChange={(e) => p.onChange({rateLimit: Math.max(1, Math.min(1000, Number(e.target.value) || 1))})} />
+            <Input type="number" inputMode="numeric" value={p.config.rateLimit} onChange={(e) => p.onChange({rateLimit: Math.max(1, Math.min(1000, Number(e.target.value) || 1))})} />
           </Field>
         </div>
       </div>
@@ -748,7 +764,7 @@ function EndpointPanel({hook, action, paths, verify, header, encoding, onLog, on
         </div>
         <label className="flex shrink-0 items-center gap-2 text-xs font-semibold text-slate-600">
           {hook.active ? 'On' : 'Off'}
-          <Switch checked={hook.active} onCheckedChange={(v) => toggle.mutate(v)} aria-label={hook.active ? 'Turn off' : 'Turn on'} />
+          <Switch checked={hook.active} onCheckedChange={(v) => toggle.mutate(v)} disabled={toggle.isPending} aria-busy={toggle.isPending || undefined} aria-label={hook.active ? 'Turn off' : 'Turn on'} />
         </label>
       </div>
       <div className="flex gap-2">
@@ -756,7 +772,9 @@ function EndpointPanel({hook, action, paths, verify, header, encoding, onLog, on
         <Button type="button" variant="secondary" size="icon" onClick={() => copy(hook.url, 'URL copied')} aria-label="Copy URL"><Copy /></Button>
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
-        <button type="button" className="inline-flex cursor-pointer items-center gap-1 font-semibold text-primary hover:underline" onClick={regenerate}><RefreshCw className="size-3" /> Regenerate URL</button>
+        <button type="button" className="inline-flex cursor-pointer items-center gap-1 font-semibold text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50" onClick={regenerate.run} disabled={regenerate.pending} aria-busy={regenerate.pending || undefined}>
+          {regenerate.pending ? <Loader2 className="size-3 animate-spin" aria-hidden /> : <RefreshCw className="size-3" />} {regenerate.pending ? 'Regenerating…' : 'Regenerate URL'}
+        </button>
         <button type="button" className="inline-flex cursor-pointer items-center gap-1 font-semibold text-primary hover:underline" onClick={onLog}><Clock className="size-3" /> Request log</button>
       </div>
 
@@ -766,11 +784,11 @@ function EndpointPanel({hook, action, paths, verify, header, encoding, onLog, on
           <div className="flex items-center gap-3 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2.5" role="status" aria-live="polite">
             <Loader2 className="size-4 shrink-0 animate-spin text-violet-600" />
             <p className="min-w-0 flex-1 text-xs text-violet-800">Listening… send a request to the URL now ({Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')} left). Nothing is written.</p>
-            <Button type="button" size="sm" variant="secondary" onClick={() => listen.mutate(false)}>Stop</Button>
+            <Button type="button" size="sm" variant="secondary" onClick={() => listen.mutate(false)} pending={listen.isPending} pendingLabel="Stopping…">Stop</Button>
           </div>
         ) : (
-          <Button type="button" variant="secondary" size="sm" className="justify-self-start" onClick={() => listen.mutate(true)} disabled={listen.isPending}>
-            {listen.isPending ? <Loader2 className="animate-spin" /> : <Ear />} {hook.sample ? 'Listen again' : 'Listen for a test request'}
+          <Button type="button" variant="secondary" size="sm" className="justify-self-start" onClick={() => listen.mutate(true)} pending={listen.isPending} pendingLabel="Starting…">
+            <Ear /> {hook.sample ? 'Listen again' : 'Listen for a test request'}
           </Button>
         )}
         {!hook.listening && <p className="text-xs text-muted-foreground">The next request (for {LISTEN_MINUTES} minutes) becomes the sample: its fields show below to map. It writes no record, even while the webhook is off.</p>}
@@ -780,7 +798,17 @@ function EndpointPanel({hook, action, paths, verify, header, encoding, onLog, on
         <div className="grid gap-2">
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-semibold text-slate-600">Sample fields <span className="font-normal text-muted-foreground">· {ago(hook.sample.at)}</span></p>
-            <button type="button" className="cursor-pointer text-xs font-semibold text-slate-500 hover:text-rose-600" onClick={() => clear.mutate(undefined)}>Clear</button>
+            <button
+              type="button"
+              className="cursor-pointer text-xs font-semibold text-slate-500 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={clear.isPending}
+              aria-busy={clear.isPending || undefined}
+              onClick={async () => {
+                if (await confirm({title: 'Clear the sample?', description: 'Its fields leave this list. Listen again to capture a new one; your mapping stays.', confirmLabel: 'Clear sample', destructive: true})) clear.mutate(undefined);
+              }}
+            >
+              {clear.isPending ? 'Clearing…' : 'Clear'}
+            </button>
           </div>
           {paths.length === 0 ? (
             <p className="text-xs text-muted-foreground">The sample has no fields.</p>
@@ -869,7 +897,8 @@ function RequestLogDialog({hook, onClose}: {hook: IncomingWebhookRow; onClose: (
             </TabsList>
           </Tabs>
           {list.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
-          {!list.isLoading && rows.length === 0 && <EmptyState icon={<Clock />} title={filter === 'failed' ? 'No failed requests' : 'No requests yet'} description={filter === 'failed' ? 'Requests that could not be processed show up here.' : 'Send a test request to the URL, or wait for the other tool to send one.'} />}
+          {list.isError && !list.data && <LoadError error={list.error} onRetry={() => list.refetch()} title="The request log could not be loaded" />}
+          {!list.isLoading && !list.isError && rows.length === 0 && <EmptyState icon={<Clock />} title={filter === 'failed' ? 'No failed requests' : 'No requests yet'} description={filter === 'failed' ? 'Requests that could not be processed show up here.' : 'Send a test request to the URL, or wait for the other tool to send one.'} />}
           <ul className="divide-y divide-slate-100">
             {rows.map((r) => {
               const s = IN_STATUSES[r.status] ?? IN_STATUSES.accepted;
@@ -891,7 +920,7 @@ function RequestLogDialog({hook, onClose}: {hook: IncomingWebhookRow; onClose: (
                         <span>{(r.size / 1024).toFixed(1)} KB{r.contentType ? ` · ${r.contentType.split(';')[0]}` : ''}</span>
                         {r.attempts > 0 && <span>Attempts: {r.attempts}</span>}
                         {r.status === 'failed' && (
-                          <Button size="sm" variant="secondary" className="ml-auto h-7" onClick={() => retry.mutate(r.id)} disabled={retry.isPending}><RefreshCw /> Retry</Button>
+                          <Button size="sm" variant="secondary" className="ml-auto h-7" onClick={() => retry.mutate(r.id)} disabled={retry.isPending} pending={retry.isPending && retry.variables === r.id} pendingLabel="Queuing…"><RefreshCw /> Retry</Button>
                         )}
                       </div>
                       {r.error && <p className="font-semibold text-rose-600">{r.error}</p>}

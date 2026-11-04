@@ -10,7 +10,12 @@ import {siteFetch} from '../../platform/browser';
 export const CRM_API = '/site-api/crm';
 
 export class ApiError extends Error {
-  constructor(message: string, public status: number) {
+  constructor(
+    message: string,
+    public status: number,
+    /** The server's field errors (`422 {error, fields}`): field name → words that say how to fix it. */
+    public fields: Record<string, string> = {},
+  ) {
     super(message);
   }
 }
@@ -31,6 +36,13 @@ export function signInPath() {
   return `/account/login/?next=${encodeURIComponent(here)}`;
 }
 
+function readFields(fields: unknown): Record<string, string> {
+  if (!fields || typeof fields !== 'object') return {};
+  const out: Record<string, string> = {};
+  for (const [name, message] of Object.entries(fields)) if (typeof message === 'string' && message) out[name] = message;
+  return out;
+}
+
 async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
   const res = await siteFetch(`${CRM_API}${path}${qs(query)}`, {
     method,
@@ -38,10 +50,10 @@ async function request<T>(method: string, path: string, body?: unknown, query?: 
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   // Kinroot routes answer `{error: "<words>"}`; the template's guards `{error: "<code>", message: "<words>"}`.
-  const data = (await res.json().catch(() => ({}))) as {error?: string; message?: string};
+  const data = (await res.json().catch(() => ({}))) as {error?: string; message?: string; fields?: unknown};
   if (!res.ok) {
     if (res.status === 401 && typeof window !== 'undefined') window.location.href = signInPath();
-    throw new ApiError(data.message ?? data.error ?? `Request failed (${res.status})`, res.status);
+    throw new ApiError(data.message ?? data.error ?? `Request failed (${res.status})`, res.status, readFields(data.fields));
   }
   return data as T;
 }

@@ -1,7 +1,9 @@
 ---
 /**
  * The customer support portal: open a request (src/crm/public/support-home.tsx). Customers follow
- * their requests by signing in to this site with the address they wrote from.
+ * their requests by signing in to this site with the address they wrote from. Indexable while the
+ * portal is on: its heading and intro are in the server's HTML (the island's fallback), the form
+ * itself is the island.
  */
 import SupportHomePage from '../../crm/public/support-home';
 import CrmPublic from '../../layouts/CrmPublic.astro';
@@ -13,8 +15,19 @@ export const prerender = false;
 const [brand, config] = await Promise.all([crmBrand(Astro.request), crmRead<PortalConfig>(Astro.request, '/public/support/config')]);
 // Not a visitor's data (the page asks for theirs in the browser): a short private cache.
 Astro.response.headers.set('Cache-Control', 'private, max-age=60');
+const portal = config ?? {enabled: false, intro: '', categories: []};
+const name = brand.name || 'us';
+// The same words the form shows (src/crm/public/support-home.tsx), so nothing jumps when it loads.
+const heading = `How can ${name} help?`;
+const description = `Get help from ${name}: send a request and follow it by email.`;
 ---
 
-<CrmPublic brand={brand} title="Support" description={`Get help from ${brand.name || 'us'}.`}>
-  <SupportHomePage client:only="react" brand={brand} config={config ?? {enabled: false, intro: '', categories: []}} />
+<CrmPublic brand={brand} title="Support" description={description} indexable={portal.enabled} noindex={!portal.enabled}>
+  <SupportHomePage client:only="react" brand={brand} config={portal}>
+    {/* In the server's HTML for search engines and the first paint; the form replaces it when it loads. */}
+    <main slot="fallback" class="mx-auto grid max-w-2xl gap-2 px-4 py-10">
+      <h1 class="text-xl font-extrabold tracking-tight text-slate-900">{portal.enabled ? heading : 'Support portal unavailable'}</h1>
+      <p class="text-sm text-muted-foreground">{portal.enabled ? portal.intro || description : `Please contact ${name} by email instead.`}</p>
+    </main>
+  </SupportHomePage>
 </CrmPublic>

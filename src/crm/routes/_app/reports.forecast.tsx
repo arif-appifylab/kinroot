@@ -9,6 +9,7 @@ import {Button} from '@/components/ui/button';
 import {Card, CardContent, CardDescription, CardHeader, CardTitle} from '@/components/ui/card';
 import {NativeSelect} from '@/components/ui/form';
 import {Avatar, EmptyState, PageHeader, Skeleton} from '@/components/ui/misc';
+import {LoadError} from '@/components/data-table';
 import {api, qs} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
 import {money, shortDate} from '@/lib/format';
@@ -84,7 +85,11 @@ function ForecastPage() {
         }
       />
 
-      {!f || !chart ? (
+      {query.isError && !f ? (
+        <Card>
+          <LoadError error={query.error} onRetry={() => query.refetch()} />
+        </Card>
+      ) : !f || !chart ? (
         <Skeleton className="h-96 rounded-xl" />
       ) : (
         <div className={cn('grid grid-cols-1 gap-6 transition-opacity', query.isFetching && 'opacity-60')}>

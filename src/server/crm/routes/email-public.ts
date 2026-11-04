@@ -5,9 +5,9 @@ import {verifySignature} from '../kit/crypto';
 import type {AppEnv} from '../kit/guards';
 import {logActivity} from '../lib/activity';
 import {emit} from '../lib/events';
-import {getSettings} from '../lib/settings';
+import {getPrivateSettings, getSettings} from '../lib/settings';
 import {parseAddressList, stripAngle, type Address} from '../email/mime';
-import {verifyInbound} from '../email/inbound-auth';
+import {firstDelivery, verifyInbound} from '../email/inbound-auth';
 import {receiveInbound, resendIncoming} from '../email/replies';
 import type {IncomingMessage} from '../email/service';
 
@@ -144,7 +144,7 @@ export const emailPublic = new Hono<AppEnv>()
 
   .post('/inbound/:token', async (c) => {
     const db = c.var.db;
-    const settings = await getSettings(db);
+    const settings = await getPrivateSettings(db); // the token is a private setting, read from the database
     if (!settings.inboundToken || !sameToken(c.req.param('token'), settings.inboundToken)) return c.json({error: 'Unknown inbound address'}, 404);
     // Only the mail service may post here: its signature (or Basic credentials) before the body is used.
     const verified = await verifyInbound(c);
@@ -152,11 +152,19 @@ export const emailPublic = new Hono<AppEnv>()
       console.warn(`[inbound] refused: ${verified.reason}`);
       return c.json({error: 'Not signed by your mail service. See Settings → Email → Inbound webhook.'}, 401);
     }
-    const body = verified.body;
-    // Resend Receiving sends an event without the content; it is fetched from the API.
-    const resend = body.type === 'email.received' && body.data ? await resendIncoming(db, body.data as {email_id?: string; to?: string[]}) : null;
-    const parsed = resend?.message ?? (body.type === 'email.received' ? null : parseInbound(body));
-    if (!parsed?.from?.email) return c.json({ok: false, reason: 'Unrecognised payload'}, 200);
-    const message = await receiveInbound(db, parsed, {origin: publicOrigin(c.req.raw), account: resend?.account});
-    return c.json({ok: true, stored: !!message});
+    // The same signed request twice (a replay, or the service retrying one we already took) is taken once.
+    const seen = verified.delivery ? await firstDelivery(db, verified.delivery) : null;
+    if (seen && !seen.first) return c.json({ok: true, stored: false, duplicate: true});
+    try {
+      const body = verified.body;
+      // Resend Receiving sends an event without the content; it is fetched from the API.
+      const resend = body.type === 'email.received' && body.data ? await resendIncoming(db, body.data as {email_id?: string; to?: string[]}) : null;
+      const parsed = resend?.message ?? (body.type === 'email.received' ? null : parseInbound(body));
+      if (!parsed?.from?.email) return c.json({ok: false, reason: 'Unrecognised payload'}, 200);
+      const message = await receiveInbound(db, parsed, {origin: publicOrigin(c.req.raw), account: resend?.account});
+      return c.json({ok: true, stored: !!message});
+    } catch (e) {
+      await seen?.forget(); // not stored: the service's retry must go through
+      throw e;
+    }
   });

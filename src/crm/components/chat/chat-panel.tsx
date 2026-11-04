@@ -1,8 +1,10 @@
 import {Check, CheckCheck, Loader2, Mail, Paperclip, Send, X} from 'lucide-react';
-import {useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent} from 'react';
+import {useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent} from 'react';
 
 import {speaker, type VisitorMessage} from '@/lib/chat';
 import {cn} from '@/lib/utils';
+
+import {is, useFormState} from '../ui/form-state';
 
 import {fileSize, MessageFiles, MessageText} from './message-text';
 import type {ChatState, UploadedFile} from './use-chat';
@@ -10,14 +12,15 @@ import type {ChatState, UploadedFile} from './use-chat';
 /**
  * The visitor's chat panel: header (brand colour, team, availability),
  * messages, the optional pre-chat form, the "leave your email" prompt while
- * the team is away, and the composer. Used by the embedded iframe
- * (/chat/widget), the in-app <ChatWidget>, the email link page (/chat/c/…)
+ * the team is away, and the composer. Used by the chat window the website
+ * snippet opens (/chat/), the in-app <ChatWidget>, the email link page (/chat/c/…)
  * and the live preview in Settings → Inbox → Chat. Always light; messages are
  * plain text with safe links. `trap` keeps keyboard focus inside the panel.
  */
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const emailOk = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+const fieldClass = 'h-9 rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-[var(--chat)] focus:ring-2 focus:ring-[var(--chat)]/20 aria-invalid:border-rose-500';
 const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, {hour: 'numeric', minute: '2-digit'});
 
 function Initials({name, color, src, size = 28}: {name: string; color: string; src?: string | null; size?: number}) {
@@ -65,12 +68,24 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
   const [email, setEmail] = useState('');
   const [awayEmail, setAwayEmail] = useState('');
   const [hp, setHp] = useState('');
+  const [savingEmail, setSavingEmail] = useState(false);
+  const uid = useId();
   const startedAt = useRef(Date.now());
   const conv = chat.conversation;
   const messages = conv?.messages ?? [];
   const known = chat.session?.email;
   const preChat = !conv && cfg && cfg.preChat !== 'off' && !known;
-  const needsEmail = preChat && cfg?.preChat === 'required' && !emailOk(email);
+  // The pre-chat details and the "reply by email" address: errors under the fields, never browser popups.
+  const details = useFormState(
+    {name, email},
+    preChat
+      ? {
+          name: [is.maxLength(120)],
+          email: [...(cfg?.preChat === 'required' ? [is.required('Enter your email so we can reply.')] : []), is.email('Enter a valid email, like you@example.com.'), is.maxLength(200)],
+        }
+      : {},
+  );
+  const away = useFormState({awayEmail}, {awayEmail: [is.required('Enter your email to get the reply.'), is.email('Enter a valid email, like you@example.com.')]});
   const lastMine = [...messages].reverse().find((m) => m.from === 'visitor')?.id;
 
   // Newest message in view; new ones are announced by the log's aria-live.
@@ -113,7 +128,8 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
     if (fileInput.current) fileInput.current.value = '';
   }
 
-  const canSend = !preview && !chat.sending && !uploading && (!!text.trim() || files.length > 0) && !needsEmail;
+  const canSend = !preview && !chat.sending && !uploading && (!!text.trim() || files.length > 0);
+  const send = details.submit(() => void submit());
   async function submit() {
     if (!canSend) return;
     const ok = conv
@@ -180,44 +196,79 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
       {conv && cfg.away && !known && (
         <form
           className="mx-3 mb-2 grid gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (emailOk(awayEmail)) await chat.identify({email: awayEmail.trim()});
-          }}
+          {...away.form(async () => {
+            if (savingEmail) return;
+            setSavingEmail(true);
+            try {
+              await chat.identify({email: awayEmail.trim()});
+            } finally {
+              setSavingEmail(false);
+            }
+          })}
         >
-          <label htmlFor="chat-away-email" className="text-xs font-semibold text-slate-700">Get the reply by email</label>
+          <label htmlFor={`${uid}-away-email`} className="text-xs font-semibold text-slate-700">Get the reply by email</label>
           <div className="flex gap-2">
-            <input id="chat-away-email" type="email" autoComplete="email" required value={awayEmail} onChange={(e) => setAwayEmail(e.target.value)} placeholder="you@example.com" className="h-9 min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none focus:border-[var(--chat)] focus:ring-2 focus:ring-[var(--chat)]/20" />
-            <button type="submit" className="h-9 cursor-pointer rounded-lg px-3 text-sm font-semibold text-white disabled:opacity-50" style={{background: color}} disabled={!emailOk(awayEmail)}>Save</button>
+            <input
+              id={`${uid}-away-email`}
+              type="email"
+              autoComplete="email"
+              value={awayEmail}
+              onChange={(e) => setAwayEmail(e.target.value)}
+              onBlur={away.blur('awayEmail')}
+              aria-invalid={away.invalid('awayEmail') || undefined}
+              aria-describedby={away.invalid('awayEmail') ? `${uid}-away-email-error` : undefined}
+              placeholder="you@example.com"
+              className={cn(fieldClass, 'min-w-0 flex-1 bg-white')}
+            />
+            <button type="submit" className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50" style={{background: color}} disabled={savingEmail} aria-busy={savingEmail || undefined}>
+              {savingEmail && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
+              {savingEmail ? 'Saving…' : 'Save'}
+            </button>
           </div>
+          {away.error('awayEmail') && <p id={`${uid}-away-email-error`} role="alert" className="text-xs font-medium text-rose-700">{away.error('awayEmail')}</p>}
         </form>
       )}
       {conv && known && cfg.away && <p className="mx-3 mb-2 text-center text-[11px] text-slate-500">We'll reply to {known} if you've left by then.</p>}
 
-      <form
-        className="border-t border-slate-100 p-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit();
-        }}
-      >
+      <form ref={details.ref} noValidate className="border-t border-slate-100 p-3" onSubmit={send}>
         {preChat && (
           <div className="mb-2.5 grid gap-2">
             {cfg.preChatIntro && <p className="text-xs text-slate-500">{cfg.preChatIntro}</p>}
             {cfg.askName && (
-              <input aria-label="Your name" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" maxLength={120} className="h-9 rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-[var(--chat)] focus:ring-2 focus:ring-[var(--chat)]/20" />
+              <div className="grid gap-1">
+                <label htmlFor={`${uid}-name`} className="text-xs font-semibold text-slate-700">Your name</label>
+                <input
+                  id={`${uid}-name`}
+                  autoComplete="name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onBlur={details.blur('name')}
+                  aria-invalid={details.invalid('name') || undefined}
+                  aria-describedby={details.invalid('name') ? `${uid}-name-error` : undefined}
+                  placeholder="Jane Doe"
+                  maxLength={120}
+                  className={fieldClass}
+                />
+                {details.error('name') && <p id={`${uid}-name-error`} role="alert" className="text-xs font-medium text-rose-700">{details.error('name')}</p>}
+              </div>
             )}
-            <input
-              aria-label={cfg.preChat === 'required' ? 'Your email (required)' : 'Your email (optional)'}
-              type="email"
-              autoComplete="email"
-              required={cfg.preChat === 'required'}
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder={cfg.preChat === 'required' ? 'Your email' : 'Your email (optional)'}
-              maxLength={200}
-              className="h-9 rounded-lg border border-slate-300 px-3 text-sm outline-none focus:border-[var(--chat)] focus:ring-2 focus:ring-[var(--chat)]/20"
-            />
+            <div className="grid gap-1">
+              <label htmlFor={`${uid}-email`} className="text-xs font-semibold text-slate-700">{cfg.preChat === 'required' ? 'Your email' : 'Your email (optional)'}</label>
+              <input
+                id={`${uid}-email`}
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onBlur={details.blur('email')}
+                aria-invalid={details.invalid('email') || undefined}
+                aria-describedby={details.invalid('email') ? `${uid}-email-error` : undefined}
+                placeholder="you@example.com"
+                maxLength={200}
+                className={fieldClass}
+              />
+              {details.error('email') && <p id={`${uid}-email-error`} role="alert" className="text-xs font-medium text-rose-700">{details.error('email')}</p>}
+            </div>
           </div>
         )}
         {files.length > 0 && (
@@ -257,16 +308,16 @@ export function ChatPanel({chat, onClose, trap, preview, className}: {chat: Chat
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
-                submit();
+                send();
               }
             }}
             className="max-h-[120px] min-h-[36px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm leading-relaxed outline-none placeholder:text-slate-400"
           />
           <input ref={fileInput} type="file" multiple className="sr-only" tabIndex={-1} aria-hidden onChange={(e) => attach(e.target.files)} accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.txt,.csv,.zip" />
-          <button type="button" disabled={preview || uploading || files.length >= 5} onClick={() => fileInput.current?.click()} className="cursor-pointer rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-default disabled:opacity-50" aria-label="Attach a file (up to 5 MB)">
+          <button type="button" disabled={preview || uploading || files.length >= 5} aria-busy={uploading || undefined} onClick={() => fileInput.current?.click()} className="cursor-pointer rounded-lg p-2 text-slate-400 outline-none hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-[var(--chat)]/30 disabled:cursor-not-allowed disabled:opacity-50" aria-label={uploading ? 'Uploading…' : 'Attach a file (up to 5 MB)'}>
             {uploading ? <Loader2 className="size-4 animate-spin" /> : <Paperclip className="size-4" />}
           </button>
-          <button type="submit" disabled={!canSend} className="cursor-pointer rounded-lg p-2 text-white transition-opacity disabled:cursor-default disabled:opacity-40" style={{background: color}} aria-label="Send">
+          <button type="submit" disabled={!canSend} aria-busy={chat.sending || undefined} className="cursor-pointer rounded-lg p-2 text-white transition-opacity outline-none focus-visible:ring-2 focus-visible:ring-[var(--chat)]/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-40" style={{background: color}} aria-label={chat.sending ? 'Sending…' : 'Send'}>
             {chat.sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
           </button>
         </div>

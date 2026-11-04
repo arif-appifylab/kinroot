@@ -5,6 +5,8 @@ import {createInteraction, refreshInteractionActivity} from '../routes/interacti
 import {connectionCredentials, type CalendarProvider} from './oauth';
 import {busyTimes, cancelEvent, createEvent, listCalendars, listEvents, updateEvent, type CalendarInfo, type EventInput} from './providers';
 import {teamAddresses} from '../lib/users';
+import {enqueue} from '../lib/jobs';
+import {cache} from '../../../platform/cache';
 
 const DAY = 86_400_000;
 
@@ -32,24 +34,30 @@ export async function refreshCalendars(db: Db, conn: CalendarConnection) {
 
 // ─── Busy times for booking pages ───────────────────────────────────────────
 
+/** Busy times are another service's data: kept 2 minutes per host and range (nothing clears them; a new booking is checked against the database too). */
+const BUSY_TTL_S = 120;
+
 /**
  * Busy blocks from every connected calendar of a user. A calendar that can't
  * be read is skipped (and flagged in Settings → Calendar) rather than hiding
- * every slot.
+ * every slot. Cached (Site Cache) per host and range: a booking page asks for
+ * the same week on every visit, and each miss is a live Google / Microsoft call.
  */
 export async function calendarBusy(db: Db, userId: string, from: Date, to: Date): Promise<Interval[]> {
-  const conns = await db.calendarConnection.findMany({where: {userId}});
-  const out: Interval[] = [];
-  for (const conn of conns) {
-    if (!conn.busyCalendarIds.length) continue;
-    try {
-      const creds = await connectionCredentials(db, conn);
-      out.push(...(await busyTimes(conn.provider as CalendarProvider, creds, conn.busyCalendarIds, from, to)));
-    } catch (e) {
-      await fail(db, conn, e);
+  return cache.getOrSet(`crm:cal-busy:${userId}:${from.getTime()}:${to.getTime()}`, BUSY_TTL_S, async () => {
+    const conns = await db.calendarConnection.findMany({where: {userId}});
+    const out: Interval[] = [];
+    for (const conn of conns) {
+      if (!conn.busyCalendarIds.length) continue;
+      try {
+        const creds = await connectionCredentials(db, conn);
+        out.push(...(await busyTimes(conn.provider as CalendarProvider, creds, conn.busyCalendarIds, from, to)));
+      } catch (e) {
+        await fail(db, conn, e);
+      }
     }
-  }
-  return out;
+    return out;
+  });
 }
 
 /** The connection (and calendar) new meetings of this user are written to. */
@@ -127,13 +135,18 @@ export async function cancelMeetingEvents(db: Db, interactionId: string, comment
 const FIRST_SYNC_DAYS = 14;
 const AHEAD_DAYS = 30;
 const MAX_NEW_PER_RUN = 40;
+/** One sync job's time for events (a job has 60 s). */
+const JOB_BUDGET_MS = 40_000;
+/** Connections queued per `crm-sync` run, the ones synced longest ago first; the rest go next time. */
+const QUEUE_PER_RUN = 20;
+const SLOT_MS = 5 * 60_000;
 
 /**
  * Logs calendar events that have a known contact among the attendees as
  * meetings (like email sync, unrelated events are never stored), and applies
  * moves / cancellations made in the calendar to meetings it already knows.
  */
-export async function syncConnection(db: Db, conn: CalendarConnection) {
+export async function syncConnection(db: Db, conn: CalendarConnection, {deadline = Date.now() + JOB_BUDGET_MS}: {deadline?: number} = {}) {
   if (!conn.syncMeetings) return {logged: 0, updated: 0, skipped: true};
   try {
     const creds = await connectionCredentials(db, conn);
@@ -153,10 +166,21 @@ export async function syncConnection(db: Db, conn: CalendarConnection) {
 
     let logged = 0;
     let updated = 0;
-    for (const calendarId of calendarIds) {
-      for (const e of await listEvents(provider, creds, calendarId, range)) {
+    let finished = true;
+    calendars: for (const calendarId of calendarIds) {
+      const events = await listEvents(provider, creds, calendarId, range);
+      // Events already mirrored, in one query.
+      const knownIds = events.filter((e) => !e.allDay).map((e) => e.id);
+      const rows = knownIds.length ? await db.calendarEvent.findMany({where: {connectionId: conn.id, externalId: {in: knownIds}}, select: {id: true, externalId: true, changeKey: true, interactionId: true}}) : [];
+      const mirrored = new Map(rows.map((k) => [k.externalId, k]));
+      for (const e of events) {
         if (e.allDay) continue;
-        const known = await db.calendarEvent.findUnique({where: {connectionId_externalId: {connectionId: conn.id, externalId: e.id}}});
+        // Out of time: lastSyncedAt stays, so the next run looks at the same window again.
+        if (Date.now() > deadline) {
+          finished = false;
+          break calendars;
+        }
+        const known = mirrored.get(e.id);
         if (known) {
           if (known.changeKey === e.changeKey) continue;
           if (known.interactionId && (await applyEventChange(db, known.interactionId, e))) updated++;
@@ -194,8 +218,8 @@ export async function syncConnection(db: Db, conn: CalendarConnection) {
         logged++;
       }
     }
-    await db.calendarConnection.update({where: {id: conn.id}, data: {lastSyncedAt: started, status: 'CONNECTED', lastError: null}});
-    return {logged, updated};
+    await db.calendarConnection.update({where: {id: conn.id}, data: {...(finished ? {lastSyncedAt: started} : {}), status: 'CONNECTED', lastError: null}});
+    return {logged, updated, ...(finished ? {} : {more: true})};
   } catch (e) {
     await fail(db, conn, e);
     return {logged: 0, updated: 0, error: (e as Error).message};
@@ -225,9 +249,28 @@ async function applyEventChange(db: Db, interactionId: string, e: {title: string
   return true;
 }
 
-export async function syncAllCalendars(db: Db) {
-  const conns = await db.calendarConnection.findMany({where: {syncMeetings: true}});
-  const results = [];
-  for (const c of conns) results.push({calendar: c.email, ...(await syncConnection(db, c))});
-  return results;
+/** `calendar.sync_connection` job: one connection, within its own job's time. */
+export async function syncConnectionJob(db: Db, connectionId: string) {
+  const conn = await db.calendarConnection.findUnique({where: {id: connectionId}});
+  if (!conn) return; // disconnected since it was queued
+  await syncConnection(db, conn);
+}
+
+/**
+ * From `crm-sync` (every 5 minutes): one job per calendar connection that logs meetings, keyed per
+ * 5-minute slot, the ones synced longest ago first. Connections whose job still waits here (for
+ * the job rate) are not queued again.
+ */
+export async function queueCalendarSyncs(db: Db) {
+  const slot = Math.floor(Date.now() / SLOT_MS);
+  const waiting = await db.jobBacklog.findMany({where: {list: 'crm-calendar-sync-connection', failedAt: null}, select: {data: true}, take: 500});
+  const skip = waiting.map((w) => String((w.data as {connectionId?: unknown})?.connectionId ?? '')).filter(Boolean);
+  const conns = await db.calendarConnection.findMany({
+    where: {syncMeetings: true, ...(skip.length ? {id: {notIn: skip}} : {})},
+    orderBy: {lastSyncedAt: {sort: 'asc', nulls: 'first'}},
+    take: QUEUE_PER_RUN,
+    select: {id: true},
+  });
+  for (const c of conns) await enqueue(db, 'calendar.sync_connection', {connectionId: c.id}, {key: `sync-${c.id}-${slot}`});
+  return {queued: conns.length};
 }

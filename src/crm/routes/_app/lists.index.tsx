@@ -3,7 +3,7 @@ import {Filter, List, ListChecks, MoreHorizontal, Pencil, Plus, Trash2} from 'lu
 import {useState} from 'react';
 import {z} from 'zod';
 
-import {SearchInput} from '@/components/data-table';
+import {LoadError, SearchInput} from '@/components/data-table';
 import {FilterBar} from '@/components/filter-bar';
 import {ListsNav} from '@/components/lists/broadcasts';
 import {useLists} from '@/components/lists/list-picker';
@@ -58,7 +58,8 @@ function ListsPage() {
           </Tabs>
         </FilterBar>
         {lists.isLoading && <p className="p-6 text-sm text-muted-foreground">Loading…</p>}
-        {!lists.isLoading && rows.length === 0 && (
+        {lists.isError && <LoadError error={lists.error} onRetry={() => lists.refetch()} title="The lists could not be loaded" />}
+        {!lists.isLoading && !lists.isError && rows.length === 0 && (
           <EmptyState
             icon={<ListChecks />}
             title={lists.data?.length ? 'No lists match' : 'No lists yet'}
@@ -113,7 +114,7 @@ function ListRowItem({list: l, onEdit}: {list: ContactListRow; onEdit: () => voi
         {mayEdit && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label={`Options for ${l.name}`}><MoreHorizontal /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label={`Options for ${l.name}`} pending={remove.isPending}><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
               <DropdownMenuItem onSelect={onEdit}><Pencil /> Rename</DropdownMenuItem>

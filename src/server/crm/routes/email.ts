@@ -19,8 +19,9 @@ import {htmlToText} from '../email/render';
 import {receiveInbound} from '../email/replies';
 import {sendEmail, usableAccounts} from '../email/service';
 import {fromGallery, templateBody} from '../email/templates';
-import {syncAccount} from '../email/sync';
-import {notOthersPersonal} from '../inbox/scope';
+import {queueAccountSync} from '../email/sync';
+import {receivedHtmlReader} from '../inbox/sanitize';
+import {findReadable, inboxScope, withVisibleTickets} from '../inbox/scope';
 
 const email = z.email().transform((v) => v.toLowerCase());
 
@@ -67,7 +68,7 @@ const templateFields = z.object({
   subject: z.string().trim().min(1).max(500),
   preheader: z.string().trim().max(300).nullish(),
   body: z.string().max(50_000).optional(),
-  html: z.string().max(200_000).nullish(),
+  html: z.string().max(500_000).nullish(), // the app's 512 KB request limit (a template with inline images)
   layout: z.enum(['branded', 'plain']),
   category: z.string().trim().max(60).nullish(),
   shared: z.boolean(),
@@ -228,9 +229,13 @@ export const emailRoutes = new Hono<AppEnv>()
     return c.json({ok: true, contact: name || last.contact.email, subject: message.subject, threadId: message.threadId});
   })
 
+  // "Sync now": the mailbox's own sync job, queued (a busy mailbox can take longer than a request may).
+  // New mail shows up in the inbox as the job stores it.
   .post('/accounts/:id/sync', async (c) => {
     const account = await ownAccount(c, c.req.param('id'));
-    return c.json(await syncAccount(c.var.db, account));
+    if (account.provider !== 'GMAIL' && account.provider !== 'OUTLOOK') return c.json({stored: 0, skipped: true});
+    await queueAccountSync(c.var.db, account.id);
+    return c.json({stored: 0, queued: true});
   })
 
   // ─── Option 3: OAuth mailboxes ───
@@ -238,6 +243,8 @@ export const emailRoutes = new Hono<AppEnv>()
     const me = currentUser(c);
     const kind = c.req.param('kind') as OAuthKind;
     if (kind !== 'google' && kind !== 'microsoft') throw notFound('Provider');
+    // Read-only accounts don't connect mailboxes (as calendar.ts refuses calendars).
+    if (me.role === 'VIEWER') return c.redirect(`${CRM_APP}/settings/email?error=` + encodeURIComponent('Read-only accounts cannot connect a mailbox'));
     const client = await oauthClient(c.var.db, kind);
     if (!client) return c.redirect(`${CRM_APP}/settings/email?error=` + encodeURIComponent(`Add your ${kind === 'google' ? 'Google' : 'Microsoft'} OAuth client ID and secret first`));
     const shared = c.req.valid('query').shared === '1' && isAdmin(me);
@@ -258,6 +265,8 @@ export const emailRoutes = new Hono<AppEnv>()
     if (k !== kind || userId !== me.id || Number(exp) < Date.now() || !(await verifySignature(payload, sig ?? ''))) {
       return back('The sign-in link expired. Please try again.');
     }
+    if (me.role === 'VIEWER') return back('Read-only accounts cannot connect a mailbox'); // demoted since the start
+    if (shared === '1' && !isAdmin(me)) return back('Only admins can add shared team accounts');
     const client = await oauthClient(c.var.db, kind);
     if (!client) return back('OAuth app is not configured');
 
@@ -307,25 +316,55 @@ export const emailRoutes = new Hono<AppEnv>()
     companyId: z.string().nullish(),
     dealId: z.string().nullish(),
   })), async (c) => {
+    const db = c.var.db;
+    const me = currentUser(c);
     const input = c.req.valid('json');
     if (!input.body && !input.html) throw new HTTPException(400, {message: 'Write a message first'});
-    const message = await sendEmail(c.var.db, currentUser(c), publicOrigin(c.req.raw), input);
+    // Only into a conversation, and about records, this person may see (404 otherwise, as everywhere).
+    const scope = await inboxScope(db, me);
+    const owner = scope.owner;
+    const [thread, contact, deal, company] = await Promise.all([
+      input.threadId ? findReadable(db, scope, input.threadId) : true,
+      input.contactId ? db.contact.findFirst({where: {id: input.contactId, ...owner}, select: {id: true}}) : true,
+      input.dealId ? db.deal.findFirst({where: {id: input.dealId, ...owner}, select: {id: true}}) : true,
+      input.companyId ? db.company.findFirst({where: {id: input.companyId, ...owner}, select: {id: true}}) : true,
+    ]);
+    if (!thread) throw notFound('Thread');
+    if (!contact) throw notFound('Contact');
+    if (!deal) throw notFound('Deal');
+    if (!company) throw notFound('Company');
+    const message = await sendEmail(db, me, publicOrigin(c.req.raw), input);
     return c.json({message}, 201);
   })
 
-  // ─── Threads (inbox) ───
+  // ─── Threads (contact, company and deal pages) ───
+  // The inbox's own rules (inbox/scope.ts): personal mailboxes stay private, the team inbox follows
+  // its access setting, ticket threads their ticket; a record filter needs that record visible.
   .get('/threads', valid('query', z.object({
-    contactId: z.string().optional(),
-    dealId: z.string().optional(),
-    companyId: z.string().optional(),
+    contactId: z.string().max(60).optional(),
+    dealId: z.string().max(60).optional(),
+    companyId: z.string().max(60).optional(),
     unread: z.string().optional(),
-    q: z.string().optional(),
+    q: z.string().max(200).optional(),
     take: z.coerce.number().int().min(1).max(200).default(50),
   })), async (c) => {
+    const db = c.var.db;
     const q = c.req.valid('query');
-    const rows = await c.var.db.emailThread.findMany({
+    const scope = await inboxScope(db, currentUser(c));
+    const owner = scope.owner;
+    if (owner.ownerId) {
+      const [contact, deal, company] = await Promise.all([
+        q.contactId ? db.contact.findFirst({where: {id: q.contactId, ...owner}, select: {id: true}}) : true,
+        q.dealId ? db.deal.findFirst({where: {id: q.dealId, ...owner}, select: {id: true}}) : true,
+        q.companyId ? db.company.findFirst({where: {id: q.companyId, ...owner}, select: {id: true}}) : true,
+      ]);
+      if (!contact) throw notFound('Contact');
+      if (!deal) throw notFound('Deal');
+      if (!company) throw notFound('Company');
+    }
+    const rows = await db.emailThread.findMany({
       where: {
-        AND: [notOthersPersonal(currentUser(c))], // personal mailboxes stay private (module 10)
+        AND: [scope.readable],
         ...(q.contactId && {contactId: q.contactId}),
         ...(q.dealId && {dealId: q.dealId}),
         ...(q.companyId && {companyId: q.companyId}),
@@ -341,29 +380,71 @@ export const emailRoutes = new Hono<AppEnv>()
       orderBy: {lastMessageAt: 'desc'},
       take: q.take,
     });
-    return c.json({rows: rows.map(({messages, ...t}) => ({...t, last: messages[0] ? {...messages[0], text: messages[0].text?.slice(0, 200) ?? ''} : null}))});
+    const visible = await withVisibleTickets(db, scope, rows);
+    return c.json({rows: visible.map(({messages, ...t}) => ({...t, last: messages[0] ? {...messages[0], text: messages[0].text?.slice(0, 200) ?? ''} : null}))});
   })
 
   .get('/threads/:id', async (c) => {
-    const thread = await c.var.db.emailThread.findFirst({
-      where: {AND: [{id: c.req.param('id')}, notOthersPersonal(currentUser(c))]},
-      include: {
-        contact: {select: {id: true, firstName: true, lastName: true, email: true}},
-        company: {select: {id: true, name: true}},
-        deal: {select: {id: true, title: true}},
-        account: {select: {id: true, fromEmail: true, provider: true}},
-        messages: {orderBy: {sentAt: 'asc'}, include: {sender: {select: userSelect}}},
+    const db = c.var.db;
+    const scope = await inboxScope(db, currentUser(c));
+    if (!(await findReadable(db, scope, c.req.param('id')))) throw notFound('Thread');
+    const [thread, html] = await Promise.all([
+      db.emailThread.findUnique({
+        where: {id: c.req.param('id')},
+        include: {
+          contact: {select: {id: true, firstName: true, lastName: true, email: true, ownerId: true}},
+          company: {select: {id: true, name: true, ownerId: true}},
+          deal: {select: {id: true, title: true, ownerId: true}},
+          account: {select: {id: true, fromEmail: true, provider: true}},
+          // The newest 200, oldest first (a long thread is read in the inbox, which pages).
+          messages: {orderBy: [{sentAt: 'desc'}, {id: 'desc'}], take: 200, include: {sender: {select: userSelect}}},
+        },
+      }),
+      receivedHtmlReader(),
+    ]);
+    if (!thread) throw notFound('Thread');
+    if (thread.unread) await db.emailThread.update({where: {id: thread.id}, data: {unread: false}});
+    // Linked records the viewer may not see are left out, like the inbox's sidebar.
+    const mine = scope.owner.ownerId;
+    const shown = <T extends {ownerId: string | null}>(r: T | null) => {
+      if (!r || (mine && r.ownerId !== mine)) return null;
+      const {ownerId: _o, ...rest} = r;
+      return rest;
+    };
+    return c.json({
+      thread: {
+        ...thread,
+        contact: shown(thread.contact),
+        deal: shown(thread.deal),
+        company: shown(thread.company),
+        // Stored HTML as cleaned when it arrived (older mail, and our own, cleaned now).
+        messages: thread.messages.reverse().map((m) => ({...m, html: html(m.html)})),
       },
     });
-    if (!thread) throw notFound('Thread');
-    if (thread.unread) await c.var.db.emailThread.update({where: {id: thread.id}, data: {unread: false}});
-    return c.json({thread});
   })
 
-  .patch('/threads/:id', valid('json', z.object({dealId: z.string().nullish(), contactId: z.string().nullish(), unread: z.boolean().optional()})), async (c) => {
-    const found = await c.var.db.emailThread.findFirst({where: {AND: [{id: c.req.param('id')}, notOthersPersonal(currentUser(c))]}, select: {id: true}});
+  .patch('/threads/:id', valid('json', z.object({dealId: z.string().max(60).nullish(), contactId: z.string().max(60).nullish(), unread: z.boolean().optional()})), async (c) => {
+    const db = c.var.db;
+    const input = c.req.valid('json');
+    const scope = await inboxScope(db, currentUser(c));
+    const owner = scope.owner;
+    const [found, contact, deal] = await Promise.all([
+      findReadable(db, scope, c.req.param('id')),
+      input.contactId ? db.contact.findFirst({where: {id: input.contactId, ...owner}, select: {id: true}}) : true,
+      input.dealId ? db.deal.findFirst({where: {id: input.dealId, ...owner}, select: {id: true}}) : true,
+    ]);
     if (!found) throw notFound('Thread');
-    const thread = await c.var.db.emailThread.update({where: {id: found.id}, data: c.req.valid('json')});
+    // Linking: only records this person may see (AUDIT P2-19).
+    if (!contact) throw notFound('Contact');
+    if (!deal) throw notFound('Deal');
+    const thread = await db.emailThread.update({
+      where: {id: found.id},
+      data: {
+        ...(input.dealId !== undefined && {dealId: input.dealId}),
+        ...(input.contactId !== undefined && {contactId: input.contactId}),
+        ...(input.unread !== undefined && {unread: input.unread}),
+      },
+    });
     return c.json({thread});
   })
 

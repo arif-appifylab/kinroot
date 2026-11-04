@@ -67,6 +67,7 @@ import {confirm} from './ui/confirm';
 import {Input} from './ui/form';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger, Tooltip} from './ui/menu';
 import {Avatar, EmptyState} from './ui/misc';
+import {LoadError} from './data-table';
 
 export type RecordRef = {contactId?: string; companyId?: string; dealId?: string};
 
@@ -119,19 +120,19 @@ function NoteComposer({record}: {record: RecordRef}) {
   const [body, setBody] = useState('');
   const save = useApiMutation(() => api.post('/notes', {body, ...record}), {invalidate: [keys.timeline, keys.notes], success: 'Note saved', onSuccess: () => setBody('')});
   return (
-    <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="grid gap-2.5">
+    <form noValidate onSubmit={(e) => (e.preventDefault(), body.trim() && !save.isPending && save.mutate(undefined))} className="grid gap-2.5">
       <MentionField
         aria-label="Note"
         value={body}
         onChange={setBody}
-        onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === 'Enter' && body.trim() && save.mutate(undefined)}
+        onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === 'Enter' && body.trim() && !save.isPending && save.mutate(undefined)}
         rows={4}
         placeholder="Write a note… what did you learn, what was agreed, what's next? Type @ to mention a teammate."
       />
       <div className="flex items-center justify-between">
         <span className="text-xs text-slate-400">⌘ + Enter to save · @ to mention</span>
-        <Button type="submit" size="sm" disabled={!body.trim() || save.isPending}>
-          {save.isPending && <Loader2 className="animate-spin" />} Save note
+        <Button type="submit" size="sm" disabled={!body.trim()} pending={save.isPending} pendingLabel="Saving…">
+          Save note
         </Button>
       </div>
     </form>
@@ -272,7 +273,7 @@ export function RecordTasks({record, taskDefaults}: {record: RecordRef; taskDefa
   return (
     <Card className={cn('overflow-hidden', none && 'border-amber-200 bg-amber-50/40')}>
       <div className="flex items-center justify-between px-4 pt-3.5 pb-1">
-        <h3 className="text-sm font-bold text-slate-900">Next steps</h3>
+        <h2 className="text-sm font-bold text-slate-900">Next steps</h2>
         {canEdit && (
           <Button variant="ghost" size="sm" onClick={() => create.open({kind: 'task', defaults: taskDefaults})}><Plus /> Add</Button>
         )}
@@ -400,8 +401,8 @@ function NoteItem({activity}: {activity: Activity}) {
         <div className="grid gap-2">
           <MentionField value={draft} onChange={setDraft} rows={4} autoFocus />
           <div className="flex justify-end gap-2">
-            <Button size="sm" variant="secondary" onClick={() => (setEditing(false), setDraft(body))}>Cancel</Button>
-            <Button size="sm" onClick={() => update.mutate({body: draft})} disabled={!draft.trim()}>Save</Button>
+            <Button size="sm" variant="secondary" onClick={() => (setEditing(false), setDraft(body))} disabled={update.isPending}>Cancel</Button>
+            <Button size="sm" onClick={() => update.mutate({body: draft})} disabled={!draft.trim()} pending={update.isPending && update.variables?.body !== undefined} pendingLabel="Saving…">Save</Button>
           </div>
         </div>
       ) : (
@@ -409,9 +410,19 @@ function NoteItem({activity}: {activity: Activity}) {
       )}
       {mine && !editing && (
         <div className="mt-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditing(true)}><Pencil /> Edit</Button>
-          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => update.mutate({pinned: !pinned})}>{pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin'}</Button>
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-destructive hover:bg-rose-50 hover:text-destructive" onClick={() => remove.mutate(undefined)}><Trash2 /> Delete</Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditing(true)} disabled={update.isPending || remove.isPending}><Pencil /> Edit</Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => update.mutate({pinned: !pinned})} disabled={remove.isPending} pending={update.isPending} pendingLabel={pinned ? 'Unpinning…' : 'Pinning…'}>{pinned ? <PinOff /> : <Pin />} {pinned ? 'Unpin' : 'Pin'}</Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-destructive hover:bg-rose-50 hover:text-destructive"
+            disabled={update.isPending}
+            pending={remove.isPending}
+            pendingLabel="Deleting…"
+            onClick={async () => (await confirm({title: 'Delete this note?', description: "This can't be undone.", confirmLabel: 'Delete', destructive: true})) && remove.mutate(undefined)}
+          >
+            <Trash2 /> Delete
+          </Button>
         </div>
       )}
     </div>
@@ -466,10 +477,11 @@ function InteractionItem({activity}: {activity: Activity}) {
             <dd>
               <select
                 aria-label="Outcome"
-                disabled={!mine}
+                disabled={!mine || update.isPending}
+                aria-busy={update.isPending || undefined}
                 value={d.outcome ?? ''}
                 onChange={(e) => update.mutate({outcome: e.target.value || null})}
-                className="-ml-1 cursor-pointer rounded-md bg-transparent px-1 py-0.5 font-semibold text-slate-800 outline-none hover:bg-slate-100 disabled:cursor-default"
+                className="-ml-1 cursor-pointer rounded-md bg-transparent px-1 py-0.5 font-semibold text-slate-800 outline-none hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-default"
               >
                 <option value="">Select outcome</option>
                 {outcomes.map((o) => <option key={o}>{o}</option>)}
@@ -529,7 +541,7 @@ function InteractionItem({activity}: {activity: Activity}) {
       {upcoming && d.kind === 'MEETING' && <Badge tone="violet" className="mt-3"><CalendarClock /> Upcoming</Badge>}
       {mine && (
         <div className="mt-2 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-destructive hover:bg-rose-50 hover:text-destructive" onClick={async () => (await confirm({title: 'Delete this activity?', confirmLabel: 'Delete', destructive: true})) && remove.mutate(undefined)}><Trash2 /> Delete</Button>
+          <Button size="sm" variant="ghost" className="h-7 px-2 text-destructive hover:bg-rose-50 hover:text-destructive" pending={remove.isPending} pendingLabel="Deleting…" onClick={async () => (await confirm({title: 'Delete this activity?', description: "This can't be undone.", confirmLabel: 'Delete', destructive: true})) && remove.mutate(undefined)}><Trash2 /> Delete</Button>
         </div>
       )}
     </div>
@@ -566,14 +578,23 @@ function Comments({activityId, count}: {activityId: string; count: number}) {
                 <p className="text-sm whitespace-pre-wrap text-slate-700"><MentionText text={c.body} /></p>
               </div>
               {(c.authorId === me.id || isAdmin) && (
-                <button aria-label="Delete comment" onClick={() => remove.mutate(c.id)} className="cursor-pointer self-start rounded p-1 text-slate-300 opacity-0 group-hover/c:opacity-100 hover:text-destructive"><X className="size-3.5" /></button>
+                <button
+                  type="button"
+                  aria-label="Delete comment"
+                  disabled={remove.isPending}
+                  aria-busy={(remove.isPending && remove.variables === c.id) || undefined}
+                  onClick={async () => (await confirm({title: 'Delete this comment?', description: "This can't be undone.", confirmLabel: 'Delete', destructive: true})) && remove.mutate(c.id)}
+                  className="cursor-pointer self-start rounded p-1 text-slate-300 opacity-0 outline-none group-hover/c:opacity-100 group-focus-within/c:opacity-100 hover:text-destructive focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed"
+                >
+                  {remove.isPending && remove.variables === c.id ? <Loader2 className="size-3.5 animate-spin" /> : <X className="size-3.5" />}
+                </button>
               )}
             </div>
           ))}
           {canEdit && (
-            <form onSubmit={(e) => (e.preventDefault(), body.trim() && add.mutate(undefined))} className="flex gap-2">
-              <MentionField as="input" value={body} onChange={setBody} placeholder="Leave a comment and mention a teammate with @" className="h-9" />
-              <Button type="submit" size="sm" className="h-9" disabled={!body.trim() || add.isPending}>Comment</Button>
+            <form noValidate onSubmit={(e) => (e.preventDefault(), body.trim() && !add.isPending && add.mutate(undefined))} className="flex gap-2">
+              <MentionField as="input" aria-label="Comment" value={body} onChange={setBody} placeholder="Leave a comment and mention a teammate with @" className="h-9" />
+              <Button type="submit" size="sm" className="h-9" disabled={!body.trim()} pending={add.isPending} pendingLabel="Sending…">Comment</Button>
             </form>
           )}
         </div>
@@ -837,6 +858,8 @@ export function Timeline({record, showRecord}: {record: RecordRef; showRecord?: 
       <div id={panelId} role="tabpanel" aria-label={label} className="min-w-0">
         {feed.isLoading ? (
           <div className="flex justify-center py-10"><Loader2 className="size-5 animate-spin text-primary" /></div>
+        ) : feed.isError && rows.length === 0 ? (
+          <LoadError error={feed.error} onRetry={() => feed.refetch()} title="Activity could not be loaded" />
         ) : rows.length === 0 ? (
           <EmptyState icon={<History />} title={search ? 'No matching activity' : EMPTY[group]} description={search ? 'Try a different search.' : group === 'all' ? 'Notes, emails, calls, meetings, tasks and changes will show up here.' : undefined} />
         ) : (
@@ -857,8 +880,8 @@ export function Timeline({record, showRecord}: {record: RecordRef; showRecord?: 
         )}
         {feed.hasNextPage && (
           <div className="mt-4 flex justify-center">
-            <Button variant="secondary" size="sm" onClick={() => feed.fetchNextPage()} disabled={feed.isFetchingNextPage}>
-              {feed.isFetchingNextPage && <Loader2 className="animate-spin" />} Load older activity
+            <Button variant="secondary" size="sm" onClick={() => feed.fetchNextPage()} pending={feed.isFetchingNextPage} pendingLabel="Loading…">
+              Load older activity
             </Button>
           </div>
         )}

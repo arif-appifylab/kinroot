@@ -30,12 +30,16 @@ async function shortHash(s: string) {
  * which Gmail and Outlook block, so it is served from a public URL instead;
  * SVG logos don't render in most mail clients, so they fall back to the name.
  */
+/** A logo uploaded to public storage (Settings → Branding checks it is ours when saving): emails link it as it is. */
+const PUBLIC_LOGO = /^https?:\/\/[^/?#]+\/__platform\/files\/file_[0-9a-z]{26}\/[^/?#]+$/;
+
 export async function emailBrand(db: Db, origin: string) {
   const s = await getSettings(db);
+  // An older install's data URL goes through the brand-logo route (mail clients block data: URLs).
   const raster = /^data:image\/(png|jpeg|gif|webp);base64,/.test(s.brandLogo);
   return {
     name: s.brandName,
-    logoSrc: raster ? `${origin}/site-api/crm/public/brand-logo?v=${await shortHash(s.brandLogo)}` : '',
+    logoSrc: PUBLIC_LOGO.test(s.brandLogo) ? s.brandLogo : raster ? `${origin}/site-api/crm/public/brand-logo?v=${await shortHash(s.brandLogo)}` : '',
     primary: s.brandPrimary,
   };
 }

@@ -1,7 +1,8 @@
 import type {Context} from 'hono';
 
 import {config as site} from '../../../platform/config';
-import {fromB64} from '../kit/crypto';
+import {fromB64, sha256Hex} from '../kit/crypto';
+import type {Db} from '../kit/db';
 
 /**
  * Who may post mail to the inbound webhook (`POST /site-api/crm/inbound/:token`): only the mail
@@ -38,7 +39,28 @@ const hex = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, '0')
 const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
 const fresh = (seconds: number) => Number.isFinite(seconds) && Math.abs(Date.now() / 1000 - seconds) <= TOLERANCE_S;
 
-type Verified = {ok: true; body: Record<string, unknown>} | {ok: false; reason: string};
+/**
+ * `delivery`: the signed request's own id (Svix `svix-id`, Mailgun `token`), remembered for
+ * REPLAY_WINDOW_S by `firstDelivery()` so the same signed request is taken once (a signature only
+ * proves who sent it, not that it is new). Basic credentials carry no id.
+ */
+type Verified = {ok: true; body: Record<string, unknown>; delivery?: string} | {ok: false; reason: string};
+
+/** How long a signed request's id is remembered: longer than the signature's own 5-minute window. */
+export const REPLAY_WINDOW_S = 10 * 60;
+
+/**
+ * True the first time `key` is seen in the last `windowSec`, false for a repeat. One `RateHit` row
+ * per delivery (pruned daily with the rate limits); the oldest row wins, so of two copies arriving
+ * at once exactly one goes through. `forget()` lets a failed delivery be retried by its sender.
+ */
+export async function firstDelivery(db: Db, key: string, windowSec = REPLAY_WINDOW_S) {
+  const k = `inbound-seen:${(await sha256Hex(key)).slice(0, 40)}`;
+  const mine = await db.rateHit.create({data: {key: k}, select: {id: true}});
+  const first = await db.rateHit.findFirst({where: {key: k, at: {gte: new Date(Date.now() - windowSec * 1000)}}, orderBy: [{at: 'asc'}, {id: 'asc'}], select: {id: true}});
+  const isFirst = first?.id === mine.id;
+  return {first: isFirst, forget: () => db.rateHit.deleteMany({where: {id: mine.id}}).then(() => undefined)};
+}
 
 /** Checks the sender, then gives the parsed body (JSON, form or multipart). Never throws. */
 export async function verifyInbound(c: Context): Promise<Verified> {
@@ -54,7 +76,7 @@ export async function verifyInbound(c: Context): Promise<Verified> {
       const expected = b64(await hmac(fromB64(secret.replace(/^whsec_/, '')), `${svixId}.${timestamp}.${raw}`));
       const given = (c.req.header('svix-signature') ?? '').split(' ').map((s) => s.split(',')[1] ?? '');
       if (!given.some((s) => sameText(s, expected))) return {ok: false, reason: 'bad signature'};
-      return {ok: true, body: JSON.parse(raw) as Record<string, unknown>};
+      return {ok: true, body: JSON.parse(raw) as Record<string, unknown>, delivery: `svix:${svixId}`};
     }
 
     // Postmark / SendGrid: Basic credentials from the webhook URL, checked before the body is read.
@@ -80,7 +102,7 @@ export async function verifyInbound(c: Context): Promise<Verified> {
       if (!key) return {ok: false, reason: 'MAILGUN_WEBHOOK_SIGNING_KEY is not added'};
       if (!fresh(Number(sig.timestamp))) return {ok: false, reason: 'stale signature'};
       if (!sameText(hex(await hmac(key, `${sig.timestamp}${sig.token}`)), sig.signature)) return {ok: false, reason: 'bad signature'};
-      return {ok: true, body};
+      return {ok: true, body, delivery: `mailgun:${sig.token}`};
     }
     return {ok: false, reason: 'unsigned request'};
   } catch {

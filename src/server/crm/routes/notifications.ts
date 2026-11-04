@@ -1,11 +1,23 @@
 import {Hono} from 'hono';
 import {z} from 'zod';
 
-import {currentUser, type AppEnv} from '../kit/guards';
-import {valid} from '../lib/http';
+import {currentUser, type AppContext, type AppEnv} from '../kit/guards';
+import {assertVisible, notFound, valid} from '../lib/http';
 import {userSelect} from '../lib/users';
 
 const entity = z.enum(['CONTACT', 'COMPANY', 'DEAL']);
+
+/**
+ * The `:entity/:id` record, when the user may see it (owner-only visibility): following a record
+ * sends its notes and changes to the follower, so it must be one they could open. Else 404.
+ */
+async function followable(c: AppContext) {
+  const e = entity.safeParse(c.req.param('entity')?.toUpperCase());
+  if (!e.success) throw notFound();
+  const id = c.req.param('id')!;
+  await assertVisible(c, e.data === 'CONTACT' ? {contactId: id} : e.data === 'COMPANY' ? {companyId: id} : {dealId: id});
+  return e.data;
+}
 
 /** The signed-in user's bell, plus following records. */
 export const notifications = new Hono<AppEnv>()
@@ -48,14 +60,14 @@ export const notifications = new Hono<AppEnv>()
 
   .get('/follow/:entity/:id', async (c) => {
     const me = currentUser(c);
-    const e = entity.parse(c.req.param('entity').toUpperCase());
-    const followers = await c.var.db.follow.findMany({where: {entity: e, recordId: c.req.param('id')}, include: {user: {select: userSelect}}});
+    const e = await followable(c);
+    const followers = await c.var.db.follow.findMany({where: {entity: e, recordId: c.req.param('id')}, include: {user: {select: userSelect}}, take: 200});
     return c.json({following: followers.some((f) => f.userId === me.id), followers: followers.map((f) => f.user)});
   })
 
   .post('/follow/:entity/:id', async (c) => {
     const me = currentUser(c);
-    const e = entity.parse(c.req.param('entity').toUpperCase());
+    const e = await followable(c);
     const key = {userId: me.id, entity: e, recordId: c.req.param('id')};
     await c.var.db.follow.upsert({where: {userId_entity_recordId: key}, create: key, update: {}});
     return c.json({following: true});
@@ -63,7 +75,9 @@ export const notifications = new Hono<AppEnv>()
 
   .delete('/follow/:entity/:id', async (c) => {
     const me = currentUser(c);
-    const e = entity.parse(c.req.param('entity').toUpperCase());
-    await c.var.db.follow.deleteMany({where: {userId: me.id, entity: e, recordId: c.req.param('id')}});
+    // Unfollowing is always allowed (it only removes the user's own row).
+    const e = entity.safeParse(c.req.param('entity').toUpperCase());
+    if (!e.success) throw notFound();
+    await c.var.db.follow.deleteMany({where: {userId: me.id, entity: e.data, recordId: c.req.param('id')}});
     return c.json({following: false});
   });

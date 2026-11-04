@@ -35,7 +35,7 @@ function Toggle({label, hint, checked, onChange}: {label: string; hint?: ReactNo
 const toLocal = (iso?: string | null) => (iso ? new Date(new Date(iso).getTime() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : '');
 const fromLocal = (v: string) => (v ? new Date(v).toISOString() : null);
 
-export function FormSettingsPanel({fields, settings: s, onChange, slug, onSlug}: Props) {
+export function FormSettingsPanel({fields, settings: s, onChange, slug, onSlug, slugPending = false}: Props & {slugPending?: boolean}) {
   const set = (p: Partial<FormSettings>) => onChange({...s, ...p});
   const team = useTeam();
   const pipelines = usePipelines();
@@ -56,13 +56,13 @@ export function FormSettingsPanel({fields, settings: s, onChange, slug, onSlug}:
   return (
     <div className="max-w-3xl">
       <SettingsSection title="Link" description="Where the hosted form lives.">
-        <Field label="Form address" hint="Changing it breaks links you already shared.">
+        <Field label="Form address" htmlFor="form-slug" hint="Changing it breaks links you already shared.">
           <div className="flex gap-2">
             <div className="flex min-w-0 flex-1 items-center rounded-lg border border-input bg-card pl-3 text-sm focus-within:ring-2 focus-within:ring-ring/30">
               <span className="shrink-0 text-muted-foreground">{origin}/f/</span>
-              <input className="h-10 min-w-0 flex-1 bg-transparent pr-3 outline-none" value={slugDraft} onChange={(e) => setSlugDraft(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} />
+              <input id="form-slug" aria-describedby="form-slug-hint" className="h-10 min-w-0 flex-1 bg-transparent pr-3 outline-none" value={slugDraft} onChange={(e) => setSlugDraft(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} />
             </div>
-            <Button variant="secondary" disabled={!slugDraft || slugDraft === slug} onClick={() => onSlug(slugDraft.replace(/^-+|-+$/g, ''))}>Save</Button>
+            <Button variant="secondary" disabled={!slugDraft || slugDraft === slug} pending={slugPending} pendingLabel="Saving…" onClick={() => onSlug(slugDraft.replace(/^-+|-+$/g, ''))}>Save</Button>
           </div>
         </Field>
       </SettingsSection>
@@ -99,8 +99,9 @@ export function FormSettingsPanel({fields, settings: s, onChange, slug, onSlug}:
               <button
                 key={mode}
                 type="button"
+                aria-pressed={owner.mode === mode}
                 onClick={() => set({owner: {...owner, mode}})}
-                className={cn('cursor-pointer rounded-full border px-3 py-1.5 text-sm font-medium transition-colors', owner.mode === mode ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-600 hover:border-primary/50')}
+                className={cn('cursor-pointer rounded-full border px-3 py-1.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/30', owner.mode === mode ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-600 hover:border-primary/50')}
               >
                 {label}
               </button>

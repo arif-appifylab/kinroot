@@ -39,6 +39,7 @@ import {toast} from 'sonner';
 
 import {Button} from '@/components/ui/button';
 import {Field, Input} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Popover, PopoverAnchor, PopoverContent} from '@/components/ui/menu';
 import {MERGE_FIELDS, mergeLabel} from '@/lib/email-html';
 import {cn} from '@/lib/utils';
@@ -95,18 +96,19 @@ const EmailImage = Image.extend({
 
 // ─── Toolbar ───
 
-function ToolButton({active, label, onClick, children, disabled}: {active?: boolean; label: string; onClick: () => void; children: React.ReactNode; disabled?: boolean}) {
+function ToolButton({active, label, onClick, children, disabled, busy}: {active?: boolean; label: string; onClick: () => void; children: React.ReactNode; disabled?: boolean; busy?: boolean}) {
   return (
     <button
       type="button"
       title={label}
       aria-label={label}
       aria-pressed={active}
+      aria-busy={busy || undefined}
       disabled={disabled}
       onMouseDown={(e) => e.preventDefault()} // keep the editor selection
       onClick={onClick}
       className={cn(
-        'inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:size-4',
+        'inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-slate-500 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/30 hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:size-4',
         active && 'bg-accent text-primary hover:bg-accent hover:text-primary',
       )}
     >
@@ -131,7 +133,7 @@ function LinkPopover({editor, open, onOpenChange}: {editor: Editor; open: boolea
   };
   return (
     <PopoverContent className="w-80 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
-      <form onSubmit={(e) => (e.preventDefault(), apply())} className="grid gap-2">
+      <form noValidate onSubmit={(e) => (e.preventDefault(), e.stopPropagation(), apply())} className="grid gap-2">
         <Field label="Link address" htmlFor="ed-link">
           <Input id="ed-link" autoFocus value={href} onChange={(e) => setHref(e.target.value)} placeholder="https://… or {{unsubscribe_url}}" />
         </Field>
@@ -152,6 +154,7 @@ function ButtonPopover({editor, onDone}: {editor: Editor; onDone: () => void}) {
   const editing = editor.isActive('emailButton');
   const current = editing ? editor.getAttributes('emailButton') : {label: 'Book a call', href: 'https://', align: 'left'};
   const [form, setForm] = useState({label: String(current.label), href: String(current.href), align: String(current.align)});
+  const f = useFormState(form, {label: [is.required('Enter the button text, like "Book a call".')], href: [is.required('Enter the link the button opens.')]});
   const apply = () => {
     if (editing) editor.chain().focus().updateAttributes('emailButton', form).run();
     else editor.chain().focus().insertContent({type: 'emailButton', attrs: form}).run();
@@ -159,9 +162,9 @@ function ButtonPopover({editor, onDone}: {editor: Editor; onDone: () => void}) {
   };
   return (
     <PopoverContent className="w-80 p-3" onOpenAutoFocus={(e) => e.preventDefault()}>
-      <form onSubmit={(e) => (e.preventDefault(), apply())} className="grid gap-2.5">
-        <Field label="Button text" htmlFor="ed-btn-label"><Input id="ed-btn-label" autoFocus required value={form.label} onChange={(e) => setForm({...form, label: e.target.value})} /></Field>
-        <Field label="Link" htmlFor="ed-btn-href"><Input id="ed-btn-href" required value={form.href} onChange={(e) => setForm({...form, href: e.target.value})} placeholder="https://" /></Field>
+      <form {...f.form(apply)} className="grid gap-2.5">
+        <Field label="Button text" htmlFor="ed-btn-label" error={f.error('label')}><Input id="ed-btn-label" autoFocus value={form.label} onChange={(e) => setForm({...form, label: e.target.value})} onBlur={f.blur('label')} /></Field>
+        <Field label="Link" htmlFor="ed-btn-href" error={f.error('href')}><Input id="ed-btn-href" value={form.href} onChange={(e) => setForm({...form, href: e.target.value})} onBlur={f.blur('href')} placeholder="https://" /></Field>
         <div className="flex items-center gap-1">
           {(['left', 'center'] as const).map((a) => (
             <Button key={a} type="button" variant={form.align === a ? 'soft' : 'ghost'} size="sm" onClick={() => setForm({...form, align: a})}>
@@ -255,7 +258,7 @@ function Toolbar({editor, images, headings, text, mergeFields, mentions}: Toolba
       {(!text || mergeFields || !!mentions?.length) && <Sep />}
       {!text && images && (
         <>
-          <ToolButton label="Insert image" disabled={uploading} onClick={() => fileRef.current?.click()}>{uploading ? <Loader2 className="animate-spin" /> : <ImagePlus />}</ToolButton>
+          <ToolButton label={uploading ? 'Uploading image…' : 'Insert image'} disabled={uploading} busy={uploading} onClick={() => fileRef.current?.click()}>{uploading ? <Loader2 className="animate-spin" /> : <ImagePlus />}</ToolButton>
           <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
         </>
       )}

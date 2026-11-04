@@ -1,6 +1,6 @@
 import {DndContext, DragOverlay, KeyboardSensor, PointerSensor, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent} from '@dnd-kit/core';
 import {useQueryClient} from '@tanstack/react-query';
-import {useNavigate} from '@tanstack/react-router';
+import {Link, useNavigate} from '@tanstack/react-router';
 import {Building2, User} from 'lucide-react';
 import {useEffect, useState} from 'react';
 import {toast} from 'sonner';
@@ -33,7 +33,19 @@ function TicketCard({ticket, overlay}: {ticket: TicketRow; overlay?: boolean}) {
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900"><span className="text-slate-400">#{ticket.number}</span> {ticket.subject}</p>
+        <p className="line-clamp-2 text-sm font-semibold leading-snug text-slate-900">
+          {/* The card drags; this link opens the ticket (keyboard and screen readers too). */}
+          <Link
+            to="/tickets/$ticketId"
+            params={{ticketId: String(ticket.number)}}
+            tabIndex={overlay ? -1 : undefined}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="rounded-sm outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/30"
+          >
+            <span className="text-slate-400">#{ticket.number}</span> {ticket.subject}
+          </Link>
+        </p>
         {ticket.assignee && <Avatar name={ticket.assignee.name} color={ticket.assignee.color} src={ticket.assignee.avatarUrl} size="xs" className="mt-0.5" />}
       </div>
       <div className="mt-1.5 grid gap-1 text-xs text-slate-500">
@@ -56,7 +68,7 @@ function Column({status, tickets}: {status: (typeof TICKET_STATUSES)[number]; ti
     <div className="flex w-[280px] shrink-0 flex-col">
       <div className="mb-3 flex items-center gap-2 px-1">
         <span className="size-2.5 rounded-full" style={{background: status.color}} />
-        <h3 className="truncate text-sm font-bold text-slate-900">{status.label}</h3>
+        <h2 className="truncate text-sm font-bold text-slate-900">{status.label}</h2>
         <span className="rounded-full bg-slate-200/70 px-1.5 text-[11px] font-bold text-slate-600">{tickets.length}</span>
       </div>
       <div ref={setNodeRef} className={cn('flex min-h-40 flex-1 flex-col gap-2.5 rounded-2xl p-2 transition-colors', isOver ? 'bg-accent ring-2 ring-primary/20' : 'bg-slate-100/70')}>

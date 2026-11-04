@@ -4,7 +4,7 @@ import {AlarmClock, Columns3, Inbox, LifeBuoy, List, Plus, Smile, UserCheck, Use
 import {useState, type ReactNode} from 'react';
 import {z} from 'zod';
 
-import {DataTable, Pagination, SearchInput, type Column} from '@/components/data-table';
+import {DataTable, LoadError, Pagination, SearchInput, type Column} from '@/components/data-table';
 import {FilterBar} from '@/components/filter-bar';
 import {NewTicketDialog} from '@/components/tickets/new-ticket-dialog';
 import {TicketBoard} from '@/components/tickets/ticket-board';
@@ -48,15 +48,32 @@ const FILTERS = [
 ] as const;
 
 function Stat({icon, tone, label, value, onClick, active}: {icon: ReactNode; tone: 'blue' | 'teal' | 'amber' | 'rose' | 'green'; label: string; value: ReactNode; onClick?: () => void; active?: boolean}) {
-  return (
-    <Card interactive={!!onClick} onClick={onClick} className={cn('flex items-center gap-3 p-4', onClick && 'cursor-pointer', active && 'ring-2 ring-primary/30')}>
+  const body = (
+    <>
       <IconBadge tone={tone}>{icon}</IconBadge>
       <div className="min-w-0">
         <p className="text-xs font-semibold text-muted-foreground">{label}</p>
         <p className="text-xl font-extrabold tracking-tight text-slate-900">{value}</p>
       </div>
-    </Card>
+    </>
   );
+  // A filter card is a real button (keyboard, screen readers); the same look as the Card.
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={!!active}
+        className={cn(
+          'flex w-full cursor-pointer items-center gap-3 rounded-xl border border-slate-100 bg-card p-4 text-left text-card-foreground shadow-soft outline-none transition-all duration-200 ease-out hover:-translate-y-1 hover:shadow-lift focus-visible:ring-2 focus-visible:ring-primary/30',
+          active && 'ring-2 ring-primary/30',
+        )}
+      >
+        {body}
+      </button>
+    );
+  }
+  return <Card className="flex items-center gap-3 p-4">{body}</Card>;
 }
 
 function TicketsPage() {
@@ -109,7 +126,9 @@ function TicketsPage() {
       header: 'Subject',
       cell: (t) => (
         <div className="min-w-0">
-          <p className="truncate font-semibold text-slate-900">{t.subject}</p>
+          <Link to="/tickets/$ticketId" params={{ticketId: String(t.number)}} onClick={(e) => e.stopPropagation()} className="block truncate rounded-sm font-semibold text-slate-900 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/30">
+            {t.subject}
+          </Link>
           <p className="truncate text-xs text-muted-foreground">{[t.contact && fullName(t.contact), t.company?.name].filter(Boolean).join(' · ') || 'No contact'}</p>
         </div>
       ),
@@ -139,7 +158,7 @@ function TicketsPage() {
           <>
             <div className="inline-flex rounded-lg border border-slate-200 bg-card p-0.5">
               {([['board', Columns3, 'Board'], ['list', List, 'List']] as const).map(([v, Icon, label]) => (
-                <button key={v} onClick={() => set({view: v === 'board' ? undefined : v})} className={cn('inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] font-semibold transition-colors', view === v ? 'bg-accent text-primary' : 'text-slate-500 hover:text-slate-800')}>
+                <button key={v} type="button" aria-pressed={view === v} onClick={() => set({view: v === 'board' ? undefined : v})} className={cn('inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] font-semibold transition-colors', view === v ? 'bg-accent text-primary' : 'text-slate-500 hover:text-slate-800')}>
                   <Icon className="size-3.5" /> {label}
                 </button>
               ))}
@@ -162,6 +181,8 @@ function TicketsPage() {
           {FILTERS.map((f) => (
             <button
               key={f.id}
+              type="button"
+              aria-pressed={filter === f.id}
               onClick={() => set({filter: f.id === 'all' ? undefined : f.id})}
               className={cn('-mb-px cursor-pointer border-b-2 px-3 py-2.5 text-sm font-semibold whitespace-nowrap transition-colors', filter === f.id ? 'border-primary text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800')}
             >
@@ -170,7 +191,7 @@ function TicketsPage() {
           ))}
         </div>
         <FilterBar className="p-3" active={filtered} onClear={() => (setQDraft(''), set({q: undefined, priority: undefined, category: undefined, queue: undefined, status: undefined}))}>
-          <form onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
+          <form noValidate onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
             <SearchInput size="sm" value={qDraft} onChange={(v) => (setQDraft(v), !v && set({q: undefined}))} placeholder="Search #number, subject, contact…" />
           </form>
           {view === 'list' && (
@@ -199,13 +220,15 @@ function TicketsPage() {
       </Card>
 
       {view === 'board' ? (
-        board.data ? <TicketBoard tickets={board.data} /> : <div className="h-64 animate-pulse rounded-2xl bg-slate-100/70" />
+        board.isError && !board.data ? <Card><LoadError error={board.error} onRetry={() => board.refetch()} /></Card> : board.data ? <TicketBoard tickets={board.data} /> : <div className="h-64 animate-pulse rounded-2xl bg-slate-100/70" />
       ) : (
         <Card className="overflow-hidden">
           <DataTable
             rows={list.data?.rows}
             columns={columns}
             loading={list.isLoading}
+            error={list.isError && !list.data ? list.error : undefined}
+            onRetry={() => list.refetch()}
             onRowClick={(t) => navigate({to: '/tickets/$ticketId', params: {ticketId: String(t.number)}})}
             empty={
               <EmptyState

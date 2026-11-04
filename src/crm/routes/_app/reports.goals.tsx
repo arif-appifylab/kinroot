@@ -2,6 +2,7 @@ import {createFileRoute} from '@tanstack/react-router';
 import {MoreHorizontal, Pencil, Plus, Target, Trash2} from 'lucide-react';
 import {useState} from 'react';
 
+import {LoadError} from '@/components/data-table';
 import {GoalDialog, GoalItem, useGoals} from '@/components/reports/goals';
 import {Button} from '@/components/ui/button';
 import {Card, CardContent, CardDescription, CardHeader, CardTitle} from '@/components/ui/card';
@@ -48,7 +49,12 @@ function GoalsPage() {
         }
       />
       {goals.isLoading && <Skeleton className="h-48 rounded-xl" />}
-      {!goals.isLoading && !rows.length && (
+      {goals.isError && (
+        <Card>
+          <LoadError error={goals.error} onRetry={() => goals.refetch()} />
+        </Card>
+      )}
+      {!goals.isLoading && !goals.isError && !rows.length && (
         <Card>
           <EmptyState
             icon={<Target />}
@@ -77,7 +83,7 @@ function GoalsPage() {
                     isAdmin && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon-sm" aria-label="Goal actions"><MoreHorizontal /></Button>
+                          <Button variant="ghost" size="icon-sm" aria-label="Goal actions" pending={remove.isPending && remove.variables === p.goal.id} disabled={remove.isPending}><MoreHorizontal /></Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent>
                           <DropdownMenuItem onSelect={() => setEditing(p.goal)}><Pencil /> Edit</DropdownMenuItem>

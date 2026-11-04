@@ -1,6 +1,8 @@
+import type {Prisma} from '../../../generated/prisma/client';
 import {WEBHOOK_SERVICE_NAMES, webhookTarget} from '@/lib/webhook-targets';
 import {decryptJson} from '../kit/crypto';
 import type {Db} from '../kit/db';
+import {enqueue} from './jobs';
 
 /** A webhook is switched off after this many deliveries in a row fail for good. */
 export const DISABLE_AFTER = 20;
@@ -95,13 +97,47 @@ export async function deliverWebhook(db: Db, deliveryId: string, final: boolean)
     return;
   }
   if (final) {
-    const failures = webhook.failures + 1;
-    await db.webhook.update({
-      where: {id: webhook.id},
-      data: {failures, lastStatus: status, lastDeliveryAt: new Date(), active: failures < DISABLE_AFTER},
-    });
+    // Increment in the database: one job delivers several events, so deliveries to a hook can run side by side.
+    const hook = await db.webhook.update({where: {id: webhook.id}, data: {failures: {increment: 1}, lastStatus: status, lastDeliveryAt: new Date()}, select: {failures: true}});
+    if (hook.failures >= DISABLE_AFTER) await db.webhook.update({where: {id: webhook.id}, data: {active: false}});
   } else {
     await db.webhook.update({where: {id: webhook.id}, data: {lastStatus: status, lastDeliveryAt: new Date()}});
   }
   throw new Error(error ?? 'Delivery failed');
+}
+
+/** Deliveries one job sends side by side (each waits at most 10 s for its answer). */
+const PARALLEL = 10;
+/** Pending deliveries one job looks at; more go to a follow-up job. */
+const PER_JOB = 100;
+
+export type DeliverTarget = {deliveryId?: string; deliveryIds?: string[]; eventId?: string; eventIds?: string[]};
+
+/**
+ * `webhook.deliver` job: every pending delivery of one event (all its hooks), of a few events
+ * (`emitMany`), or the ones named. One job per event instead of one per hook keeps Kinroot within
+ * the platform's job rate. Deliveries that succeeded are never sent again; when some fail the job
+ * throws so the platform retries it, and only the failed ones go again (on the last try they are
+ * marked failed for good). Out of time: the rest goes to a follow-up job.
+ */
+export async function deliverWebhooks(db: Db, target: DeliverTarget, final: boolean, deadline = Date.now() + 45_000) {
+  const where: Prisma.WebhookDeliveryWhereInput = target.deliveryId
+    ? {id: target.deliveryId}
+    : target.deliveryIds
+      ? {id: {in: target.deliveryIds.slice(0, PER_JOB)}}
+      : target.eventId
+        ? {eventId: target.eventId}
+        : {eventId: {in: (target.eventIds ?? []).slice(0, PER_JOB)}};
+  const pending = await db.webhookDelivery.findMany({where: {...where, status: 'PENDING'}, orderBy: {createdAt: 'asc'}, take: PER_JOB, select: {id: true}});
+  let failed = 0;
+  for (let i = 0; i < pending.length; i += PARALLEL) {
+    // Leave room for one more round of 10-second answers inside the job's 60 seconds.
+    if (Date.now() > deadline - 12_000) {
+      await enqueue(db, 'webhook.deliver', {deliveryIds: pending.slice(i).map((d) => d.id)});
+      break;
+    }
+    const results = await Promise.allSettled(pending.slice(i, i + PARALLEL).map((d) => deliverWebhook(db, d.id, final)));
+    failed += results.filter((r) => r.status === 'rejected').length;
+  }
+  if (failed) throw new Error(`${failed} of ${pending.length} webhook deliveries failed; trying again later`);
 }

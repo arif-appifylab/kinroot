@@ -1,6 +1,7 @@
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../../src/server/app';
+import {agentCameOnline} from '../../../src/server/crm/inbox/chat';
 import {crmTick} from '../../../src/server/crm/lib/ticks';
 import {env} from '../support/cloudflare-workers';
 import {fakeStorage, owner, resetCrm, teammate, userId} from '../support/crm';
@@ -67,8 +68,14 @@ async function saveChat(patch: Record<string, unknown>) {
   chatSettings = (await ok(own.request('PUT', '/site-api/crm/inbox/chat/settings', {...chatSettings, ...patch}))).settings;
   return chatSettings;
 }
-/** Online = seen within the last 5 minutes; set straight in the database (a request of theirs would stamp it again). */
-const online = (memberId: string, yes: boolean) => db.member.update({where: {id: memberId}, data: {lastSeenAt: yes ? new Date() : new Date(Date.now() - 3_600_000)}});
+/**
+ * Online = seen within the last 5 minutes; set straight in the database (a request of theirs would stamp it again).
+ * "Anyone online" is kept a minute in the Site Cache (the app's own stamp clears it), so a direct write clears it too.
+ */
+const online = async (memberId: string, yes: boolean) => {
+  await db.member.update({where: {id: memberId}, data: {lastSeenAt: yes ? new Date() : new Date(Date.now() - 3_600_000)}});
+  await agentCameOnline();
+};
 const tick = () => inJob(d => crmTick(d));
 
 /** The visitor's upload: ask, PUT the bytes to storage, confirm. */
@@ -131,7 +138,7 @@ describe.skipIf(!DATABASE_URL)('Ported: website live chat (integration, real Pos
     const auditsBefore = await db.auditLog.count({where: {action: 'settings.chat'}});
     await saveChat({enabled: true});
     expect(await db.auditLog.count({where: {action: 'settings.chat'}})).toBe(auditsBefore + 1);
-    expect((await own.request('PUT', '/site-api/crm/inbox/chat/settings', {...chatSettings, allowedDomains: ['not a domain']})).status).toBe(400);
+    expect((await own.request('PUT', '/site-api/crm/inbox/chat/settings', {...chatSettings, allowedDomains: ['not a domain']})).status).toBe(422);
     const cfg = (await ok(pub(v, '/config', {meta: meta()}))).config;
     expect(cfg).toMatchObject({enabled: true, allowed: true, away: false, greeting: `Hello from ${RUN}`, color: '#0f766e'});
     expect(cfg.avatars[0]?.name).toBe(me.name.split(' ')[0]);

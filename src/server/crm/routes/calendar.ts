@@ -55,7 +55,8 @@ export const calendar = new Hono<AppEnv>()
     const db = c.var.db;
     const kind = c.req.param('kind') as CalendarProvider;
     const back = (msg: string, ok = false) => c.redirect(`${CRM_APP}/settings/calendar?${ok ? 'connected' : 'error'}=${encodeURIComponent(msg)}`);
-    if (c.req.query('error')) return back(c.req.query('error_description') ?? c.req.query('error')!);
+    // The provider's own text is never shown (anyone can put words in this URL): ours, by its code.
+    if (c.req.query('error')) return back(c.req.query('error') === 'access_denied' ? 'The calendar was not connected: access was not allowed.' : 'The calendar provider did not connect the calendar. Please try again.');
 
     const [prefix, k, userId, exp, sig] = (c.req.query('state') ?? '').split('.');
     const payload = `${prefix}.${k}.${userId}.${exp}`;
@@ -77,7 +78,8 @@ export const calendar = new Hono<AppEnv>()
       await audit(db, c, {action: 'calendar.connected', entity: 'calendar', recordId: conn.id, label: email, meta: {provider: kind}});
       return back(`${email} connected`, true);
     } catch (e) {
-      return back((e as Error).message);
+      console.error('[calendar] connect', kind, String((e as Error)?.message ?? e).slice(0, 200));
+      return back('The calendar could not be connected. Please try again.');
     }
   })
 
@@ -101,7 +103,8 @@ export const calendar = new Hono<AppEnv>()
     try {
       return c.json({connection: view(await refreshCalendars(c.var.db, conn))});
     } catch (e) {
-      throw new HTTPException(502, {message: (e as Error).message});
+      console.error('[calendar] refresh', conn.provider, String((e as Error)?.message ?? e).slice(0, 200));
+      throw new HTTPException(502, {message: 'The calendar provider did not answer. Try again in a moment, or connect the calendar again.'});
     }
   })
 

@@ -21,8 +21,10 @@ export function CardHeader({className, ...props}: React.ComponentProps<'div'>) {
   return <div className={cn('flex items-start justify-between gap-3 px-5 pt-5', className)} {...props} />;
 }
 
-export function CardTitle({className, ...props}: React.ComponentProps<'h3'>) {
-  return <h3 className={cn('text-[15px] font-semibold text-slate-900', className)} {...props} />;
+/** A card's title: `h2` under the screen's `h1`; `level={3}` for a card inside a section that has its own `h2`. */
+export function CardTitle({className, level = 2, ...props}: React.ComponentProps<'h2'> & {level?: 2 | 3}) {
+  const Heading = level === 3 ? 'h3' : 'h2';
+  return <Heading className={cn('text-[15px] font-semibold text-slate-900', className)} {...props} />;
 }
 
 export function CardDescription({className, ...props}: React.ComponentProps<'p'>) {

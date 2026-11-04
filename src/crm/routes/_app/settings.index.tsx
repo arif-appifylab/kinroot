@@ -4,10 +4,13 @@ import {ImagePlus, Loader2, RotateCcw} from 'lucide-react';
 import {useEffect, useState} from 'react';
 
 import {TagInput} from '@/components/pickers';
+import {LoadError} from '@/components/data-table';
 import {AdminOnly, SettingsSection} from '@/components/settings-section';
 import {Button} from '@/components/ui/button';
 import {Field, Input, NativeSelect, Switch} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {api} from '@/lib/api';
+import {uploadFile} from '@/lib/upload';
 import {keys, useApiMutation, useMe, useSettings} from '@/lib/queries';
 import {BRAND} from '@/lib/brand';
 import type {AppSettings} from '@/lib/types';
@@ -53,13 +56,18 @@ function GeneralSettings() {
     },
   );
 
+  const f = useFormState((form ?? {brandName: ''}) as AppSettings, {
+    brandName: [is.required('Enter your company or product name.'), is.maxLength(60)],
+  });
+
+  if (settings.isError && !form) return <LoadError error={settings.error} onRetry={() => settings.refetch()} />;
   if (!form) return <Loader2 className="size-5 animate-spin text-primary" />;
   const disabled = !isAdmin;
 
   return (
-    <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))}>
+    <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))}>
       {!isAdmin && <div className="mb-6"><AdminOnly /></div>}
-      <BrandingSection form={form} setForm={setForm} disabled={disabled} />
+      <BrandingSection form={form} setForm={setForm} disabled={disabled} nameError={f.error('brandName')} onNameBlur={f.blur('brandName')} />
 
       <SettingsSection title="Defaults">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -77,8 +85,8 @@ function GeneralSettings() {
             ['everyone', 'Everyone sees everything', 'Best for small, collaborative teams.'],
             ['owner', 'Members see only their own', 'Admins still see all records. Good for territories.'],
           ] as const).map(([value, title, desc]) => (
-            <label key={value} className={`cursor-pointer rounded-xl border p-4 transition-all ${form.recordVisibility === value ? 'border-primary bg-accent/60 ring-2 ring-primary/15' : 'border-border hover:border-slate-300'} ${disabled ? 'pointer-events-none opacity-70' : ''}`}>
-              <input type="radio" name="vis" className="sr-only" checked={form.recordVisibility === value} onChange={() => setForm({...form, recordVisibility: value})} />
+            <label key={value} className={`cursor-pointer rounded-xl border p-4 transition-all has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary/40 ${form.recordVisibility === value ? 'border-primary bg-accent/60 ring-2 ring-primary/15' : 'border-border hover:border-slate-300'} ${disabled ? 'pointer-events-none opacity-70' : ''}`}>
+              <input type="radio" name="vis" className="sr-only" disabled={disabled} checked={form.recordVisibility === value} onChange={() => setForm({...form, recordVisibility: value})} />
               <p className="text-sm font-semibold text-slate-900">{title}</p>
               <p className="mt-0.5 text-xs text-muted-foreground">{desc}</p>
             </label>
@@ -124,7 +132,7 @@ function GeneralSettings() {
 
       {isAdmin && (
         <div className="flex justify-end">
-          <Button type="submit" disabled={save.isPending}>{save.isPending && <Loader2 className="animate-spin" />} Save changes</Button>
+          <Button type="submit" pending={save.isPending} pendingLabel="Saving…">Save changes</Button>
         </div>
       )}
     </form>
@@ -140,41 +148,58 @@ const PALETTES: {name: string; primary: string; secondary: string}[] = [
   {name: 'Graphite', primary: '#334155', secondary: '#0f766e'},
 ];
 
-/** Downscale an uploaded logo to at most 256px and return a data URL (SVGs are kept as-is). */
+/** SVG logos stay in the settings as a data URL (storage only offers SVG as a download); the server allows 60 KB. */
+const SVG_LOGO_MAX = 60 * 1024;
+
+/**
+ * The logo to save: an SVG as a data URL (up to 60 KB), any other image downscaled to at most 256px,
+ * uploaded as a PUBLIC storage file (POST /files/public, docs/agent/files.md) and saved as its link.
+ */
 async function readLogo(file: File): Promise<string> {
-  const asDataUrl = (blob: Blob) =>
-    new Promise<string>((resolve, reject) => {
+  if (file.type === 'image/svg+xml') {
+    if (file.size > SVG_LOGO_MAX) throw new Error('SVG logos can be up to 60 KB. Use a smaller SVG, or a PNG.');
+    return new Promise<string>((resolve, reject) => {
       const r = new FileReader();
       r.onload = () => resolve(String(r.result));
       r.onerror = () => reject(r.error);
-      r.readAsDataURL(blob);
+      r.readAsDataURL(file);
     });
-  if (file.type === 'image/svg+xml') {
-    if (file.size > 200_000) throw new Error('SVG logos must be under 200 KB');
-    return asDataUrl(file);
   }
-  const bitmap = await createImageBitmap(file);
+  const bitmap = await createImageBitmap(file).catch(() => {
+    throw new Error('That image could not be read. Use a PNG, JPEG, WebP or SVG file.');
+  });
   const scale = Math.min(1, 256 / Math.max(bitmap.width, bitmap.height));
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(bitmap.width * scale);
   canvas.height = Math.round(bitmap.height * scale);
   canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL('image/png');
+  const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+  if (!png) throw new Error('That image could not be read. Use a PNG, JPEG, WebP or SVG file.');
+  const {url} = await uploadFile<{url: string | null}>('/files/public', new File([png], 'logo.png', {type: 'image/png'}));
+  if (!url) throw new Error('The logo was uploaded but has no public link yet. Please try again.');
+  return url;
 }
 
 /** Name, logo and colours: this is how a company makes the app its own. */
-function BrandingSection({form, setForm, disabled}: {form: AppSettings; setForm: (f: AppSettings) => void; disabled: boolean}) {
+function BrandingSection({form, setForm, disabled, nameError, onNameBlur}: {form: AppSettings; setForm: (f: AppSettings) => void; disabled: boolean; nameError?: string; onNameBlur?: () => void}) {
   const [error, setError] = useState<string | null>(null);
   const primary = form.brandPrimary || BRAND.primary;
   const secondary = form.brandSecondary || BRAND.secondary;
 
-  async function onLogo(file: File | undefined) {
+  const [uploading, setUploading] = useState(false);
+
+  async function onLogo(input: HTMLInputElement) {
+    const file = input.files?.[0];
+    input.value = ''; // the same file can be picked again after an error
     if (!file) return;
     setError(null);
+    setUploading(true);
     try {
       setForm({...form, brandLogo: await readLogo(file)});
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -182,18 +207,18 @@ function BrandingSection({form, setForm, disabled}: {form: AppSettings; setForm:
     <SettingsSection title="Branding" description="Your name, logo and colours appear in the app, on sign-in pages, emails and public pages.">
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_260px]">
         <div className="grid gap-4">
-          <Field label="Brand name" htmlFor="b-name" hint={`The template ships as "${BRAND.name}". Use your company or product name.`}>
-            <Input id="b-name" disabled={disabled} value={form.brandName} onChange={(e) => setForm({...form, brandName: e.target.value})} />
+          <Field label="Brand name" htmlFor="b-name" error={nameError} hint={`Shown across the app, sign-in pages, emails and public pages (the default is "${BRAND.name}"). Use your company or product name.`}>
+            <Input id="b-name" disabled={disabled} value={form.brandName} onChange={(e) => setForm({...form, brandName: e.target.value})} onBlur={onNameBlur} />
           </Field>
 
-          <Field label="Logo" error={error} hint="Square images work best. PNG, JPEG, WebP or SVG; resized to 256 px.">
+          <Field label="Logo" error={error} hint="Square images work best. PNG, JPEG or WebP (resized to 256 px), or an SVG up to 60 KB. Saved with the settings.">
             <div className="flex items-center gap-3">
-              <label className={cn('inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-semibold text-slate-700 hover:border-slate-300', disabled && 'pointer-events-none opacity-60')}>
-                <ImagePlus className="size-4" /> {form.brandLogo ? 'Replace logo' : 'Upload logo'}
-                <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="sr-only" disabled={disabled} onChange={(e) => onLogo(e.target.files?.[0])} />
+              <label aria-busy={uploading || undefined} className={cn('inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-semibold text-slate-700 hover:border-slate-300', (disabled || uploading) && 'pointer-events-none opacity-60')}>
+                {uploading ? <Loader2 className="size-4 animate-spin" /> : <ImagePlus className="size-4" />} {uploading ? 'Uploading…' : form.brandLogo ? 'Replace logo' : 'Upload logo'}
+                <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="sr-only" disabled={disabled || uploading} onChange={(e) => onLogo(e.currentTarget)} />
               </label>
               {form.brandLogo && (
-                <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={() => setForm({...form, brandLogo: ''})}><RotateCcw /> Use default mark</Button>
+                <Button type="button" variant="ghost" size="sm" disabled={disabled || uploading} onClick={() => setForm({...form, brandLogo: ''})}><RotateCcw /> Use default mark</Button>
               )}
             </div>
           </Field>
@@ -208,8 +233,9 @@ function BrandingSection({form, setForm, disabled}: {form: AppSettings; setForm:
                     key={p.name}
                     type="button"
                     disabled={disabled}
+                    aria-pressed={on}
                     onClick={() => setForm({...form, brandPrimary: p.primary, brandSecondary: p.secondary})}
-                    className={cn('inline-flex cursor-pointer items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-semibold transition-all', on ? 'border-primary bg-accent text-primary ring-2 ring-primary/15' : 'border-border text-slate-600 hover:border-slate-300')}
+                    className={cn('inline-flex cursor-pointer items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed', on ? 'border-primary bg-accent text-primary ring-2 ring-primary/15' : 'border-border text-slate-600 hover:border-slate-300')}
                   >
                     <span className="size-4 rounded-full" style={{background: `linear-gradient(135deg, ${p.primary || BRAND.primary}, ${p.secondary || BRAND.secondary})`}} />
                     {p.name}

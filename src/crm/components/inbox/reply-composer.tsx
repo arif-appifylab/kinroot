@@ -1,4 +1,4 @@
-import {ChevronDown, Eye, FileText, Loader2, Lock, MessageSquareReply, Send, StickyNote} from 'lucide-react';
+import {ChevronDown, Eye, FileText, Lock, MessageSquareReply, Send, StickyNote} from 'lucide-react';
 import {useEffect, useRef, useState} from 'react';
 
 import {api} from '@/lib/api';
@@ -66,6 +66,7 @@ export function ReplyComposer({detail, mode, onMode, focusKey}: {detail: Convers
             key={m}
             type="button"
             onClick={() => onMode(m)}
+            aria-pressed={mode === m}
             className={cn('inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-semibold transition-colors', mode === m ? (m === 'comment' ? 'bg-amber-50 text-amber-700' : 'bg-accent text-primary') : 'text-slate-500 hover:text-slate-800')}
           >
             <Icon className="size-3.5" /> {label}
@@ -124,17 +125,17 @@ export function ReplyComposer({detail, mode, onMode, focusKey}: {detail: Convers
           )}
           <div className="ml-auto flex flex-wrap items-center gap-2">
             {mode === 'comment' ? (
-              <Button type="button" size="sm" onClick={submitComment} disabled={!comment.trim() || addComment.isPending}>
-                {addComment.isPending ? <Loader2 className="animate-spin" /> : <StickyNote />} Add comment
+              <Button type="button" size="sm" onClick={submitComment} disabled={!comment.trim()} pending={addComment.isPending} pendingLabel="Adding…">
+                <StickyNote /> Add comment
               </Button>
             ) : (
               canReply && (
                 <>
                   {t.status === 'OPEN' && (
-                    <Button type="button" variant="secondary" size="sm" onClick={() => send.mutate(true)} disabled={empty || send.isPending || detail.sidebar.contact?.emailOptOut}>Send & close</Button>
+                    <Button type="button" variant="secondary" size="sm" onClick={() => send.mutate(true)} disabled={empty || send.isPending || detail.sidebar.contact?.emailOptOut} pending={send.isPending && send.variables === true} pendingLabel="Sending…">Send & close</Button>
                   )}
-                  <Button type="button" size="sm" onClick={() => send.mutate(false)} disabled={empty || send.isPending || detail.sidebar.contact?.emailOptOut}>
-                    {send.isPending ? <Loader2 className="animate-spin" /> : <Send />} Send
+                  <Button type="button" size="sm" onClick={() => send.mutate(false)} disabled={empty || send.isPending || detail.sidebar.contact?.emailOptOut} pending={send.isPending && send.variables === false} pendingLabel="Sending…">
+                    <Send /> Send
                   </Button>
                 </>
               )

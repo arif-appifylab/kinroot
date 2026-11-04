@@ -1,6 +1,6 @@
 import {useQuery, useQueryClient} from '@tanstack/react-query';
 import {createFileRoute, useNavigate} from '@tanstack/react-router';
-import {ArrowRight, Loader2, LogIn, UserPlus} from 'lucide-react';
+import {ArrowRight, LogIn, UserPlus} from 'lucide-react';
 import {useState} from 'react';
 
 import {AuthLayout} from '@/components/auth-layout';
@@ -62,10 +62,9 @@ function InvitePage() {
       {data &&
         (data.signedIn ? (
           <div className="grid gap-3">
-            <Button type="button" size="lg" className="group w-full" disabled={busy} aria-busy={busy} onClick={join}>
-              {busy && <Loader2 className="animate-spin" />}
-              {busy ? 'Joining…' : 'Join the team'}
-              {!busy && <ArrowRight className="transition-transform group-hover:translate-x-1" />}
+            <Button type="button" size="lg" className="group w-full" pending={busy} pendingLabel="Joining…" onClick={join}>
+              Join the team
+              <ArrowRight className="transition-transform group-hover:translate-x-1" />
             </Button>
             {error && (
               <p role="alert" className="text-sm text-destructive">

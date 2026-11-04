@@ -1,5 +1,5 @@
 import {useNavigate} from '@tanstack/react-router';
-import {Filter, List, Loader2} from 'lucide-react';
+import {Filter, List} from 'lucide-react';
 import {useState} from 'react';
 
 import {api} from '@/lib/api';
@@ -11,6 +11,7 @@ import {cn} from '@/lib/utils';
 import {Button} from '../ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '../ui/dialog';
 import {Field, Input, Textarea} from '../ui/form';
+import {is, useFormState} from '../ui/form-state';
 
 const KINDS: {kind: ListKind; icon: typeof List; title: string; text: string}[] = [
   {kind: 'STATIC', icon: List, title: 'Static list', text: 'You decide who is in it: add people by hand, in bulk, by import or from forms.'},
@@ -38,10 +39,15 @@ export function ListDialog({list, onClose}: {list?: Pick<ContactListRow, 'id' | 
     },
   );
 
+  const f = useFormState({name, description}, {
+    name: [is.required('Give the list a name.'), is.maxLength(120)],
+    description: [is.maxLength(5000)],
+  });
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !save.isPending && onClose()}>
       <DialogContent size="md">
-        <form onSubmit={(e) => (e.preventDefault(), name.trim() && save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>{list ? 'Edit list' : 'New list'}</DialogTitle>
             <DialogDescription>{list ? 'Rename it or say what it is for.' : 'Group contacts for follow-ups, campaigns and reports.'}</DialogDescription>
@@ -54,6 +60,7 @@ export function ListDialog({list, onClose}: {list?: Pick<ContactListRow, 'id' | 
                     key={k.kind}
                     type="button"
                     onClick={() => setKind(k.kind)}
+                    aria-pressed={kind === k.kind}
                     className={cn('cursor-pointer rounded-xl border p-3 text-left transition-all', kind === k.kind ? 'border-primary bg-primary/[0.06] ring-1 ring-primary' : 'border-slate-200 hover:border-primary/50')}
                   >
                     <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900"><k.icon className="size-4 text-primary" /> {k.title}</p>
@@ -62,17 +69,17 @@ export function ListDialog({list, onClose}: {list?: Pick<ContactListRow, 'id' | 
                 ))}
               </div>
             )}
-            <Field label="Name">
-              <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} placeholder={kind === 'DYNAMIC' ? 'e.g. Engaged leads, last 30 days' : 'e.g. Newsletter, Event attendees'} autoFocus required />
+            <Field label="Name" error={f.error('name')}>
+              <Input value={name} onChange={(e) => setName(e.target.value)} onBlur={f.blur('name')} maxLength={120} placeholder={kind === 'DYNAMIC' ? 'e.g. Engaged leads, last 30 days' : 'e.g. Newsletter, Event attendees'} autoFocus />
             </Field>
-            <Field label="Description (optional)">
-              <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} className="min-h-16" />
+            <Field label="Description (optional)" error={f.error('description')}>
+              <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} onBlur={f.blur('description')} className="min-h-16" />
             </Field>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={!name.trim() || save.isPending}>
-              {save.isPending && <Loader2 className="animate-spin" />} {list ? 'Save' : kind === 'DYNAMIC' ? 'Create and add rules' : 'Create list'}
+            <Button type="button" variant="secondary" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel={list ? 'Saving…' : 'Creating…'}>
+              {list ? 'Save' : kind === 'DYNAMIC' ? 'Create and add rules' : 'Create list'}
             </Button>
           </DialogFooter>
         </form>

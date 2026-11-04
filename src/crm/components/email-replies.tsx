@@ -3,7 +3,7 @@
  * sync their mailbox; API accounts set a Reply-To inbound address
  * that an email service posts to the inbound webhook.
  */
-import {AlertTriangle, Copy, Loader2, MessageSquareReply, RefreshCw, Webhook} from 'lucide-react';
+import {AlertTriangle, Copy, MessageSquareReply, RefreshCw, Webhook} from 'lucide-react';
 import {useState} from 'react';
 import {toast} from 'sonner';
 
@@ -15,6 +15,7 @@ import {Badge} from './ui/badge';
 import {Button} from './ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from './ui/dialog';
 import {Field, Input, NativeSelect, Switch} from './ui/form';
+import {is, useFormState} from './ui/form-state';
 
 // ─── Per-service guides ───
 
@@ -104,10 +105,12 @@ export function RepliesDialog({account, onClose}: {account: EmailAccount; onClos
     onSuccess: (r) => toast.success(`Test reply from ${r.contact} stored`, {description: `“${r.subject}” is in the inbox and on their timeline.`}),
   });
 
+  const f = useFormState({replyTo}, {replyTo: [is.email('Enter a valid address, like replies@inbound.yourdomain.com.')]});
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !save.isPending && onClose()}>
       <DialogContent size="lg">
-        <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>How replies come back</DialogTitle>
             <DialogDescription>
@@ -123,7 +126,9 @@ export function RepliesDialog({account, onClose}: {account: EmailAccount; onClos
                   {SERVICES.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </NativeSelect>
               </div>
-              {account.provider === 'SMTP' && <p className="text-xs text-muted-foreground">Any of these works with SMTP sending; it only receives the replies.</p>}
+              {account.provider === 'SMTP' && (
+                <p className="text-xs text-amber-800">This is an old SMTP account: it can no longer send. Reconnect this address through an API provider (Resend, Postmark, SendGrid or Mailgun) to send again; any of these services can receive the replies.</p>
+              )}
               <WebhookGuide service={service} url={webhookUrl} />
               {webhookUrl && (
                 <Button type="button" variant="ghost" size="sm" className="justify-self-start" onClick={() => (navigator.clipboard.writeText(webhookUrl), toast.success('Copied'))}>
@@ -134,8 +139,8 @@ export function RepliesDialog({account, onClose}: {account: EmailAccount; onClos
 
             <section className="grid gap-3 rounded-xl border border-slate-100 p-4">
               <p className="flex items-center gap-2 text-sm font-bold text-slate-900"><MessageSquareReply className="size-4 text-primary" /> 2. Use it as the reply-to address</p>
-              <Field label="Reply-to address" htmlFor="r-to" hint="Leave empty to let replies go to the From address (the CRM won't see them).">
-                <Input id="r-to" type="email" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="replies@inbound.yourdomain.com" />
+              <Field label="Reply-to address" htmlFor="r-to" hint="Leave empty to let replies go to the From address (the CRM won't see them)." error={f.error('replyTo')}>
+                <Input id="r-to" type="email" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} onBlur={f.blur('replyTo')} placeholder="replies@inbound.yourdomain.com" />
               </Field>
               <label className="flex items-start gap-2.5 text-sm">
                 <Switch checked={forward} onCheckedChange={setForward} disabled={!replyTo.trim()} className="mt-0.5" />
@@ -151,14 +156,14 @@ export function RepliesDialog({account, onClose}: {account: EmailAccount; onClos
                 <p className="text-sm font-bold text-slate-900">3. Check it</p>
                 <p className="text-xs text-muted-foreground">Stores a reply to your latest email from {account.fromEmail} through the same path as the webhook. Works before the URL is public.</p>
               </div>
-              <Button type="button" variant="secondary" size="sm" disabled={testReply.isPending} onClick={() => testReply.mutate(undefined)}>
-                {testReply.isPending ? <Loader2 className="animate-spin" /> : <MessageSquareReply />} Send a test reply
+              <Button type="button" variant="secondary" size="sm" pending={testReply.isPending} pendingLabel="Sending…" onClick={() => testReply.mutate(undefined)}>
+                <MessageSquareReply /> Send a test reply
               </Button>
             </section>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending}>{save.isPending && <Loader2 className="animate-spin" />} Save</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel="Saving…">Save</Button>
           </DialogFooter>
         </form>
       </DialogContent>

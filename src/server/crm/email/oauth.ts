@@ -2,7 +2,6 @@ import type {EmailAccount} from '../../../generated/prisma/client';
 import {decryptJson, encryptJson} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {config as site} from '../../../platform/config';
-import {getSettings} from '../lib/settings';
 import type {Credentials, OAuthCreds} from './providers';
 import {fetchOut} from '../kit/outbound';
 
@@ -19,7 +18,10 @@ const MS_SCOPES = ['offline_access', 'openid', 'email', 'profile', 'User.Read', 
  * `GOOGLE_CLIENT_ID` / `MICROSOFT_CLIENT_ID` wins over the saved one.
  */
 export async function oauthClient(db: Db, kind: OAuthKind) {
-  const s = await getSettings(db);
+  // The saved app ids (private settings), read without side effects: `getPrivateSettings()` would
+  // also create the inbound token, and the settings page asks for both clients at once.
+  const row = await db.setting.findUnique({where: {key: 'workspace'}, select: {value: true}});
+  const s = (row?.value ?? {}) as {googleClientId?: string; microsoftClientId?: string; microsoftTenant?: string};
   if (kind === 'google') {
     const clientId = site.ownerSecret('GOOGLE_CLIENT_ID') || s.googleClientId;
     const clientSecret = site.ownerSecret('GOOGLE_CLIENT_SECRET');
@@ -27,7 +29,7 @@ export async function oauthClient(db: Db, kind: OAuthKind) {
   }
   const clientId = site.ownerSecret('MICROSOFT_CLIENT_ID') || s.microsoftClientId;
   const clientSecret = site.ownerSecret('MICROSOFT_CLIENT_SECRET');
-  return clientId && clientSecret ? {clientId, clientSecret, tenant: s.microsoftTenant || 'common'} : null;
+  return clientId && clientSecret ? {clientId, clientSecret, tenant: encodeURIComponent(s.microsoftTenant || 'common')} : null; // a URL path segment (email + calendar sign-in)
 }
 
 export function authorizeUrl(kind: OAuthKind, client: {clientId: string; tenant: string}, redirectUri: string, state: string) {

@@ -1,5 +1,7 @@
 import type {Db} from '../kit/db';
+import {isAdmin} from '../kit/guards';
 import type {ActivityLink} from './activity';
+import {getSettings} from './settings';
 
 export type NotificationType = 'mention' | 'assigned' | 'reminder' | 'activity' | 'stage_changed' | 'deal_won' | 'deal_lost' | 'email_in' | 'chat' | 'comment' | 'form' | 'ticket' | 'sla' | 'meeting' | 'score' | 'automation' | 'report' | 'import' | 'export';
 
@@ -57,7 +59,14 @@ export async function notifyWatchers(
     link.companyId && {entity: 'COMPANY' as const, recordId: link.companyId},
     link.dealId && {entity: 'DEAL' as const, recordId: link.dealId},
   ].filter((r) => !!r);
-  const followers = records.length ? await db.follow.findMany({where: {OR: records}, select: {userId: true}}) : [];
+  const [followRows, settings] = await Promise.all([
+    records.length ? db.follow.findMany({where: {OR: records}, select: {userId: true, user: {select: {role: true}}}, take: 500}) : [],
+    getSettings(db),
+  ]);
+  // With owner-only visibility, a follower hears only about records they may still see
+  // (an admin, or the owner of one of the records); the notification carries the note's words.
+  const owners = new Set([contact?.ownerId, company?.ownerId, deal?.ownerId].filter((id): id is string => !!id));
+  const followers = settings.recordVisibility === 'owner' ? followRows.filter((f) => isAdmin(f.user) || owners.has(f.userId)) : followRows;
   const name = deal?.title ?? (contact ? [contact.firstName, contact.lastName].filter(Boolean).join(' ') : null) ?? company?.name ?? 'a record';
   const except = new Set(input.except ?? []);
   const ids = [contact?.ownerId, company?.ownerId, deal?.ownerId, ...followers.map((f) => f.userId)].filter((id) => id && !except.has(id));

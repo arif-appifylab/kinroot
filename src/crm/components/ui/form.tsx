@@ -10,12 +10,35 @@ const field =
 /** `sm` is the compact size for filter bars (h-8, 13px); the default is for real forms. */
 export type ControlSize = 'default' | 'sm';
 
+// ─── Field wiring ───
+// A `Field` names its control: the control takes the Field's id (unless it has its own) and,
+// when it is that labelled control, `aria-invalid` and `aria-describedby` for the error / hint.
+
+type FieldWiring = {id: string; describedBy?: string; invalid: boolean};
+const FieldContext = React.createContext<FieldWiring | null>(null);
+
+/** The id and error wiring a control gets from its `Field` (pass your own `id` to opt out). */
+export function useFieldControl<P extends {id?: string; 'aria-invalid'?: unknown; 'aria-describedby'?: string}>(props: P): P {
+  const ctx = React.useContext(FieldContext);
+  if (!ctx) return props;
+  const id = props.id ?? ctx.id;
+  if (id !== ctx.id) return props;
+  return {
+    ...props,
+    id,
+    'aria-invalid': props['aria-invalid'] ?? (ctx.invalid ? true : undefined),
+    'aria-describedby': props['aria-describedby'] ?? ctx.describedBy,
+  };
+}
+
 export function Input({className, size = 'default', ...props}: Omit<React.ComponentProps<'input'>, 'size'> & {size?: ControlSize}) {
-  return <input data-slot="input" className={cn(field, size === 'sm' ? 'h-8 px-2.5 text-[13px]' : 'h-10', className)} {...props} />;
+  const wired = useFieldControl(props);
+  return <input data-slot="input" className={cn(field, size === 'sm' ? 'h-8 px-2.5 text-[13px]' : 'h-10', className)} {...wired} />;
 }
 
 export function Textarea({className, ...props}: React.ComponentProps<'textarea'>) {
-  return <textarea data-slot="textarea" className={cn(field, 'min-h-24 py-2.5 leading-relaxed', className)} {...props} />;
+  const wired = useFieldControl(props);
+  return <textarea data-slot="textarea" className={cn(field, 'min-h-24 py-2.5 leading-relaxed', className)} {...wired} />;
 }
 
 // ─── Select ───
@@ -52,7 +75,8 @@ function readOptions(children: React.ReactNode): SelectGroup[] {
 }
 
 /** `size="sm"` is the compact filter-bar trigger: h-8, 13px, as wide as its label (long labels truncate). */
-export function NativeSelect({className, value, onChange, children, disabled, id, size = 'default', ...rest}: Omit<React.ComponentProps<'select'>, 'size'> & {size?: ControlSize}) {
+export function NativeSelect({size = 'default', ...input}: Omit<React.ComponentProps<'select'>, 'size'> & {size?: ControlSize}) {
+  const {className, value, onChange, children, disabled, id, ref, ...rest} = useFieldControl(input);
   const sm = size === 'sm';
   const groups = readOptions(children);
   const current = value === undefined || value === null ? '' : String(value);
@@ -68,8 +92,10 @@ export function NativeSelect({className, value, onChange, children, disabled, id
     <SelectPrimitive.Root value={toItem(selected?.value ?? current)} onValueChange={change} disabled={disabled}>
       <SelectPrimitive.Trigger
         id={id}
+        ref={ref as unknown as React.Ref<HTMLButtonElement>}
         aria-label={rest['aria-label']}
         aria-invalid={rest['aria-invalid']}
+        aria-describedby={rest['aria-describedby']}
         className={cn(
           field,
           'flex cursor-pointer items-center justify-between text-left data-[placeholder]:text-slate-400',
@@ -121,13 +147,30 @@ export function Label({className, ...props}: React.ComponentProps<typeof LabelPr
   return <LabelPrimitive.Root className={cn('text-sm font-semibold text-slate-700 select-none', className)} {...props} />;
 }
 
-/** Label + control + optional hint/error, stacked. */
-export function Field({label, hint, error, children, className, htmlFor}: {label?: string; hint?: React.ReactNode; error?: string | null; children: React.ReactNode; className?: string; htmlFor?: string}) {
+/**
+ * Label + control + optional hint/error, stacked. The label points at the control (`htmlFor`, else
+ * the child's own `id`, else a generated one the kit's controls pick up), and the control gets
+ * `aria-invalid` + `aria-describedby` pointing at the error (`<id>-error`) or the hint.
+ */
+export function Field({label, hint, error, children, className, htmlFor}: {label?: React.ReactNode; hint?: React.ReactNode; error?: string | null | false; children: React.ReactNode; className?: string; htmlFor?: string}) {
+  const auto = React.useId();
+  const childId = React.isValidElement<{id?: unknown}>(children) && typeof children.props.id === 'string' ? children.props.id : undefined;
+  const id = htmlFor ?? childId ?? auto;
+  const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
+  const wiring = React.useMemo(() => ({id, describedBy, invalid: !!error}), [id, describedBy, error]);
   return (
     <div className={cn('grid content-start gap-1.5', className)}>
-      {label && <Label htmlFor={htmlFor}>{label}</Label>}
-      {children}
-      {error ? <p className="text-xs font-medium text-destructive">{error}</p> : hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      {label && <Label htmlFor={id}>{label}</Label>}
+      <FieldContext.Provider value={wiring}>{children}</FieldContext.Provider>
+      {error ? (
+        <p id={`${id}-error`} role="alert" className="text-xs font-medium text-destructive">
+          {error}
+        </p>
+      ) : hint ? (
+        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }

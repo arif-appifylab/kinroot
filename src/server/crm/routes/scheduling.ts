@@ -11,7 +11,7 @@ import {audit} from '../lib/audit';
 import {notFound, optStr, ownerScope, valid} from '../lib/http';
 import {userSelect} from '../lib/users';
 import {cancelBooking, manageUrl} from '../scheduling/bookings';
-import {ensureProfile, linkPath, uniqueHandle, uniqueLinkSlug} from '../scheduling/links';
+import {ensureProfile, linkPath, linkPaths, uniqueHandle, uniqueLinkSlug} from '../scheduling/links';
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const HHMM_END = /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/;
@@ -91,7 +91,10 @@ export const scheduling = new Hono<AppEnv>()
       include: {user: {select: userSelect}},
       orderBy: [{kind: 'asc'}, {createdAt: 'asc'}],
     });
-    return c.json({rows: await Promise.all(rows.map(async (r) => ({...(await withPath(c, r)), user: r.user, canEdit: canManage(me, r)})))});
+    // Every link's path from ONE query for the owners' handles (never one per link).
+    const paths = await linkPaths(c.var.db, rows);
+    const origin = publicOrigin(c.req.raw);
+    return c.json({rows: rows.map((r) => ({...r, path: paths.get(r.id)!, url: `${origin}/book/${paths.get(r.id)}`, user: r.user, canEdit: canManage(me, r)}))});
   })
 
   .get('/links/:id', async (c) => {
@@ -175,9 +178,14 @@ export const scheduling = new Hono<AppEnv>()
       orderBy: {occurredAt: q.when === 'upcoming' ? 'asc' : 'desc'},
       take: q.take,
     });
-    const bookings = await db.booking.findMany({where: {interactionId: {in: rows.map((r) => r.id)}}, include: {link: {select: {id: true, name: true}}}});
+    const ids = rows.map((r) => r.id);
+    // Independent reads, side by side.
+    const [bookings, events] = await Promise.all([
+      db.booking.findMany({where: {interactionId: {in: ids}}, include: {link: {select: {id: true, name: true}}}}),
+      db.calendarEvent.findMany({where: {interactionId: {in: ids}}, select: {interactionId: true}}),
+    ]);
     const origin = publicOrigin(c.req.raw);
-    const calendarIds = new Set((await db.calendarEvent.findMany({where: {interactionId: {in: rows.map((r) => r.id)}}, select: {interactionId: true}})).map((e) => e.interactionId));
+    const calendarIds = new Set(events.map((e) => e.interactionId));
     return c.json({
       rows: await Promise.all(
         rows.map(async (r) => {

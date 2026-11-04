@@ -2,12 +2,14 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/react-router';
 import {LayoutDashboard, LayoutGrid, Plus, Users} from 'lucide-react';
 import {useState} from 'react';
 
+import {LoadError} from '@/components/data-table';
 import {useDashboards} from '@/components/reports/hooks';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {Card} from '@/components/ui/card';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Field, Input, Switch} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {IconBadge, PageHeader, Skeleton} from '@/components/ui/misc';
 import {api} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
@@ -45,6 +47,11 @@ function DashboardsPage() {
             </div>
           </Card>
         </Link>
+        {list.isError && (
+          <Card className="sm:col-span-2 xl:col-span-3">
+            <LoadError error={list.error} onRetry={() => list.refetch()} />
+          </Card>
+        )}
         {list.isLoading && Array.from({length: 2}).map((_, i) => <Skeleton key={i} className="h-32 rounded-xl" />)}
         {list.data?.map((d) => (
           <Link key={d.id} to="/reports/dashboards/$dashboardId" params={{dashboardId: d.id}} className="block">
@@ -64,8 +71,9 @@ function DashboardsPage() {
         ))}
         {canEdit && list.data && (
           <button
+            type="button"
             onClick={() => setCreating(true)}
-            className="flex min-h-32 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 text-sm font-semibold text-slate-500 transition-colors hover:border-primary/40 hover:text-primary"
+            className="flex min-h-32 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-200 text-sm font-semibold text-slate-500 transition-colors outline-none hover:border-primary/40 hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             <Plus className="size-5" /> New dashboard
           </button>
@@ -88,23 +96,18 @@ function NewDashboardDialog({open, onOpenChange}: {open: boolean; onOpenChange: 
       navigate({to: '/reports/dashboards/$dashboardId', params: {dashboardId: r.dashboard.id}});
     },
   });
+  const f = useFormState({name}, {name: [is.required('Give the dashboard a name.'), is.maxLength(80)]});
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => (create.isPending ? undefined : (onOpenChange(o), !o && f.reset()))}>
       <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>New dashboard</DialogTitle>
           <DialogDescription>Add saved reports to it next.</DialogDescription>
         </DialogHeader>
-        <form
-          className="contents"
-          onSubmit={(e) => {
-            e.preventDefault();
-            create.mutate(undefined);
-          }}
-        >
+        <form className="contents" {...f.form(() => create.mutate(undefined, {onError: f.fail}))}>
           <DialogBody>
-            <Field label="Name">
-              <Input autoFocus required maxLength={80} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Sales weekly" />
+            <Field label="Name" error={f.error('name')}>
+              <Input autoFocus maxLength={80} value={name} onChange={(e) => setName(e.target.value)} onBlur={f.blur('name')} placeholder="e.g. Sales weekly" />
             </Field>
             <label className="flex items-center justify-between gap-3 text-sm text-slate-700">
               <span>
@@ -115,8 +118,8 @@ function NewDashboardDialog({open, onOpenChange}: {open: boolean; onOpenChange: 
             </label>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={!name.trim() || create.isPending}>Create dashboard</Button>
+            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={create.isPending}>Cancel</Button>
+            <Button type="submit" pending={create.isPending} pendingLabel="Creating…">Create dashboard</Button>
           </DialogFooter>
         </form>
       </DialogContent>

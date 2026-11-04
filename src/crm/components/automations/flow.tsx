@@ -203,7 +203,7 @@ function Canvas({children, fitKey}: {children: ReactNode; fitKey: number}) {
       </div>
       <div className="absolute bottom-3 left-3 flex items-center gap-0.5 rounded-xl border border-slate-100 bg-card p-1 shadow-soft">
         <ZoomButton label="Zoom out" onClick={() => zoomAt(view.zoom / 1.2)}><Minus /></ZoomButton>
-        <button type="button" onClick={() => zoomAt(1)} className="min-w-12 cursor-pointer rounded-md px-1.5 py-1 text-xs font-semibold text-slate-700 tabular-nums hover:bg-slate-100" title="Zoom to 100%">
+        <button type="button" onClick={() => zoomAt(1)} className="min-w-12 cursor-pointer rounded-md px-1.5 py-1 text-xs font-semibold text-slate-700 tabular-nums outline-none hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-primary/30" title="Zoom to 100%">
           {Math.round(view.zoom * 100)}%
         </button>
         <ZoomButton label="Zoom in" onClick={() => zoomAt(view.zoom * 1.2)}><Plus /></ZoomButton>
@@ -216,7 +216,7 @@ function Canvas({children, fitKey}: {children: ReactNode; fitKey: number}) {
 
 function ZoomButton({label, onClick, children}: {label: string; onClick: () => void; children: ReactNode}) {
   return (
-    <button type="button" onClick={onClick} aria-label={label} title={label} className="flex size-8 cursor-pointer items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-900 [&_svg]:size-4">
+    <button type="button" onClick={onClick} aria-label={label} title={label} className="flex size-8 cursor-pointer items-center justify-center rounded-md text-slate-500 outline-none hover:bg-slate-100 hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-primary/30 [&_svg]:size-4">
       {children}
     </button>
   );
@@ -249,7 +249,7 @@ export function Flow(props: FlowProps) {
           onClick={() => onSelect('trigger')}
           className={cn(
             CARD,
-            'flex cursor-pointer items-start gap-3 rounded-xl border bg-card p-4 text-left shadow-soft transition-all hover:-translate-y-0.5 hover:shadow-lift',
+            'flex cursor-pointer items-start gap-3 rounded-xl border bg-card p-4 text-left shadow-soft transition-all outline-none hover:-translate-y-0.5 hover:shadow-lift focus-visible:ring-2 focus-visible:ring-primary/30',
             selected === 'trigger' ? 'border-primary ring-2 ring-primary/25' : 'border-slate-100',
           )}
         >
@@ -315,7 +315,7 @@ function PathHeader({step, branch, selected, onSelect}: {step: Step; branch: 'th
     <button
       type="button"
       onClick={onSelect}
-      className={cn(CARD, 'cursor-pointer overflow-hidden rounded-xl border bg-card text-left shadow-soft transition-all hover:shadow-lift', selected ? 'border-primary ring-2 ring-primary/20' : 'border-slate-100', pathRunClass(run))}
+      className={cn(CARD, 'cursor-pointer overflow-hidden rounded-xl border bg-card text-left shadow-soft transition-all outline-none hover:shadow-lift focus-visible:ring-2 focus-visible:ring-primary/30', selected ? 'border-primary ring-2 ring-primary/20' : 'border-slate-100', pathRunClass(run))}
     >
       <span className={cn('flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold', yes ? 'bg-violet-50 text-violet-700' : 'bg-slate-50 text-slate-600')}>
         {yes ? <GitBranch className="size-3.5" /> : <CornerDownRight className="size-3.5" />} {yes ? 'Yes' : 'No'}
@@ -362,7 +362,7 @@ function StepNode(props: FlowProps & {step: Step; index: number; count: number; 
         {!readOnly && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" onClick={(e) => e.stopPropagation()} className="-mr-1 cursor-pointer rounded-md p-1 text-slate-400 opacity-60 hover:bg-slate-100 hover:text-slate-700 group-hover:opacity-100" aria-label="Step actions">
+              <button type="button" onClick={(e) => e.stopPropagation()} className="-mr-1 cursor-pointer rounded-md p-1 text-slate-400 opacity-60 outline-none hover:bg-slate-100 hover:text-slate-700 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30" aria-label="Step actions">
                 <MoreHorizontal className="size-4" />
               </button>
             </DropdownMenuTrigger>

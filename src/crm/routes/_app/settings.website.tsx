@@ -3,6 +3,7 @@ import {createFileRoute, Link} from '@tanstack/react-router';
 import {ExternalLink, Loader2} from 'lucide-react';
 import {useEffect, useState, type ReactNode} from 'react';
 
+import {LoadError} from '@/components/data-table';
 import {AdminOnly, SettingsSection} from '@/components/settings-section';
 import {Button} from '@/components/ui/button';
 import {Field, NativeSelect, Switch} from '@/components/ui/form';
@@ -47,15 +48,16 @@ function WebsiteSettingsPage() {
   const save = useApiMutation(() => api.put<{settings: WebsiteSettings}>('/website/settings', form), {invalidate: [QUERY, ['website']], success: 'Website saved', onSuccess: (r) => setForm(r.settings)});
 
   if (!isAdmin) return <AdminOnly />;
+  if (q.isError) return <LoadError error={q.error} onRetry={() => q.refetch()} />;
   if (!form || !q.data) return <Loader2 className="size-5 animate-spin text-primary" />;
   const set = (patch: Partial<WebsiteSettings>) => setForm({...form, ...patch});
   const {forms, links} = q.data;
 
   return (
-    <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="min-w-0">
+    <form noValidate onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="min-w-0">
       <SettingsSection
         title="Website"
-        description={<>Your public website: the home page at <code>/</code>, <code>/contact</code> and <code>/demo</code>. The team works in the app at <code>/admin</code>. Name, logo and colours come from Branding; the page copy is edited by prompting.</>}
+        description={<>Your public website: the home page at <code>/</code>, <code>/contact/</code> and <code>/demo/</code>. The team works in the app at <code>/crm/</code>. Name, logo and colours come from Branding; the page copy is edited by prompting.</>}
         actions={
           <Button type="button" variant="secondary" size="sm" asChild>
             <a href="/" target="_blank" rel="noopener noreferrer"><ExternalLink /> View website</a>
@@ -98,8 +100,8 @@ function WebsiteSettingsPage() {
       </SettingsSection>
 
       <div className="flex justify-end">
-        <Button type="submit" disabled={save.isPending}>
-          {save.isPending && <Loader2 className="animate-spin" />} Save website
+        <Button type="submit" pending={save.isPending} pendingLabel="Saving…">
+          Save website
         </Button>
       </div>
     </form>

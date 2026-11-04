@@ -1,4 +1,4 @@
-import {CheckCircle2, Loader2, MailCheck, MailX} from 'lucide-react';
+import {CheckCircle2, MailCheck, MailX} from 'lucide-react';
 import {useState} from 'react';
 
 import {PublicCard} from '@/components/public-layout';
@@ -50,15 +50,15 @@ function Unsubscribe({token, initial}: {token: string; initial: State}) {
           ? `${brand.name} won't email ${state.email ?? 'this address'} anymore.`
           : `Stop receiving emails from ${brand.name} at ${state.email ?? 'this address'}?`}
       </p>
-      {error && <p className="mt-3 text-sm font-medium text-destructive">{error}</p>}
+      {error && <p role="alert" className="mt-3 text-sm font-medium text-destructive">{error}</p>}
       <div className="mt-6 flex justify-center">
         {state.optedOut ? (
-          <Button variant="secondary" onClick={() => set(false)} disabled={busy}>
-            {busy && <Loader2 className="animate-spin" />} Subscribe again
+          <Button type="button" variant="secondary" onClick={() => set(false)} pending={busy} pendingLabel="Subscribing…">
+            Subscribe again
           </Button>
         ) : (
-          <Button onClick={() => set(true)} disabled={busy}>
-            {busy && <Loader2 className="animate-spin" />} Unsubscribe
+          <Button type="button" onClick={() => set(true)} pending={busy} pendingLabel="Unsubscribing…">
+            Unsubscribe
           </Button>
         )}
       </div>

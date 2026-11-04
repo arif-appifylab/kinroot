@@ -31,7 +31,7 @@ import {sendEmail} from '../email/service';
 import {publicFileUrl} from '../routes/files';
 import {filesFor, identityLabel, linkChannelContact, receiveChannelMessage, refreshChannelActivity, sendChannelMessage} from './channel-messages';
 import {conversationLink, eventData, threadEvent} from './conversations';
-import {hasTeamAccess, inboxContext} from './settings';
+import {CHAT_ONLINE_CACHE_KEY, getInboxSettings, hasTeamAccess} from './settings';
 import {cache} from '../../../platform/cache';
 
 /**
@@ -79,10 +79,15 @@ export async function chatAccount(db: Db, s?: ChatSettings) {
 /** Kept in the widget's localStorage (on our origin): `<identityId>.<signature>`. */
 export const visitorToken = async (identityId: string) => `${identityId}.${await sign(`chatv:${identityId}`)}`;
 
-export async function identityFromToken(db: Db, token: string | null | undefined) {
+/** The identity id a visitor token was signed for (no database read), else null. */
+export async function visitorIdFromToken(token: string | null | undefined) {
   const [id, sig] = (token ?? '').split('.');
-  if (!id || !sig || !(await verifySignature(`chatv:${id}`, sig))) return null;
-  return db.channelIdentity.findFirst({where: {id, channel: 'chat'}});
+  return id && sig && (await verifySignature(`chatv:${id}`, sig)) ? id : null;
+}
+
+export async function identityFromToken(db: Db, token: string | null | undefined) {
+  const id = await visitorIdFromToken(token);
+  return id ? db.channelIdentity.findFirst({where: {id, channel: 'chat'}}) : null;
 }
 
 /** The link in emails back to a conversation: /chat/c/<threadId>.<identityId>.<expires>.<signature>. */
@@ -117,17 +122,29 @@ export async function claimFiles(db: Db, identityId: string, files: {id: string;
 
 /** Team members who could answer now: active, signed in recently, with team-inbox access (and in the round robin when it is on). */
 export async function onlineAgents(db: Db) {
-  const inbox = await inboxContext(db);
-  const users = await db.member.findMany({where: {active: true, role: {not: 'VIEWER'}, lastSeenAt: {gte: new Date(Date.now() - ONLINE_MS)}}, select: {id: true, role: true}});
-  return users.filter((u) => hasTeamAccess(u, inbox.settings) && (inbox.settings.assignment !== 'round_robin' || inbox.settings.roundRobinIds.includes(u.id))).map((u) => u.id);
+  const [settings, users] = await Promise.all([
+    getInboxSettings(db),
+    db.member.findMany({where: {active: true, role: {not: 'VIEWER'}, lastSeenAt: {gte: new Date(Date.now() - ONLINE_MS)}}, select: {id: true, role: true}}),
+  ]);
+  return users.filter((u) => hasTeamAccess(u, settings) && (settings.assignment !== 'round_robin' || settings.roundRobinIds.includes(u.id))).map((u) => u.id);
 }
+
+/**
+ * "Is anyone there?" for every visitor's poll: the same answer for all of them, so it is kept in
+ * the Site Cache for a minute (the shortest it keeps anything). Saving the inbox settings and an
+ * agent coming back online (the badges' "last seen" stamp) clear it, so it is never long wrong.
+ */
+const anyAgentOnline = (db: Db) => cache.getOrSet(CHAT_ONLINE_CACHE_KEY, 60, async () => (await onlineAgents(db)).length > 0);
+
+/** An agent who was away is back: visitors should see the team as available on their next poll. */
+export const agentCameOnline = () => cache.del(CHAT_ONLINE_CACHE_KEY);
 
 export async function chatAvailability(db: Db, s: ChatSettings, now = Date.now()) {
   if (!isOpenAt(s.hours, now)) {
     const next = nextOpening(s.hours, now);
     return {away: true, reason: 'hours' as const, opensAt: next ? new Date(next).toISOString() : null};
   }
-  if (!(await onlineAgents(db)).length) return {away: true, reason: 'nobody' as const, opensAt: null};
+  if (!(await anyAgentOnline(db))) return {away: true, reason: 'nobody' as const, opensAt: null};
   return {away: false, reason: null, opensAt: null};
 }
 
@@ -324,13 +341,78 @@ export async function currentConversation(db: Db, identity: ChannelIdentity) {
  * the agent's first name) and their own email replies. Internal comments,
  * event lines and our outgoing emails are never part of it.
  */
+const visitorSender = {select: {name: true, color: true, avatarUrl: true}} as const;
+type ViewMessage = Prisma.ChannelMessageGetPayload<{include: {sender: typeof visitorSender}}>;
+type ViewEmail = {id: string; text: string | null; sentAt: Date};
+
+/** The latest visitor message the team has read ("Seen" under it in the widget). */
+const lastSeenByTeam = (db: Db, threadId: string) =>
+  db.channelMessage.findFirst({where: {threadId, direction: 'INBOUND', readAt: {not: null}}, orderBy: {createdAt: 'desc'}, select: {createdAt: true}});
+
 export async function visitorView(db: Db, thread: EmailThread, origin: string, after?: Date | null): Promise<VisitorConversation & {seenUpTo: string | null}> {
   const since = after ? {gt: after} : undefined;
   const [messages, emails, seen] = await Promise.all([
-    db.channelMessage.findMany({where: {threadId: thread.id, createdAt: since}, orderBy: {createdAt: 'asc'}, include: {sender: {select: {name: true, color: true, avatarUrl: true}}}, take: 300}),
+    db.channelMessage.findMany({where: {threadId: thread.id, createdAt: since}, orderBy: {createdAt: 'asc'}, include: {sender: visitorSender}, take: 300}),
     db.emailMessage.findMany({where: {threadId: thread.id, direction: 'INBOUND', sentAt: since}, orderBy: {sentAt: 'asc'}, select: {id: true, text: true, sentAt: true}, take: 100}),
-    db.channelMessage.findFirst({where: {threadId: thread.id, direction: 'INBOUND', readAt: {not: null}}, orderBy: {createdAt: 'desc'}, select: {createdAt: true}}),
+    lastSeenByTeam(db, thread.id),
   ]);
+  return toVisitorView(db, thread, origin, messages, emails, seen);
+}
+
+/**
+ * The widget's poll (`POST /public/chat/poll`), in as few round trips as it can: the conversation
+ * (only the visitor's own: `identityId` comes from their signed token), its identity, what is new
+ * since `after` and the team messages not yet delivered / read, all in ONE query (nested selects,
+ * joined in the database), next to the "seen" marker. Writes only when something changed: typing,
+ * and delivered / read for exactly the team messages that weren't yet. Null: no such conversation.
+ */
+export async function visitorPoll(db: Db, input: {threadId: string; identityId: string; origin: string; after: Date | null; typing?: boolean; visible?: boolean}) {
+  const after = input.after;
+  const [found, seen] = await Promise.all([
+    db.emailThread.findFirst({
+      where: {id: input.threadId, identityId: input.identityId, channel: 'chat', trashedAt: null},
+      include: {
+        identity: true,
+        channelMessages: {
+          where: after ? {OR: [{createdAt: {gt: after}}, {direction: 'OUTBOUND', OR: [{deliveredAt: null}, {readAt: null}]}]} : {},
+          orderBy: {createdAt: 'asc'},
+          include: {sender: visitorSender},
+          take: 300,
+        },
+        messages: {where: {direction: 'INBOUND', ...(after ? {sentAt: {gt: after}} : {})}, orderBy: {sentAt: 'asc'}, select: {id: true, text: true, sentAt: true}, take: 100},
+      },
+    }),
+    lastSeenByTeam(db, input.threadId),
+  ]);
+  if (!found?.identity) return null;
+  const {identity, channelMessages: rows, messages: emails, ...thread} = found;
+
+  const now = new Date();
+  const writes: Promise<unknown>[] = [];
+  const typingChanged = input.typing ? !thread.contactTypingAt || now.getTime() - thread.contactTypingAt.getTime() > 3000 : !!thread.contactTypingAt;
+  if (typingChanged) writes.push(db.emailThread.update({where: {id: thread.id}, data: {contactTypingAt: input.typing ? now : null}}));
+  const team = rows.filter((m) => m.direction === 'OUTBOUND');
+  const undelivered = team.filter((m) => !m.deliveredAt).map((m) => m.id);
+  const unread = input.visible ? team.filter((m) => !m.readAt).map((m) => m.id) : [];
+  // Delivered first, then read (both only for the ids just seen), as before: the status ends READ.
+  if (undelivered.length || unread.length) {
+    writes.push(
+      (async () => {
+        if (undelivered.length) await db.channelMessage.updateMany({where: {id: {in: undelivered}, deliveredAt: null}, data: {deliveredAt: now, status: 'DELIVERED'}});
+        if (unread.length) await db.channelMessage.updateMany({where: {id: {in: unread}, readAt: null}, data: {readAt: now, status: 'READ'}});
+      })(),
+    );
+  }
+  await Promise.all(writes);
+  for (const m of rows) {
+    if (undelivered.includes(m.id)) m.deliveredAt = now;
+    if (unread.includes(m.id)) m.readAt = now;
+  }
+  const fresh = after ? rows.filter((m) => m.createdAt > after) : rows;
+  return {identity, view: await toVisitorView(db, thread, input.origin, fresh, emails, seen)};
+}
+
+async function toVisitorView(db: Db, thread: EmailThread, origin: string, messages: ViewMessage[], emails: ViewEmail[], seen: {createdAt: Date} | null): Promise<VisitorConversation & {seenUpTo: string | null}> {
   const files = await filesFor(db, messages);
   const links = new Map(await Promise.all([...files.keys()].map(async (id) => [id, await publicFileUrl(origin, id, 7)] as const)));
   const list: VisitorMessage[] = [
@@ -353,16 +435,6 @@ export async function visitorView(db: Db, thread: EmailThread, origin: string, a
     teamTyping: !!thread.teamTypingAt && Date.now() - thread.teamTypingAt.getTime() < 8000,
     seenUpTo: seen?.createdAt.toISOString() ?? null,
   };
-}
-
-/** The visitor's widget polled: they are here, maybe typing; team messages count as delivered (and read when the panel is visible). */
-export async function visitorPresence(db: Db, thread: EmailThread, input: {typing?: boolean; visible?: boolean}) {
-  const now = new Date();
-  const typing = input.typing ? now : null;
-  const changedTyping = input.typing ? !thread.contactTypingAt || now.getTime() - thread.contactTypingAt.getTime() > 3000 : !!thread.contactTypingAt;
-  if (changedTyping) await db.emailThread.update({where: {id: thread.id}, data: {contactTypingAt: typing}});
-  await db.channelMessage.updateMany({where: {threadId: thread.id, direction: 'OUTBOUND', deliveredAt: null}, data: {deliveredAt: now, status: 'DELIVERED'}});
-  if (input.visible) await db.channelMessage.updateMany({where: {threadId: thread.id, direction: 'OUTBOUND', readAt: null}, data: {readAt: now, status: 'READ'}});
 }
 
 // ─── Replies to visitors who left ───────────────────────────────────────────

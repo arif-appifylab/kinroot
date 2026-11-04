@@ -5,7 +5,7 @@ import {DEFAULT_WEBSITE, type PublicWebsite, type WebsiteSettings} from '@/lib/w
 import type {Db} from '../kit/db';
 import {getEmailDesign} from '../email/design';
 import {getChatSettings} from '../inbox/chat';
-import {linkPath, uniqueLinkSlug} from '../scheduling/links';
+import {linkPaths, uniqueLinkSlug} from '../scheduling/links';
 import {audit} from './audit';
 import {getTicketSettings} from './tickets';
 
@@ -26,11 +26,13 @@ export async function saveWebsiteSettings(db: Db, next: WebsiteSettings) {
 export async function websiteChoices(db: Db) {
   const [forms, links] = await Promise.all([
     db.form.findMany({where: {status: 'PUBLISHED'}, orderBy: {createdAt: 'asc'}, select: {id: true, name: true, slug: true}}),
-    db.bookingLink.findMany({where: {active: true}, orderBy: {createdAt: 'asc'}}),
+    db.bookingLink.findMany({where: {active: true}, orderBy: {createdAt: 'asc'}, take: 500, select: {id: true, kind: true, slug: true, userId: true, name: true, description: true, durations: true}}),
   ]);
+  // Every link's path from ONE query for the owners' handles (never one per link).
+  const paths = await linkPaths(db, links);
   return {
     forms,
-    links: await Promise.all(links.map(async (l) => ({id: l.id, name: l.name, path: await linkPath(db, l), description: l.description, minutes: l.durations[0] ?? 30}))),
+    links: links.map((l) => ({id: l.id, name: l.name, path: paths.get(l.id)!, description: l.description, minutes: l.durations[0] ?? 30})),
   };
 }
 

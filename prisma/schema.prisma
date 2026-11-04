@@ -322,80 +322,7 @@ model PaymentEvent {
   @@map("payment_events")
 }
 
-/// One paid (or failed / refunded) checkout. `checkout_id` is the platform's `pcs_…`.
-model Order {
-  id          Int       @id @default(autoincrement())
-  checkoutId  String    @unique @map("checkout_id") @db.VarChar(80)
-  priceKey    String    @map("price_key") @db.VarChar(63)
-  /// `test` (sandbox) or `live`.
-  mode        String    @default("test") @db.VarChar(4)
-  email       String?   @db.VarChar(254)
-  /// The signed-in buyer (`users.id`), from the checkout's `customerRef`. No foreign key: an
-  /// order outlives a deleted account.
-  userId      Int?      @map("user_id")
-  /// `paid`, `failed`, `refunded` or `partially_refunded`.
-  status      String    @db.VarChar(20)
-  quantity    Int       @default(1)
-  amountCents Int       @map("amount_cents")
-  currency    String    @db.Char(3)
-  metadata    Json?
-  paidAt      DateTime? @map("paid_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
-
-  @@index([userId, id])
-  @@index([email, id])
-  @@map("orders")
-}
-
-/// A subscription bought on this site. Access: `active`, `trialing`, `past_due`, or `canceled`
-/// until `access_ends_at` (`grantsAccess` in src/platform/payments.ts).
-model Membership {
-  id               Int       @id @default(autoincrement())
-  subscriptionId   String    @unique @map("subscription_id") @db.VarChar(128)
-  priceKey         String    @map("price_key") @db.VarChar(63)
-  mode             String    @default("test") @db.VarChar(4)
-  email            String?   @db.VarChar(254)
-  userId           Int?      @map("user_id")
-  status           String    @db.VarChar(20)
-  currentPeriodEnd DateTime? @map("current_period_end")
-  accessEndsAt     DateTime? @map("access_ends_at")
-  createdAt        DateTime  @default(now()) @map("created_at")
-  updatedAt        DateTime  @updatedAt @map("updated_at")
-
-  @@index([userId, priceKey])
-  @@index([email, priceKey])
-  @@map("memberships")
-}
-
 // ---------------------------------------------------------------- the site's own data
-
-/// A job on the job board (`/jobs`, `/jobs/<slug>`). Holders of
-/// `site:job:manage` post and edit them from `/portal/jobs`.
-model Job {
-  id          Int      @id @default(autoincrement())
-  /// URL name, unique: `/jobs/<slug>`.
-  slug        String   @unique @db.VarChar(120)
-  title       String   @db.VarChar(120)
-  company     String   @db.VarChar(80)
-  location    String   @db.VarChar(80)
-  /// `full-time`, `part-time`, `contract` or `internship`.
-  type        String   @default("full-time") @db.VarChar(20)
-  remote      Boolean  @default(false)
-  /// Plain text; paragraphs separated by blank lines.
-  description String   @db.VarChar(10000)
-  /// Where to apply: an https URL or a mailto: link the poster chose to publish.
-  applyUrl    String   @map("apply_url") @db.VarChar(500)
-  /// `open` (listed) or `closed` (kept, not listed).
-  status      String   @default("open") @db.VarChar(10)
-  /// The user (`users.id`) who posted it. No foreign key: a job outlives its poster.
-  createdBy   Int      @map("created_by")
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
-
-  @@index([status, id])
-  @@map("jobs")
-}
 
 // =============================================================== Kinroot CRM
 // One deployment = one company: no tenant column. Ported from the Kinroot app as it was.
@@ -528,6 +455,8 @@ model Company {
   @@index([domain])
   @@index([name])
   @@index([ownerId])
+  @@index([createdAt(sort: Desc), id(sort: Desc)]) // list default order, newest first (P2-24)
+  @@index([lastActivityAt]) // sort by last activity; "no activity for N days" automation trigger (P2-24)
 }
 
 model Contact {
@@ -570,11 +499,18 @@ model Contact {
   scoreEvents       ScoreEvent[]
   channelIdentities ChannelIdentity[]
   channelMessages   ChannelMessage[]
+  // Also in the database, written as SQL because Prisma's schema can't hold an expression index
+  // (migration 20261103*_crm_indexes): "Contact_email_lower_idx" ON "Contact" (lower("email")),
+  // for case-insensitive email lookups (support portal, broadcasts, forms, chat, imports).
+  // Prisma 7 leaves it alone in later `migrate dev` runs; still, open every new --create-only
+  // migration and delete a `DROP INDEX "Contact_email_lower_idx"` line if one ever appears.
 
   @@index([email])
   @@index([score])
   @@index([ownerId])
   @@index([lastName, firstName])
+  @@index([createdAt(sort: Desc), id(sort: Desc)]) // list default order, newest first (P2-24)
+  @@index([lastActivityAt]) // sort by last activity; "no activity for N days" automation trigger (P2-24)
 }
 
 model ContactCompany {
@@ -669,6 +605,8 @@ model Deal {
   @@index([status])
   @@index([ownerId])
   @@index([companyId])
+  @@index([createdAt(sort: Desc), id(sort: Desc)]) // list default order, newest first (P2-24)
+  @@index([lastActivityAt]) // sort by last activity; "no activity for N days" automation trigger (P2-24)
 }
 
 // Every company on a deal. Deal.companyId mirrors the primary one.
@@ -772,6 +710,7 @@ model Task {
   updatedAt   DateTime  @updatedAt
 
   @@index([assigneeId, done, dueAt])
+  @@index([done, dueAt]) // "task overdue" automation trigger: open tasks by due time, any assignee (P2-24)
   @@index([assigneeId, reminderAt])
   @@index([dealId])
   @@index([contactId])
@@ -944,6 +883,11 @@ model EmailThread {
   messages        EmailMessage[]
   comments        ConversationComment[]
   channelMessages ChannelMessage[]
+  // Also in the database, written as SQL because Prisma's schema can't hold a partial index
+  // (migration 20261103*_crm_indexes): "EmailThread_inbox_status_lastMessageAt_idx" ON
+  // ("status", "lastMessageAt" DESC) WHERE "firstInboundAt" IS NOT NULL AND "spamAt" IS NULL
+  // AND "trashedAt" IS NULL: the inbox views, their counts and the list's newest-first order,
+  // without the outbound-only and ticket threads. Same rule as Contact_email_lower_idx above.
 
   @@index([accountId, externalThreadId])
   @@index([contactId])
@@ -953,6 +897,7 @@ model EmailThread {
   @@index([assigneeId])
   @@index([snoozedUntil])
   @@index([trashedAt])
+  @@index([spamAt]) // Spam folder count and list (P2-24)
   @@index([identityId])
 }
 
@@ -1108,8 +1053,8 @@ model TrackingEvent {
   messageId String
   message   EmailMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
   type      String // open | click
-  url       String?
-  userAgent String?
+  url       String?      @db.VarChar(1000)
+  userAgent String?      @db.VarChar(300)
   createdAt DateTime     @default(now())
 
   @@index([messageId])
@@ -1186,7 +1131,6 @@ model Setting {
 
 // ─── Foundation: jobs, events, webhooks, files, notifications ───────────────
 
-// Background work. POST /site-api/jobs/run claims due rows; failures retry with backoff.
 // Domain events (contact.created, deal.stage_changed, …). Webhooks, lead scoring
 // and automations consume them.
 model Event {
@@ -1252,14 +1196,14 @@ model WebhookDelivery {
 // src/server/lib/incoming-webhooks.ts (a job per request).
 model IncomingWebhook {
   id             String    @id @default(cuid())
-  name           String
+  name           String    @db.VarChar(100)
   tokenHash      String    @unique // SHA-256 of the URL token (lookup)
   token          String // AES-GCM encrypted URL token (to show the URL again)
   active         Boolean   @default(true)
   action         String // contact | company | deal | ticket | automations
   config         Json      @default("{}") // mapping, fixed values, tags, list, owner, mode, skipBlanks, deal / ticket options, idempotency path, rate limit
   verify         String    @default("none") // none | header | hmac
-  verifyHeader   String? // header carrying the shared secret or the signature
+  verifyHeader   String?   @db.VarChar(100) // header carrying the shared secret or the signature
   verifyEncoding String? // hmac: hex | base64
   secret         String? // unused since phase 8 (the key is an owner secret, see secretName); dropped in a later contract step
   secretName     String?   @db.VarChar(64) // name of the owner-added site secret holding the shared secret / HMAC key (INCOMING_…)
@@ -1284,7 +1228,7 @@ model IncomingWebhookRequest {
   webhook        IncomingWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
   status         String // accepted | processed | failed | duplicate | rejected | captured
   idempotencyKey String?
-  contentType    String?
+  contentType    String?         @db.VarChar(200)
   size           Int             @default(0)
   payload        Json? // parsed body (+ query parameters); null for rejected requests
   headers        Json            @default("{}") // secret-looking values redacted
@@ -1746,11 +1690,11 @@ model Booking {
   interactionId String?      @unique
   contactId     String?
   status        String       @default("CONFIRMED") // CONFIRMED | CANCELED
-  title         String
+  title         String       @db.VarChar(300)
   startAt       DateTime
   endAt         DateTime
   timezone      String       @default("UTC") // the invitee's, used in their emails
-  name          String
+  name          String       @db.VarChar(200)
   email         String
   phone         String?
   company       String?
@@ -1767,6 +1711,7 @@ model Booking {
   @@index([hostId, startAt])
   @@index([linkId, startAt])
   @@index([email])
+  @@index([status, startAt]) // "meeting starts in N" automation trigger: confirmed bookings by start time (P2-24)
 }
 
 // Google / Microsoft calendar of one user. Tokens are AES-GCM encrypted.
@@ -1783,7 +1728,7 @@ model CalendarConnection {
   isDefault        Boolean   @default(false) // the connection new meetings are written to
   syncMeetings     Boolean   @default(true) // log events with known contacts as meetings
   status           String    @default("CONNECTED") // CONNECTED | ERROR
-  lastError        String?
+  lastError        String?   @db.VarChar(500)
   lastSyncedAt     DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -1923,13 +1868,13 @@ model AuditLog {
   category   String // record | auth | team | settings | export | security
   entity     String? // contact | company | deal | ticket | form | list | booking_link | template | webhook | user | …
   recordId   String?
-  label      String? // the record's name at the time
+  label      String?  @db.VarChar(300) // the record's name at the time
   actorId    String?
   actorName  String?
   actorEmail String?
   meta       Json     @default("{}") // compact diff / details; secrets are redacted or fingerprinted
   ip         String?
-  userAgent  String?
+  userAgent  String?  @db.VarChar(300)
   createdAt  DateTime @default(now())
 
   @@index([createdAt])
@@ -1988,8 +1933,8 @@ model DuplicatePair {
 // jobs; every run keeps its step history in AutomationRunStep.
 model Automation {
   id            String    @id @default(cuid())
-  name          String
-  description   String?
+  name          String    @db.VarChar(120)
+  description   String?   @db.VarChar(1000)
   enabled       Boolean   @default(false)
   object        String // contact | company | deal | ticket | none
   triggerKind   String // event | date | inactivity | manual
@@ -2115,7 +2060,7 @@ model Import {
   warnings    Int       @default(0)
   preview     Json? // dry-run counts
   stats       Json      @default("{}") // companies created, list adds, owners assigned…
-  error       String?
+  error       String?   @db.VarChar(500)
   token       String? // the current phase's job chain; older chains stop
   startedAt   DateTime?
   finishedAt  DateTime?
@@ -2136,8 +2081,8 @@ model ImportIssue {
   phase    String // validate | run
   row      Int // spreadsheet row (the header is row 1)
   level    String // error | warning
-  column   String?
-  message  String
+  column   String? @db.VarChar(200)
+  message  String  @db.VarChar(500)
 
   @@index([importId, phase, row])
 }
@@ -2163,7 +2108,7 @@ model Export {
   emailMe      Boolean       @default(false)
   emailed      Boolean       @default(false)
   origin       String? // site origin for the emailed link
-  error        String?
+  error        String?       @db.VarChar(500)
   finishedAt   DateTime?
   createdAt    DateTime      @default(now())
   exportChunks ExportChunk[]
@@ -2235,18 +2180,21 @@ model ReportScheduleSend {
 /// here and the `crm-tick` schedule sends it again, so no work is lost. On your machine, where jobs
 /// run as they are sent, jobs planned for later wait here too until they are due.
 model JobBacklog {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   /// The platform list (`crm-webhook-deliver`, …).
   list      String
   data      Json
-  runAt     DateTime @default(now())
+  runAt     DateTime  @default(now())
   /// Dedupe key, passed on to the platform.
   key       String?
-  attempts  Int      @default(0)
+  attempts  Int       @default(0)
   lastError String?
-  createdAt DateTime @default(now())
+  /// Set when the platform refused it for good (bad list, too large…): out of the drain, shown to admins.
+  failedAt  DateTime?
+  createdAt DateTime  @default(now())
 
   @@index([runAt])
+  @@index([failedAt, runAt])
 }
 
 /// An export's CSV while background jobs write it (src/server/crm/lib/export-chunks.ts): text in

@@ -144,7 +144,7 @@ export function FormBuilder({fields, settings, onFields, onSettings}: Props) {
         </div>
         <Card className="@container p-5 sm:p-8" style={accentStyle(settings.accent)} onClick={(e) => e.target === e.currentTarget && setSelected(null)}>
           {(settings.title || settings.intro) && (
-            <button type="button" onClick={() => select(null)} className="mb-6 block w-full cursor-pointer rounded-xl p-2 text-left hover:bg-slate-50">
+            <button type="button" onClick={() => select(null)} className="mb-6 block w-full cursor-pointer rounded-xl p-2 text-left outline-none hover:bg-slate-50 focus-visible:ring-2 focus-visible:ring-primary/30">
               {settings.title && <h2 className="text-2xl font-extrabold tracking-tight text-slate-900">{settings.title}</h2>}
               {settings.intro && <p className="mt-1.5 whitespace-pre-line text-muted-foreground">{settings.intro}</p>}
             </button>
@@ -211,13 +211,13 @@ function Palette({onAdd}: {onAdd: (t: FieldType) => void}) {
                   type="button"
                   onClick={() => onAdd(t.type)}
                   title={t.hint}
-                  className="group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm font-medium text-slate-700 transition-colors hover:bg-primary/[0.07] hover:text-slate-900"
+                  className="group flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-sm font-medium text-slate-700 transition-colors outline-none hover:bg-primary/[0.07] hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-primary/30"
                 >
                   <span className="flex size-7 items-center justify-center rounded-md bg-slate-100 text-slate-500 group-hover:bg-primary/15 group-hover:text-primary">
                     <Icon className="size-3.5" />
                   </span>
                   <span className="min-w-0 flex-1 truncate">{t.label}</span>
-                  <Plus className="size-3.5 text-slate-300 opacity-0 group-hover:opacity-100" />
+                  <Plus className="size-3.5 text-slate-300 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />
                 </button>
               );
             })}
@@ -257,14 +257,14 @@ function CanvasItem({field: f, page, selected, onSelect, onDuplicate, onRemove}:
   const wide = f.width !== 'half' || !isInput(f.type) || f.type === 'hidden';
 
   const toolbar = (
-    <div className={cn('absolute -top-3 left-2 z-10 flex items-center gap-0.5 rounded-lg border border-slate-200 bg-card p-0.5 shadow-soft transition-opacity', selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100')}>
-      <button type="button" {...attributes} {...listeners} className="cursor-grab rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 active:cursor-grabbing" aria-label="Drag to reorder">
+    <div className={cn('absolute -top-3 left-2 z-10 flex items-center gap-0.5 rounded-lg border border-slate-200 bg-card p-0.5 shadow-soft transition-opacity', selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100')}>
+      <button type="button" {...attributes} {...listeners} className="cursor-grab rounded-md p-1 text-slate-400 outline-none hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-primary/30 active:cursor-grabbing" aria-label={`Drag ${f.label || FIELD_LABEL[f.type]} to reorder`}>
         <GripVertical className="size-3.5" />
       </button>
-      <button type="button" onClick={(e) => (e.stopPropagation(), onDuplicate())} className="cursor-pointer rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Duplicate">
+      <button type="button" onClick={(e) => (e.stopPropagation(), onDuplicate())} className="cursor-pointer rounded-md p-1 text-slate-400 outline-none hover:bg-slate-100 hover:text-slate-700 focus-visible:ring-2 focus-visible:ring-primary/30" aria-label={`Duplicate ${f.label || FIELD_LABEL[f.type]}`}>
         <Copy className="size-3.5" />
       </button>
-      <button type="button" onClick={(e) => (e.stopPropagation(), onRemove())} className="cursor-pointer rounded-md p-1 text-slate-400 hover:bg-rose-50 hover:text-destructive" aria-label="Delete">
+      <button type="button" onClick={(e) => (e.stopPropagation(), onRemove())} className="cursor-pointer rounded-md p-1 text-slate-400 outline-none hover:bg-rose-50 hover:text-destructive focus-visible:ring-2 focus-visible:ring-primary/30" aria-label={`Delete ${f.label || FIELD_LABEL[f.type]}`}>
         <Trash2 className="size-3.5" />
       </button>
     </div>
@@ -275,9 +275,15 @@ function CanvasItem({field: f, page, selected, onSelect, onDuplicate, onRemove}:
       ref={setNodeRef}
       id={`canvas_${f.id}`}
       style={style}
+      // Selectable by keyboard too: Tab to the field, Enter or Space opens its settings (the grip keeps drag and drop).
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      aria-label={`${f.label || FIELD_LABEL[f.type]} (${FIELD_LABEL[f.type]}): edit`}
       onClick={onSelect}
+      onKeyDown={(e) => e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onSelect())}
       className={cn(
-        'group relative min-w-0 cursor-pointer rounded-xl border-2 p-3 transition-colors',
+        'group relative min-w-0 cursor-pointer rounded-xl border-2 p-3 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
         wide && 'sm:col-span-2',
         selected ? 'border-primary bg-primary/[0.03]' : 'border-transparent hover:border-slate-200 hover:bg-slate-50/60',
         isDragging && 'z-20 opacity-80 shadow-lift',
@@ -485,7 +491,7 @@ function OptionsEditor({options, onChange}: {options: string[]; onChange: (o: st
   if (bulk !== null) {
     return (
       <div className="grid gap-2">
-        <Textarea rows={6} value={bulk} onChange={(e) => setBulk(e.target.value)} placeholder="One option per line" autoFocus />
+        <Textarea rows={6} value={bulk} onChange={(e) => setBulk(e.target.value)} placeholder="One option per line" aria-label="Options, one per line" autoFocus />
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="secondary" onClick={() => setBulk(null)}>Cancel</Button>
           <Button size="sm" onClick={() => (onChange([...new Set(bulk.split('\n').map((s) => s.trim()).filter(Boolean))]), setBulk(null))}>Apply</Button>
@@ -539,8 +545,9 @@ function FormAppearance({settings: s, onChange}: {settings: FormSettings; onChan
             <button
               key={l}
               type="button"
+              aria-pressed={s.layout === l}
               onClick={() => set({layout: l})}
-              className={cn('cursor-pointer rounded-xl border p-2.5 text-left transition-all', s.layout === l ? 'border-primary bg-primary/[0.06] ring-1 ring-primary' : 'border-slate-200 hover:border-primary/50')}
+              className={cn('cursor-pointer rounded-xl border p-2.5 text-left transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30', s.layout === l ? 'border-primary bg-primary/[0.06] ring-1 ring-primary' : 'border-slate-200 hover:border-primary/50')}
             >
               <p className="text-sm font-semibold text-slate-900">{l === 'classic' ? 'Classic' : 'One at a time'}</p>
               <p className="text-[11px] leading-snug text-muted-foreground">{l === 'classic' ? 'All questions, split by page breaks' : 'One question per screen'}</p>
@@ -560,13 +567,14 @@ function FormAppearance({settings: s, onChange}: {settings: FormSettings; onChan
               type="button"
               onClick={() => set({accent: c})}
               title={c || 'Brand colours'}
-              className={cn('size-8 cursor-pointer rounded-full ring-offset-2 ring-offset-card transition-transform hover:scale-110', (s.accent ?? '') === c && 'ring-2 ring-slate-900')}
+              aria-pressed={(s.accent ?? '') === c}
+              className={cn('size-8 cursor-pointer rounded-full ring-offset-2 ring-offset-card transition-transform outline-none hover:scale-110 focus-visible:ring-2 focus-visible:ring-primary', (s.accent ?? '') === c && 'ring-2 ring-slate-900')}
               style={{background: c || 'linear-gradient(135deg, var(--primary), var(--secondary))'}}
               aria-label={c || 'Brand colours'}
             />
           ))}
-          <label className="relative size-8 cursor-pointer overflow-hidden rounded-full border border-slate-200" title="Custom colour">
-            <input type="color" className="absolute inset-0 size-full cursor-pointer opacity-0" value={s.accent || '#2563eb'} onChange={(e) => set({accent: e.target.value})} />
+          <label className="relative size-8 cursor-pointer overflow-hidden rounded-full border border-slate-200 focus-within:ring-2 focus-within:ring-primary focus-within:ring-offset-2" title="Custom colour">
+            <input type="color" aria-label="Custom colour" className="absolute inset-0 size-full cursor-pointer opacity-0" value={s.accent || '#2563eb'} onChange={(e) => set({accent: e.target.value})} />
             <span className="flex size-full items-center justify-center text-slate-400"><Plus className="size-4" /></span>
           </label>
         </div>

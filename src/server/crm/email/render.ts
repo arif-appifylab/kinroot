@@ -74,34 +74,119 @@ const decodeEntities = (s: string) =>
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&#(\d+);/g, (m: string, n: string) => codePoint(Number(n), m))
+    .replace(/&#x([0-9a-f]+);/gi, (m: string, n: string) => codePoint(parseInt(n, 16), m))
     .replace(/&amp;/g, '&');
 
-/** HTML → readable plain text: links as "text (url)", list bullets, no hidden preheader. */
-export const htmlToText = (html: string) =>
-  decodeEntities(
-    html
-      .replace(/<(head|style|script|title)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
-      .replace(/<!--[\s\S]*?-->/g, '')
-      .replace(/<div data-preheader[^>]*>[\s\S]*?<\/div>/gi, '')
-      .replace(/<td data-kr-header[^>]*>[\s\S]*?<\/td>/gi, '') // the branded header (logo / name)
-      .replace(/<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_, href: string, inner: string) => {
-        const label = inner.replace(/<[^>]+>/g, '').trim();
-        const url = decodeEntities(href);
-        if (!/^https?:/i.test(url) || !label || decodeEntities(label) === url) return label || url;
-        return `${label} (${url})`;
-      })
-      .replace(/<li\b[^>]*>/gi, '\n- ')
-      .replace(/<hr\b[^>]*>/gi, '\n----\n')
-      .replace(/<br\b[^>]*>/gi, '\n')
-      .replace(/<\/(p|h\d|blockquote|ul|ol)>/gi, '\n\n')
-      .replace(/<\/(div|tr|table)>/gi, '\n')
-      .replace(/<[^>]+>/g, '')
-      .replace(/[ \t]*\n[ \t]*/g, '\n'),
-  )
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+/** A numeric entity's character; one that is out of range stays as written (fromCodePoint would throw). */
+const codePoint = (n: number, raw: string) => (Number.isInteger(n) && n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : raw);
+
+/** Block content that is never text: `<style>…</style>` and co. */
+const HIDDEN = new Set(['head', 'style', 'script', 'title']);
+
+/** Strips spaces and tabs at the start and / or end of a line, in one pass (no backtracking pattern). */
+function trimLine(line: string, start: boolean, end: boolean) {
+  let a = 0;
+  let b = line.length;
+  if (start) while (a < b && (line[a] === ' ' || line[a] === '\t')) a++;
+  if (end) while (b > a && (line[b - 1] === ' ' || line[b - 1] === '\t')) b--;
+  return line.slice(a, b);
+}
+
+/**
+ * HTML → readable plain text: links as "text (url)", list bullets, no hidden preheader.
+ *
+ * One left-to-right pass (AUDIT P1-6: received mail is written by anyone, and the old chain of
+ * lazy patterns took ~45 s on 240 KB of unclosed tags). Searches ahead (`</style>`, `</a>`, `>`)
+ * remember where they found, or did not find, their target, so no part of the input is searched
+ * twice for the same thing.
+ */
+export function htmlToText(html: string) {
+  const lower = html.toLowerCase();
+  const n = html.length;
+  const searched = new Map<string, {from: number; at: number}>();
+  const find = (needle: string, from: number) => {
+    const last = searched.get(needle);
+    // Nothing between the last search's start and its answer: the same answer holds from here.
+    if (last && from >= last.from && (last.at === -1 || from <= last.at)) return last.at;
+    const at = lower.indexOf(needle, from);
+    searched.set(needle, {from, at});
+    return at;
+  };
+
+  const out: string[] = [];
+  // Which pieces came from tags (line breaks, bullets): a link's label is only its words.
+  const fromTag: boolean[] = [];
+  let link: {href: string; at: number} | null = null;
+  const tagText = (s: string) => {
+    out.push(s);
+    fromTag[out.length - 1] = true;
+  };
+  let i = 0;
+  while (i < n) {
+    const lt = html.indexOf('<', i);
+    if (lt === -1) {
+      out.push(html.slice(i));
+      break;
+    }
+    if (lt > i) out.push(html.slice(i, lt));
+    i = lt;
+    if (html.startsWith('<!--', i)) {
+      const end = find('-->', i + 4);
+      if (end !== -1) {
+        i = end + 3;
+        continue;
+      }
+    }
+    const gt = find('>', i + 1);
+    if (gt === -1 || gt === i + 1) {
+      out.push('<'); // not a tag: `<` with no `>` after it, or `<>`
+      i += 1;
+      continue;
+    }
+    const tag = html.slice(i + 1, gt);
+    i = gt + 1;
+    const name = /^\/?([a-z][a-z0-9]*)/i.exec(tag)?.[1]?.toLowerCase() ?? '';
+    const closing = tag.startsWith('/');
+    if (!closing && HIDDEN.has(name)) {
+      const end = find(`</${name}>`, i);
+      if (end !== -1) i = end + name.length + 3;
+      continue;
+    }
+    if (!closing && (/^div data-preheader/i.test(tag) || /^td data-kr-header/i.test(tag))) {
+      // The hidden preheader and the branded header (logo / name).
+      const close = name === 'div' ? '</div>' : '</td>';
+      const end = find(close, i);
+      if (end !== -1) i = end + close.length;
+      continue;
+    }
+    if (name === 'a') {
+      if (closing && link && /^\/a$/i.test(tag)) {
+        const label = out.splice(link.at).filter((_, k) => !fromTag[link!.at + k]).join('').trim();
+        fromTag.length = out.length;
+        const url = decodeEntities(link.href);
+        out.push(!/^https?:/i.test(url) || !label || decodeEntities(label) === url ? label || url : `${label} (${url})`);
+        link = null;
+      } else if (!closing && !link) {
+        const href = /href="([^"]*)"/i.exec(tag);
+        if (href && find('</a>', i) !== -1) link = {href: href[1]!, at: out.length};
+      }
+      continue;
+    }
+    if (closing) {
+      if (/^\/(p|h\d|blockquote|ul|ol)$/i.test(tag)) tagText('\n\n');
+      else if (/^\/(div|tr|table)$/i.test(tag)) tagText('\n');
+      continue;
+    }
+    if (name === 'li') tagText('\n- ');
+    else if (name === 'hr') tagText('\n----\n');
+    else if (name === 'br') tagText('\n');
+  }
+
+  const lines = out.join('').split('\n');
+  const joined = lines.map((line, k) => trimLine(line, k > 0, k < lines.length - 1)).join('\n');
+  return decodeEntities(joined).replace(/\n{3,}/g, '\n\n').trim();
+}
 
 /** Rewrites links through the click tracker and appends the open pixel. */
 export async function addTracking(html: string, trackingId: string, origin: string, opts: {opens: boolean; clicks: boolean}) {

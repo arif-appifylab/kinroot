@@ -31,6 +31,8 @@ const THEME_BOOT = themeBootScript;
 const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(THEME_BOOT));
 Astro.csp?.insertScriptHash(`sha256-${btoa(String.fromCharCode(...new Uint8Array(digest)))}`);
 const name = brand.name || BRAND.name;
+// No logo: the sprout mark in the brand's colours; the colours are in the URL, so it can be cached.
+const favicon = `/site-api/crm/public/favicon.svg?v=${`${brand.primary}${brand.secondary}`.replace(/[^0-9a-f]/gi, '').slice(0, 12) || 'default'}`;
 const fullTitle = title ? `${title} · ${name}` : name;
 const path = Astro.url.pathname;
 const withSlash = (p: string) => (p.endsWith('/') ? p : `${p}/`);
@@ -66,7 +68,7 @@ const structured = seo ? [...(path === '/' ? [siteJsonLd({name, logo}, descripti
       )
     }
     <meta name="theme-color" content={brand.primary || BRAND.primary} />
-    <link rel="icon" href={brand.logo || '/kinroot-mark.svg'} />
+    <link rel="icon" href={brand.logo || favicon} />
     {(brand.primary || brand.secondary) && <link rel="stylesheet" href="/site-api/crm/public/brand.css" />}
     {structured.map((data) => <script type="application/ld+json" set:html={jsonLdText(data)} />)}
     <!-- Before the first paint, so a visitor who chose dark mode never sees the page flash light. -->

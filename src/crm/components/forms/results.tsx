@@ -10,7 +10,7 @@ import {keys, useApiMutation, useMe} from '@/lib/queries';
 import type {FormSubmissionRow} from '@/lib/types';
 
 import {CountBarChart} from '../charts';
-import {DataTable, Pagination, SearchInput, type Column} from '../data-table';
+import {DataTable, LoadError, Pagination, SearchInput, type Column} from '../data-table';
 import {FilterBar} from '../filter-bar';
 import {Button} from '../ui/button';
 import {Card} from '../ui/card';
@@ -64,7 +64,15 @@ export function ResultsPanel({formId, fields}: {formId: string; fields: FormFiel
       header: 'Respondent',
       cell: (r) => (
         <div className="min-w-0">
-          <p className="truncate font-semibold text-slate-900">{r.contact ? fullName(r.contact) : 'Anonymous'}</p>
+          {/* The row opens the response; this button is its keyboard / screen-reader way in. */}
+          <button
+            type="button"
+            onClick={(e) => (e.stopPropagation(), setOpen(r))}
+            className="block max-w-full cursor-pointer truncate rounded text-left font-semibold text-slate-900 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30"
+          >
+            {r.contact ? fullName(r.contact) : 'Anonymous'}
+            <span className="sr-only">: open this response</span>
+          </button>
           <p className="truncate text-xs text-muted-foreground">{r.email ?? '—'}</p>
         </div>
       ),
@@ -84,6 +92,11 @@ export function ResultsPanel({formId, fields}: {formId: string; fields: FormFiel
 
   return (
     <div className="grid gap-6">
+      {stats.isError && (
+        <Card>
+          <LoadError title="The numbers could not be loaded" error={stats.error} onRetry={() => stats.refetch()} />
+        </Card>
+      )}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Views" value={(s?.views ?? 0).toLocaleString()} hint="Unique per visit" />
         <Stat label="Started" value={(s?.starts ?? 0).toLocaleString()} hint={`${pct(s?.starts ?? 0, s?.views ?? 0)} of views`} />
@@ -106,6 +119,8 @@ export function ResultsPanel({formId, fields}: {formId: string; fields: FormFiel
         <DataTable
           rows={list.data?.rows}
           loading={list.isLoading}
+          error={list.isError && !list.data ? list.error : undefined}
+          onRetry={() => list.refetch()}
           columns={columns}
           onRowClick={setOpen}
           empty={<EmptyState icon={<Inbox />} title={q ? 'No matching responses' : 'No responses yet'} description={q ? undefined : 'Share the form; responses show up here and on each contact.'} />}
@@ -123,7 +138,7 @@ function ResponseDialog({response: r, formId, onClose}: {response: FormSubmissio
   const remove = useApiMutation(() => api.del(`/forms/submissions/${r.id}`), {invalidate: [[...keys.forms, formId], keys.forms, keys.timeline], success: 'Response deleted', onSuccess: onClose});
   const meta = Object.entries(r.meta).filter(([k]) => k.startsWith('utm_') || k === 'referrer' || k === 'page');
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !remove.isPending && onClose()}>
       <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>{r.contact ? fullName(r.contact) : 'Anonymous response'}</DialogTitle>
@@ -178,11 +193,11 @@ function ResponseDialog({response: r, formId, onClose}: {response: FormSubmissio
         </DialogBody>
         <DialogFooter>
           {canEdit && (
-            <Button variant="ghost" className="mr-auto text-destructive hover:bg-rose-50 hover:text-destructive" onClick={async () => (await confirm({title: 'Delete this response?', description: 'The contact stays.', confirmLabel: 'Delete', destructive: true})) && remove.mutate(undefined)}>
+            <Button variant="ghost" className="mr-auto text-destructive hover:bg-rose-50 hover:text-destructive" pending={remove.isPending} pendingLabel="Deleting…" onClick={async () => (await confirm({title: 'Delete this response?', description: 'The contact stays.', confirmLabel: 'Delete', destructive: true})) && remove.mutate(undefined)}>
               <Trash2 /> Delete
             </Button>
           )}
-          <Button onClick={onClose}>Close</Button>
+          <Button onClick={onClose} disabled={remove.isPending}>Close</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

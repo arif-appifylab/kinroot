@@ -1,11 +1,12 @@
 import {useQueryClient} from '@tanstack/react-query';
 import {createFileRoute, useNavigate} from '@tanstack/react-router';
-import {ArrowRight, Loader2} from 'lucide-react';
+import {ArrowRight} from 'lucide-react';
 import {useEffect, useState} from 'react';
 
 import {AuthLayout} from '@/components/auth-layout';
 import {Button} from '@/components/ui/button';
 import {Checkbox, Field, Input, Label} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {BRAND, pageTitle} from '@/lib/brand';
 import {api} from '@/lib/api';
 import {keys, useAuth} from '@/lib/queries';
@@ -22,6 +23,7 @@ function SetupPage() {
   const [form, setForm] = useState({brandName: BRAND.name as string, demoData: true});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const f = useFormState(form, {brandName: [is.required('Enter your company or product name.'), is.maxLength(60)]});
 
   useEffect(() => {
     if (auth.data && !auth.data.needsSetup) navigate({to: auth.data.user ? '/' : '/no-access'});
@@ -29,8 +31,7 @@ function SetupPage() {
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((f) => ({...f, [k]: e.target.value}));
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit() {
     setBusy(true);
     setError(null);
     try {
@@ -38,7 +39,7 @@ function SetupPage() {
       await qc.invalidateQueries({queryKey: keys.auth});
       navigate({to: '/'});
     } catch (err) {
-      setError((err as Error).message);
+      if (!f.fail(err)) setError((err as Error).message);
     } finally {
       setBusy(false);
     }
@@ -46,9 +47,9 @@ function SetupPage() {
 
   return (
     <AuthLayout title="Let's set up" highlight="your CRM" subtitle="One minute and you're in. You are the owner and can invite your team right after.">
-      <form onSubmit={submit} className="grid gap-4">
-        <Field label="Brand name" htmlFor="ws" hint="Shown across the app, emails and public pages. Change it, the logo and colours any time in Settings → Branding." error={error}>
-          <Input id="ws" required value={form.brandName} onChange={set('brandName')} placeholder="Your company or product name" />
+      <form {...f.form(() => void submit())} className="grid gap-4">
+        <Field label="Brand name" htmlFor="ws" hint="Shown across the app, emails and public pages. Change it, the logo and colours any time in Settings → Branding." error={f.error('brandName') ?? error}>
+          <Input id="ws" value={form.brandName} maxLength={60} onChange={(e) => (set('brandName')(e), setError(null))} onBlur={f.blur('brandName')} placeholder="Your company or product name" />
         </Field>
         <div className="flex items-start gap-3 rounded-xl bg-accent/70 p-3">
           <Checkbox id="demo" checked={form.demoData} onCheckedChange={(v) => setForm((f) => ({...f, demoData: v === true}))} className="mt-0.5" />
@@ -57,8 +58,7 @@ function SetupPage() {
             <span className="text-xs text-muted-foreground">A few companies, contacts and deals so you can explore. Delete them any time.</span>
           </Label>
         </div>
-        <Button type="submit" size="lg" className="group mt-1 w-full" disabled={busy}>
-          {busy && <Loader2 className="animate-spin" />}
+        <Button type="submit" size="lg" className="group mt-1 w-full" pending={busy} pendingLabel="Setting up…">
           Get started
           <ArrowRight className="transition-transform group-hover:translate-x-1" />
         </Button>

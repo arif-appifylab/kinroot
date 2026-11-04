@@ -4,7 +4,7 @@ import {z} from 'zod';
 import type {AppEnv} from '../kit/guards';
 import {HISTORY_ENTITIES, type HistoryEntry, type HistoryPage} from '@/lib/history';
 import {historyRecord, recordHistory} from '../lib/history';
-import {notFound, ownerScope, valid} from '../lib/http';
+import {intParam, notFound, ownerScope, valid} from '../lib/http';
 import {ticketScope} from '../lib/tickets';
 
 /**
@@ -19,8 +19,8 @@ export const history = new Hono<AppEnv>().get(
     id: z.string().min(1).max(64),
     field: z.string().max(100).optional(),
     q: z.string().trim().max(100).optional(),
-    cursor: z.coerce.number().int().min(0).default(0),
-    take: z.coerce.number().int().min(1).max(200).default(50),
+    cursor: intParam(0, 1_000_000).default(0),
+    take: intParam(1, 200).default(50),
   })),
   async (c) => {
     const db = c.var.db;

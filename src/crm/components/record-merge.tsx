@@ -1,4 +1,6 @@
 import {useQuery} from '@tanstack/react-query';
+import {useEffect} from 'react';
+import {toast} from 'sonner';
 
 import {api} from '@/lib/api';
 import {fullName, LIFECYCLE} from '@/lib/format';
@@ -48,7 +50,7 @@ const loadCompany = (id: string) => api.get<{company: MergeRec}>(`/companies/${i
 /** The preselected duplicate, shown instead of the picker. */
 function Preselected({noun, id, load, title}: {noun: string; id: string; load: (id: string) => Promise<MergeRec>; title: (r: MergeRec) => string}) {
   const q = useQuery({queryKey: ['merge', noun, id], queryFn: () => load(id)});
-  return <p className="flex h-10 items-center rounded-lg border border-border bg-slate-50 px-3 text-sm font-semibold text-slate-800">{q.data ? title(q.data) : 'Loading…'}</p>;
+  return <p className="flex h-10 items-center rounded-lg border border-border bg-slate-50 px-3 text-sm font-semibold text-slate-800">{q.data ? title(q.data) : q.isError ? <span role="alert" className="font-medium text-destructive">Could not load this {noun}. {q.error.message}</span> : 'Loading…'}</p>;
 }
 
 type Props = {otherId?: string; onClose: () => void; onMerged: (keptId: string) => void};
@@ -105,6 +107,13 @@ export function CompanyMergeDialog({company, otherId, onClose, onMerged}: Props 
 export function MergePairDialog({entity, aId, bId, onClose, onMerged}: {entity: 'contact' | 'company'; aId: string; bId: string; onClose: () => void; onMerged: (keptId: string) => void}) {
   const load = entity === 'contact' ? loadContact : loadCompany;
   const q = useQuery({queryKey: ['merge', entity, aId], queryFn: () => load(aId)});
+  // A failed load would otherwise leave the click with no answer.
+  useEffect(() => {
+    if (q.isError) {
+      toast.error(`Could not open the merge: ${q.error.message}`);
+      onClose();
+    }
+  }, [q.isError]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!q.data) return null;
   return entity === 'contact' ? (
     <ContactMergeDialog contact={q.data} otherId={bId} onClose={onClose} onMerged={onMerged} />

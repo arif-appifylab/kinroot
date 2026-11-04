@@ -683,7 +683,7 @@ describe.skipIf(!DATABASE_URL)('ported: audit log (scripts/test-hygiene.mjs audi
     // The daily crm-prune (the old cron run).
     await tick(pruneAudit);
     expect([!!(await db.auditLog.findUnique({where: {id: `old1_${tag}`}})), !!(await db.auditLog.findUnique({where: {id: `old2_${tag}`}}))], 'default 365 days: older entries pruned').toEqual([true, false]);
-    expect((await o.put('/audit/settings', {retentionDays: 42})).status, 'only offered periods').toBe(400);
+    expect((await o.put('/audit/settings', {retentionDays: 42})).status, 'only offered periods').toBe(422);
     must(await o.put('/audit/settings', {retentionDays: 90}), 'retention 90');
     await tick(pruneAudit);
     expect(await db.auditLog.findUnique({where: {id: `old1_${tag}`}}), 'shorter retention prunes more').toBeNull();

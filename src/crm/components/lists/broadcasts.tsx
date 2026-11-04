@@ -16,6 +16,8 @@ import {Card} from '@/components/ui/card';
 import {confirm} from '@/components/ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Field, Input, NativeSelect} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
+import {LoadError} from '@/components/data-table';
 import {EmptyState, Skeleton, Tabs, TabsList, TabsTrigger} from '@/components/ui/misc';
 import {api} from '@/lib/api';
 import {isEmptyHtml, textToEditorHtml} from '@/lib/email-html';
@@ -170,12 +172,24 @@ export function BroadcastDialog({list, onClose}: {list: {id: string; name: strin
   const empty = isEmptyHtml(html);
   const left = a?.account ? Math.max(0, a.account.dailyLimit - a.account.sentToday) : null;
   const days = a?.account && a.recipients > (left ?? 0) ? 1 + Math.ceil((a.recipients - (left ?? 0)) / a.account.dailyLimit) : 1;
-  const canSend = !!accountId && !!subject.trim() && !empty && !!a?.recipients && (when === 'now' || !!at);
+  const canSend = !!a?.recipients;
   const noAccounts = accounts.isSuccess && !accounts.data.length;
+  const f = useFormState({accountId, subject, preheader, html, at: when === 'later' ? at : ''}, {
+    accountId: [is.required('Pick an account to send from.')],
+    subject: [is.required('Write a subject line.'), is.maxLength(500)],
+    preheader: [is.maxLength(300)],
+    html: [(v) => (isEmptyHtml(v) ? 'Write the email first.' : null)],
+    at: [
+      (v) => (when === 'later' && !v ? 'Pick the date and time to send.' : null),
+      (v) => (v && new Date(v).getTime() < Date.now() - 5 * 60_000 ? 'Pick a time in the future.' : null),
+      (v) => (v && new Date(v).getTime() > Date.now() + 365 * 86_400_000 ? 'Schedule it within the next 12 months.' : null),
+    ],
+  });
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !send.isPending && onClose()}>
       <DialogContent size="xl">
+        <form {...f.form(() => send.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
         <DialogHeader>
           <DialogTitle>Email “{list.name}”</DialogTitle>
           <DialogDescription>One email to everyone in this list, sent in the branded layout with an unsubscribe link. Each email shows on the contact’s timeline.</DialogDescription>
@@ -198,19 +212,21 @@ export function BroadcastDialog({list, onClose}: {list: {id: string; name: strin
                       {templates.data?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                     </NativeSelect>
                   </Field>
-                  <Field label="Send from" htmlFor="bc-account">
+                  <Field label="Send from" htmlFor="bc-account" error={f.error('accountId')}>
                     <NativeSelect id="bc-account" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
                       {accounts.data?.map((x) => <option key={x.id} value={x.id}>{x.fromEmail} · {x.userId ? 'yours' : 'shared'}</option>)}
                     </NativeSelect>
                   </Field>
                 </div>
-                <Field label="Subject" htmlFor="bc-subject">
-                  <Input id="bc-subject" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="e.g. What’s new this month, {{contact.first_name|there}}" maxLength={500} />
+                <Field label="Subject" htmlFor="bc-subject" error={f.error('subject')}>
+                  <Input id="bc-subject" value={subject} onChange={(e) => setSubject(e.target.value)} onBlur={f.blur('subject')} placeholder="e.g. What’s new this month, {{contact.first_name|there}}" maxLength={500} />
                 </Field>
-                <Field label="Preview text" htmlFor="bc-preheader" hint="Shown next to the subject in most inboxes.">
-                  <Input id="bc-preheader" value={preheader} onChange={(e) => setPreheader(e.target.value)} maxLength={300} />
+                <Field label="Preview text" htmlFor="bc-preheader" hint="Shown next to the subject in most inboxes." error={f.error('preheader')}>
+                  <Input id="bc-preheader" value={preheader} onChange={(e) => setPreheader(e.target.value)} onBlur={f.blur('preheader')} maxLength={300} />
                 </Field>
-                <RichEditor key={editorKey} value={html} onChange={setHtml} placeholder="Write your email… merge fields like the first name are filled in per contact" />
+                <Field error={f.error('html')}>
+                  <RichEditor key={editorKey} value={html} onChange={setHtml} placeholder="Write your email… merge fields like the first name are filled in per contact" />
+                </Field>
               </div>
 
               <div className="grid content-start gap-3">
@@ -250,7 +266,11 @@ export function BroadcastDialog({list, onClose}: {list: {id: string; name: strin
                 <Card className="grid gap-3 p-4">
                   <h3 className="text-sm font-bold text-slate-900">When</h3>
                   <Segmented label="When to send" value={when} onChange={setWhen} options={[{value: 'now', label: 'Send now', icon: <Send />}, {value: 'later', label: 'Schedule', icon: <Clock />}]} />
-                  {when === 'later' && <Input aria-label="Send at" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} required />}
+                  {when === 'later' && (
+                    <Field error={f.error('at')}>
+                      <Input aria-label="Send at" type="datetime-local" value={at} onChange={(e) => setAt(e.target.value)} onBlur={f.blur('at')} />
+                    </Field>
+                  )}
                 </Card>
               </div>
             </div>
@@ -258,14 +278,15 @@ export function BroadcastDialog({list, onClose}: {list: {id: string; name: strin
         </DialogBody>
         {!noAccounts && (
           <DialogFooter>
-            <Button variant="ghost" className="@sm:mr-auto" onClick={() => setPreviewing(true)} disabled={empty}><Eye /> Preview</Button>
-            <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button onClick={() => send.mutate(undefined)} disabled={!canSend || send.isPending}>
-              {send.isPending ? <Loader2 className="animate-spin" /> : when === 'later' ? <CalendarClock /> : <Send />}
+            <Button type="button" variant="ghost" className="@sm:mr-auto" onClick={() => setPreviewing(true)} disabled={empty}><Eye /> Preview</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={send.isPending}>Cancel</Button>
+            <Button type="submit" disabled={!canSend} pending={send.isPending} pendingLabel={when === 'later' ? 'Scheduling…' : 'Sending…'}>
+              {when === 'later' ? <CalendarClock /> : <Send />}
               {when === 'later' ? 'Schedule' : `Send to ${a?.recipients.toLocaleString() ?? '…'}`}
             </Button>
           </DialogFooter>
         )}
+        </form>
         {previewing && (
           <Dialog open onOpenChange={(o) => !o && setPreviewing(false)}>
             <DialogContent size="lg">
@@ -287,7 +308,7 @@ export function BroadcastDialog({list, onClose}: {list: {id: string; name: strin
 export function BroadcastHistory({listId, title = 'Emails to this list'}: {listId?: string; title?: string}) {
   const rows = useBroadcasts(listId);
   const [open, setOpen] = useState<string | null>(null);
-  if (listId && !rows.isLoading && !rows.data?.length) return null;
+  if (listId && !rows.isLoading && !rows.isError && !rows.data?.length) return null;
 
   return (
     <Card className="overflow-hidden">
@@ -295,7 +316,8 @@ export function BroadcastHistory({listId, title = 'Emails to this list'}: {listI
         <h2 className="text-sm font-bold text-slate-900">{title}</h2>
       </div>
       {rows.isLoading && <Skeleton className="m-4 h-16" />}
-      {!rows.isLoading && !rows.data?.length && (
+      {rows.isError && <LoadError error={rows.error} onRetry={() => rows.refetch()} title="The broadcasts could not be loaded" />}
+      {!rows.isLoading && !rows.isError && !rows.data?.length && (
         <EmptyState icon={<Mail />} title="No broadcasts yet" description="Open a list or segment and choose “Send email” to email everyone in it at once." />
       )}
       {!!rows.data?.length && (
@@ -316,7 +338,9 @@ export function BroadcastHistory({listId, title = 'Emails to this list'}: {listI
               {rows.data.map((b) => (
                 <tr key={b.id} className="cursor-pointer hover:bg-slate-50/70" onClick={() => setOpen(b.id)}>
                   <td className="max-w-0 px-4 py-3">
-                    <p className="truncate font-semibold text-slate-900">{b.subject}</p>
+                    <button type="button" onClick={(e) => (e.stopPropagation(), setOpen(b.id))} className="block max-w-full cursor-pointer truncate rounded text-left font-semibold text-slate-900 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30">
+                      {b.subject}
+                    </button>
                     <p className="truncate text-xs text-muted-foreground">
                       {!listId && <>{b.listName} · </>}
                       {starting(b) ? 'starting now' : b.status === 'SCHEDULED' ? `for ${dateTime(b.scheduledAt)}` : dateTime(b.finishedAt ?? b.startedAt ?? b.scheduledAt)}
@@ -372,7 +396,9 @@ function BroadcastDetail({id, onClose}: {id: string; onClose: () => void}) {
           )}
         </DialogHeader>
         <DialogBody>
-          {!b || !s ? (
+          {q.isError ? (
+            <LoadError error={q.error} onRetry={() => q.refetch()} title="This broadcast could not be loaded" />
+          ) : !b || !s ? (
             <Skeleton className="h-40" />
           ) : (
             <>
@@ -429,8 +455,8 @@ function BroadcastDetail({id, onClose}: {id: string; onClose: () => void}) {
         </DialogBody>
         {mayCancel && (
           <DialogFooter>
-            <Button variant="destructive" onClick={async () => (await confirm({title: 'Cancel this broadcast?', description: 'Emails already sent stay sent; the rest are not sent.', confirmLabel: 'Cancel broadcast', cancelLabel: 'Keep sending', destructive: true})) && cancel.mutate(undefined)} disabled={cancel.isPending}>
-              {cancel.isPending ? <Loader2 className="animate-spin" /> : <XCircle />} Cancel broadcast
+            <Button variant="destructive" onClick={async () => (await confirm({title: 'Cancel this broadcast?', description: 'Emails already sent stay sent; the rest are not sent.', confirmLabel: 'Cancel broadcast', cancelLabel: 'Keep sending', destructive: true})) && cancel.mutate(undefined)} pending={cancel.isPending} pendingLabel="Canceling…">
+              <XCircle /> Cancel broadcast
             </Button>
           </DialogFooter>
         )}

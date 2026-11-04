@@ -10,7 +10,7 @@ import {keys, useApiMutation, useMe} from '@/lib/queries';
 import type {Paged} from '@/lib/types';
 import {cn} from '@/lib/utils';
 
-import {SearchInput} from '../data-table';
+import {LoadError, SearchInput} from '../data-table';
 import {FilterBar} from '../filter-bar';
 import {Badge} from '../ui/badge';
 import {Button} from '../ui/button';
@@ -67,6 +67,7 @@ export function RunsPanel({automationId}: {automationId: string}) {
         </NativeSelect>
       </FilterBar>
       {runs.isLoading && <p className="p-6 text-sm text-muted-foreground">Loading…</p>}
+      {runs.isError && !runs.data && <LoadError error={runs.error} onRetry={() => runs.refetch()} />}
       {runs.data && runs.data.rows.length === 0 && <EmptyState icon={<History />} title="No runs yet" description="Runs show up here with every step they took, as soon as the trigger fires." />}
       {!!runs.data?.rows.length && (
         <div className="overflow-x-auto scrollbar-thin">
@@ -85,7 +86,15 @@ export function RunsPanel({automationId}: {automationId: string}) {
               {runs.data.rows.map((r) => (
                 <tr key={r.id} className="cursor-pointer hover:bg-slate-50/70" onClick={() => setOpen(r.id)}>
                   <td className="max-w-64 px-4 py-3">
-                    <p className="truncate font-semibold text-slate-800">{r.recordLabel ?? (r.object === 'none' ? 'Team-wide' : 'Deleted record')}</p>
+                    {/* The row opens the run; this button is its keyboard / screen-reader way in. */}
+                    <button
+                      type="button"
+                      onClick={(e) => (e.stopPropagation(), setOpen(r.id))}
+                      className="block max-w-full cursor-pointer truncate rounded text-left font-semibold text-slate-800 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30"
+                    >
+                      {r.recordLabel ?? (r.object === 'none' ? 'Team-wide' : 'Deleted record')}
+                      <span className="sr-only">: open this run</span>
+                    </button>
                     {r.error && <p className="truncate text-xs text-muted-foreground">{r.error}</p>}
                   </td>
                   <td className="px-4 py-3"><span className="inline-flex flex-wrap items-center gap-1"><RunStatusBadge status={r.status} />{r.test && <TestBadge test={r.test} />}</span></td>
@@ -157,7 +166,8 @@ export function RunDialog({runId, onClose}: {runId: string; onClose: () => void}
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
-          {!run && <Loader2 className="mx-auto size-5 animate-spin text-primary" />}
+          {!run && !q.isError && <Loader2 className="mx-auto size-5 animate-spin text-primary" />}
+          {!run && q.isError && <LoadError error={q.error} onRetry={() => q.refetch()} />}
           {run && (
             <>
               <div className="flex flex-wrap items-center gap-2">
@@ -166,8 +176,8 @@ export function RunDialog({runId, onClose}: {runId: string; onClose: () => void}
                 <span className="text-xs text-muted-foreground">{run.eventType ? eventLabel(run.eventType) : RUN_SOURCES[run.source]}{run.depth > 0 ? ` · caused by another automation (chain depth ${run.depth})` : ''}</span>
                 {run.status === 'waiting' && run.waitUntil && <span className="inline-flex items-center gap-1 text-xs font-semibold text-violet-700"><Hourglass className="size-3.5" /> until {dateTime(run.waitUntil)}</span>}
                 <span className="ml-auto flex gap-1.5">
-                  {isAdmin && (run.status === 'running' || run.status === 'waiting') && <Button variant="secondary" size="sm" onClick={() => cancel.mutate(undefined)} disabled={cancel.isPending}><Square /> Cancel</Button>}
-                  {isAdmin && run.status === 'failed' && run.steps.some((s) => s.status === 'failed') && <Button variant="secondary" size="sm" onClick={() => retry.mutate(undefined)} disabled={retry.isPending}><RotateCcw /> Retry</Button>}
+                  {isAdmin && (run.status === 'running' || run.status === 'waiting') && <Button variant="secondary" size="sm" onClick={() => cancel.mutate(undefined)} pending={cancel.isPending} pendingLabel="Canceling…" disabled={retry.isPending}><Square /> Cancel</Button>}
+                  {isAdmin && run.status === 'failed' && run.steps.some((s) => s.status === 'failed') && <Button variant="secondary" size="sm" onClick={() => retry.mutate(undefined)} pending={retry.isPending} pendingLabel="Retrying…" disabled={cancel.isPending}><RotateCcw /> Retry</Button>}
                 </span>
               </div>
               {run.error && <p className={cn('rounded-xl p-3 text-sm', run.status === 'failed' ? 'bg-rose-50 text-rose-800' : 'bg-amber-50 text-amber-800')}>{run.error}</p>}

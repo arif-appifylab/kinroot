@@ -5,7 +5,7 @@ import {useState} from 'react';
 import {z} from 'zod';
 
 import {useCreate} from '@/components/create-dialogs';
-import {DataTable, SearchInput, type Column} from '@/components/data-table';
+import {DataTable, LoadError, Pagination, SearchInput, type Column} from '@/components/data-table';
 import {DealBoard} from '@/components/deal-board';
 import {FilterBar} from '@/components/filter-bar';
 import {ImportExportActions} from '@/components/import-export/actions';
@@ -21,6 +21,8 @@ import {keys, useMe, usePipelines, useTeam} from '@/lib/queries';
 import type {Deal} from '@/lib/types';
 import {cn} from '@/lib/utils';
 
+type DealPage = {rows: Deal[]; total: number; page: number; pageSize: number; summary: {count: number; value: number; weighted: number}};
+
 export const Route = createFileRoute('/_app/deals/')({
   validateSearch: z.object({
     view: z.enum(['board', 'list']).optional(),
@@ -32,6 +34,7 @@ export const Route = createFileRoute('/_app/deals/')({
     closeDate: z.enum(['overdue', 'this_month', 'next_month', 'this_quarter', 'none']).optional(),
     createdDays: z.string().optional(),
     closedDays: z.string().optional(), // board: how far back the won/lost columns reach; "0" hides them
+    page: z.coerce.number().optional(),
     sort: z.string().optional(),
     dir: z.enum(['asc', 'desc']).optional(),
     importId: z.string().optional(), // opens the import drawer (notification links)
@@ -48,16 +51,18 @@ function DealsPage() {
   const team = useTeam();
   const pipelines = usePipelines();
   const [qDraft, setQDraft] = useState(s.q ?? '');
-  const set = (patch: Partial<typeof s>) => navigate({search: (prev) => ({...prev, ...patch}), replace: true});
+  // A new filter starts again on page 1.
+  const set = (patch: Partial<typeof s>) => navigate({search: (prev) => ({...prev, page: undefined, ...patch}), replace: true});
 
   const view = s.view ?? 'board';
   const pipeline = pipelines.data?.find((p) => p.id === s.pipelineId) ?? pipelines.data?.find((p) => p.isDefault) ?? pipelines.data?.[0];
   const status = view === 'board' ? 'OPEN' : (s.status ?? 'OPEN');
 
-  const deals = useQuery({
-    queryKey: [...keys.deals, 'list', pipeline?.id, status, s.ownerId, s.q, s.rotting, s.sort, s.dir, s.closeDate, s.createdDays],
+  // 100 deals a page (the server's maximum), with page numbers like the other lists.
+  const dealPages = useQuery({
+    queryKey: [...keys.deals, 'list', pipeline?.id, status, s.ownerId, s.q, s.rotting, s.sort, s.dir, s.closeDate, s.createdDays, s.page],
     queryFn: () =>
-      api.get<{rows: Deal[]}>('/deals', {
+      api.get<DealPage>('/deals', {
         pipelineId: pipeline!.id,
         status,
         ownerId: s.ownerId,
@@ -67,11 +72,13 @@ function DealsPage() {
         createdDays: s.createdDays,
         sort: view === 'list' ? s.sort : undefined,
         dir: s.dir,
+        page: s.page,
       }),
-    select: (d) => d.rows,
     enabled: !!pipeline,
     placeholderData: keepPreviousData,
   });
+  const deals = {data: dealPages.data?.rows, isLoading: dealPages.isLoading};
+  const summary = dealPages.data?.summary;
   const closedDays = s.closedDays ?? '30';
   const closed = useQuery({
     queryKey: [...keys.deals, 'closed', pipeline?.id, s.ownerId, s.q, closedDays],
@@ -81,8 +88,9 @@ function DealsPage() {
     placeholderData: keepPreviousData,
   });
 
-  const total = deals.data?.reduce((sum, d) => sum + d.value, 0) ?? 0;
-  const weighted = deals.data?.reduce((sum, d) => sum + (d.value * d.stage.probability) / 100, 0) ?? 0;
+  // Totals for the whole filter come from the server (the loaded pages may be only the first 100).
+  const total = summary?.value ?? 0;
+  const weighted = summary?.weighted ?? 0;
 
   const columns: Column<Deal>[] = [
     {key: 'title', header: 'Deal', sortable: true, cell: (d) => (
@@ -108,7 +116,7 @@ function DealsPage() {
     <div>
       <PageHeader
         title="Deals"
-        description={deals.data ? <>{deals.data.length} {status === 'OPEN' ? 'open' : status.toLowerCase()} deals · <span className="font-semibold text-slate-700">{money(total, deals.data[0]?.currency ?? 'USD')}</span>{status === 'OPEN' && <> · weighted {money(weighted, deals.data[0]?.currency ?? 'USD')}</>}</> : 'Your pipeline at a glance.'}
+        description={deals.data ? <>{summary?.count ?? deals.data.length} {status === 'OPEN' ? 'open' : status.toLowerCase()} deals · <span className="font-semibold text-slate-700">{money(total, deals.data[0]?.currency ?? 'USD')}</span>{status === 'OPEN' && <> · weighted {money(weighted, deals.data[0]?.currency ?? 'USD')}</>}</> : 'Your pipeline at a glance.'}
         actions={
           <>
             <Tabs value={view} onValueChange={(v) => set({view: v as 'board' | 'list'})}>
@@ -136,8 +144,10 @@ function DealsPage() {
         ].map((t) => (
           <button
             key={t.label}
+            type="button"
+            aria-pressed={s.ownerId === t.ownerId}
             onClick={() => set({ownerId: t.ownerId})}
-            className={cn('-mb-px cursor-pointer border-b-2 px-3 py-2 text-sm font-semibold transition-colors', s.ownerId === t.ownerId ? 'border-primary text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800')}
+            className={cn('-mb-px cursor-pointer border-b-2 px-3 py-2 text-sm font-semibold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/30', s.ownerId === t.ownerId ? 'border-primary text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800')}
           >
             {t.label}
           </button>
@@ -148,7 +158,7 @@ function DealsPage() {
         active={!!(s.q || s.ownerId || s.rotting || s.closeDate || s.createdDays || (view === 'list' && status !== 'OPEN'))}
         onClear={() => (setQDraft(''), set({q: undefined, ownerId: undefined, rotting: undefined, closeDate: undefined, createdDays: undefined, status: undefined}))}
       >
-        <form onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
+        <form noValidate onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
           <SearchInput size="sm" value={qDraft} onChange={(v) => (setQDraft(v), !v && set({q: undefined}))} placeholder="Search deals or companies…" />
         </form>
         <NativeSelect
@@ -209,7 +219,11 @@ function DealsPage() {
         </button>
       </FilterBar>
 
-      {!pipeline || deals.isLoading ? (
+      {pipelines.isError || (dealPages.isError && !deals.data) ? (
+        <Card className="overflow-hidden">
+          <LoadError error={pipelines.error ?? dealPages.error} onRetry={() => (pipelines.isError ? pipelines.refetch() : dealPages.refetch())} title="Deals could not be loaded" />
+        </Card>
+      ) : !pipeline || deals.isLoading ? (
         <div className="flex gap-4">{Array.from({length: 4}).map((_, i) => <Skeleton key={i} className="h-96 w-[280px] shrink-0 rounded-2xl" />)}</div>
       ) : view === 'board' ? (
         <DealBoard pipeline={pipeline} deals={deals.data ?? []} closed={closedDays === '0' ? undefined : closed.data ?? []} currency={deals.data?.[0]?.currency ?? 'USD'} />
@@ -225,6 +239,9 @@ function DealsPage() {
             empty={<EmptyState icon={<Handshake />} title="No deals here" description="Change the filters or create a new deal." />}
           />
         </Card>
+      )}
+      {dealPages.data && dealPages.data.total > dealPages.data.pageSize && (
+        <Pagination page={dealPages.data.page} pageSize={dealPages.data.pageSize} total={dealPages.data.total} onPage={(page) => navigate({search: (p) => ({...p, page})})} />
       )}
 
     </div>

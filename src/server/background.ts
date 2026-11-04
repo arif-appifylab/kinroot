@@ -14,7 +14,8 @@ import {crmPrune, crmSync, crmTick} from './crm/lib/ticks';
  * put a whole record (or a secret) in the data.
  *
  * Kinroot: one list per job type (`crm-…`, src/server/crm/lib/jobs.ts) and three schedules
- * (src/server/crm/lib/ticks.ts). Each list is written out: the platform checks this file's keys.
+ * (src/server/crm/lib/ticks.ts; no retries, one at a time). Each list is written out: the platform
+ * checks this file's keys.
  */
 export const background = defineBackground({
   'crm-webhook-deliver': crmJob('webhook.deliver'),
@@ -22,6 +23,8 @@ export const background = defineBackground({
   'crm-ticket-sla-check': crmJob('ticket.sla_check'),
   'crm-ticket-csat': crmJob('ticket.csat'),
   'crm-email-forward-reply': crmJob('email.forward_reply'),
+  'crm-email-sync-account': crmJob('email.sync_account'),
+  'crm-calendar-sync-connection': crmJob('calendar.sync_connection'),
   'crm-booking-email': crmJob('booking.email'),
   'crm-booking-reminder': crmJob('booking.reminder'),
   'crm-broadcast-start': crmJob('broadcast.start'),
@@ -30,6 +33,7 @@ export const background = defineBackground({
   'crm-scoring-rescore': crmJob('scoring.rescore'),
   'crm-scoring-recalc': crmJob('scoring.recalc'),
   'crm-duplicates-scan': crmJob('duplicates.scan'),
+  'crm-duplicates-check': crmJob('duplicates.check'),
   'crm-automation-events': crmJob('automation.events'),
   'crm-automation-run': crmJob('automation.run'),
   'crm-automation-batch': crmJob('automation.batch'),
@@ -42,5 +46,5 @@ export const background = defineBackground({
   'crm-incoming-webhook-process': crmJob('incoming_webhook.process'),
   'crm-tick': () => runJob(async db => void (await crmTick(db))),
   'crm-sync': () => runJob(async db => void (await crmSync(db))),
-  'crm-prune': () => runJob(crmPrune),
+  'crm-prune': () => runJob(async db => void (await crmPrune(db))),
 });

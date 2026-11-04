@@ -1,8 +1,9 @@
 import {createFileRoute, Link, useNavigate} from '@tanstack/react-router';
-import {Copy, MoreHorizontal, Plus, Sparkles, Trash2, Workflow} from 'lucide-react';
+import {Copy, Loader2, MoreHorizontal, Plus, Sparkles, Trash2, Workflow} from 'lucide-react';
 import {useState} from 'react';
 
 import {useAutomations, useNames, type AutomationRow} from '@/components/automations/hooks';
+import {LoadError} from '@/components/data-table';
 import {TRIGGER_ICONS} from '@/components/automations/meta';
 import {useLists} from '@/components/lists/list-picker';
 import {Badge} from '@/components/ui/badge';
@@ -47,7 +48,8 @@ function AutomationsPage() {
       />
       <Card className="overflow-hidden">
         {list.isLoading && <p className="p-6 text-sm text-muted-foreground">Loading…</p>}
-        {!list.isLoading && rows.length === 0 && (
+        {list.isError && <LoadError error={list.error} onRetry={() => list.refetch()} />}
+        {!list.isLoading && !list.isError && rows.length === 0 && (
           <EmptyState
             icon={<Workflow />}
             title="No automations yet"
@@ -71,7 +73,7 @@ function AutomationsPage() {
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {rows.map((a) => (
-                  <Row key={a.id} a={a} isAdmin={isAdmin} fieldLabel={fieldLabel(a.object)} onToggle={(enabled) => toggle.mutate({id: a.id, enabled})} onDuplicate={() => duplicate.mutate(a.id)} onDelete={async () => (await confirm({title: `Delete "${a.name}" and its run history?`, confirmLabel: 'Delete', destructive: true})) && remove.mutate(a.id)} />
+                  <Row key={a.id} a={a} isAdmin={isAdmin} toggling={toggle.isPending && toggle.variables?.id === a.id} busy={(duplicate.isPending && duplicate.variables === a.id) || (remove.isPending && remove.variables === a.id)} fieldLabel={fieldLabel(a.object)} onToggle={(enabled) => toggle.mutate({id: a.id, enabled})} onDuplicate={() => duplicate.mutate(a.id)} onDelete={async () => (await confirm({title: `Delete "${a.name}" and its run history?`, confirmLabel: 'Delete', destructive: true})) && remove.mutate(a.id)} />
                 ))}
               </tbody>
             </table>
@@ -83,7 +85,7 @@ function AutomationsPage() {
   );
 }
 
-function Row({a, isAdmin, fieldLabel, onToggle, onDuplicate, onDelete}: {a: AutomationRow; isAdmin: boolean; fieldLabel: (k: string) => string; onToggle: (enabled: boolean) => void; onDuplicate: () => void; onDelete: () => void}) {
+function Row({a, isAdmin, toggling, busy, fieldLabel, onToggle, onDuplicate, onDelete}: {a: AutomationRow; isAdmin: boolean; toggling: boolean; busy: boolean; fieldLabel: (k: string) => string; onToggle: (enabled: boolean) => void; onDuplicate: () => void; onDelete: () => void}) {
   const Icon = TRIGGER_ICONS[a.triggerKind];
   return (
     <tr className="hover:bg-slate-50/70">
@@ -96,7 +98,7 @@ function Row({a, isAdmin, fieldLabel, onToggle, onDuplicate, onDelete}: {a: Auto
       </td>
       <td className="px-4 py-3">
         <span className="flex items-center gap-2">
-          {isAdmin && <Switch checked={a.enabled} onCheckedChange={onToggle} aria-label={a.enabled ? 'Switch off' : 'Switch on'} />}
+          {isAdmin && <Switch checked={a.enabled} disabled={toggling} aria-busy={toggling || undefined} onCheckedChange={onToggle} aria-label={a.enabled ? `Switch off ${a.name}` : `Switch on ${a.name}`} />}
           <Badge tone={a.enabled ? 'green' : 'neutral'}>{a.enabled ? 'On' : 'Off'}</Badge>
         </span>
       </td>
@@ -107,7 +109,7 @@ function Row({a, isAdmin, fieldLabel, onToggle, onDuplicate, onDelete}: {a: Auto
         {isAdmin && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="Actions"><MoreHorizontal /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${a.name}`} pending={busy}><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
               <DropdownMenuItem onSelect={onDuplicate}><Copy /> Duplicate</DropdownMenuItem>
@@ -141,19 +143,24 @@ function NewAutomationDialog({onClose}: {onClose: () => void}) {
     create.mutate({name: r.name, description: r.description, object: r.object, trigger: r.trigger, steps});
   };
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !create.isPending && onClose()}>
       <DialogContent size="lg">
         <DialogHeader>
           <DialogTitle>New automation</DialogTitle>
           <DialogDescription>Start blank or from a recipe; you can change everything before switching it on.</DialogDescription>
         </DialogHeader>
         <DialogBody>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {create.isPending && (
+            <p role="status" className="flex items-center gap-2 text-sm font-medium text-slate-600">
+              <Loader2 className="size-4 animate-spin" aria-hidden /> Creating the automation…
+            </p>
+          )}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" aria-busy={create.isPending || undefined}>
             <button
               type="button"
               disabled={create.isPending}
               onClick={() => create.mutate({name: 'New automation', object: 'contact', trigger: {kind: 'event', event: 'contact.created', filter: {}}, steps: []})}
-              className="flex cursor-pointer items-start gap-3 rounded-xl border border-dashed border-slate-300 p-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary hover:shadow-soft"
+              className="flex cursor-pointer items-start gap-3 rounded-xl border border-dashed border-slate-300 p-4 text-left transition-all outline-none hover:-translate-y-0.5 hover:border-primary hover:shadow-soft focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
             >
               <IconBadge tone="slate"><Plus /></IconBadge>
               <span>
@@ -164,7 +171,7 @@ function NewAutomationDialog({onClose}: {onClose: () => void}) {
             {RECIPES.map((r) => {
               const Icon = TRIGGER_ICONS[r.trigger.kind];
               return (
-                <button key={r.key} type="button" disabled={create.isPending} onClick={() => fromRecipe(r)} className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-100 bg-card p-4 text-left shadow-soft transition-all hover:-translate-y-0.5 hover:shadow-lift">
+                <button key={r.key} type="button" disabled={create.isPending} onClick={() => fromRecipe(r)} className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-100 bg-card p-4 text-left shadow-soft transition-all outline-none hover:-translate-y-0.5 hover:shadow-lift focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0">
                   <IconBadge tone="blue"><Icon /></IconBadge>
                   <span className="min-w-0">
                     <span className="block text-sm font-bold text-slate-900">{r.name}</span>

@@ -1,11 +1,12 @@
-import {CalendarClock, CalendarX2, CheckCircle2, Loader2} from 'lucide-react';
+import {CalendarClock, CalendarX2, CheckCircle2} from 'lucide-react';
 import {useState} from 'react';
 
 import {BookingSummary, CalendarButtons, type BookedMeeting} from '@/components/booking/booking-widget';
 import {SlotPicker, useVisitorTimeZone} from '@/components/booking/slot-picker';
 import {PublicCard} from '@/components/public-layout';
 import {Button} from '@/components/ui/button';
-import {Textarea} from '@/components/ui/form';
+import {Field, Textarea} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {IconBadge} from '@/components/ui/misc';
 import {api} from '@/lib/api';
 import type {Brand} from '@/lib/brand';
@@ -33,6 +34,7 @@ function Manage({token, initial, action}: {token: string; initial: BookedMeeting
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const f = useFormState({reason}, {reason: [is.maxLength(1000)]});
 
   if (!booking) {
     return (
@@ -55,6 +57,7 @@ function Manage({token, initial, action}: {token: string; initial: BookedMeeting
       setStart(null);
       setDone(message);
     } catch (e) {
+      if (f.fail(e)) return;
       setError((e as Error).message);
     } finally {
       setBusy(false);
@@ -76,7 +79,7 @@ function Manage({token, initial, action}: {token: string; initial: BookedMeeting
       <div className="mt-5">
         <BookingSummary booking={booking} timezone={zone} />
       </div>
-      {error && <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{error}</p>}
+      {error && <p role="alert" className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{error}</p>}
 
       {!locked && mode === 'view' && (
         <div className="mt-5 grid gap-4">
@@ -89,11 +92,13 @@ function Manage({token, initial, action}: {token: string; initial: BookedMeeting
       )}
 
       {!locked && mode === 'cancel' && (
-        <form onSubmit={(e) => (e.preventDefault(), run('cancel', {reason: reason || undefined}, 'Meeting canceled'))} className="mt-5 grid gap-3">
-          <Textarea aria-label="Reason for canceling" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Let them know why (optional)" />
+        <form {...f.form(() => void run('cancel', {reason: reason || undefined}, 'Meeting canceled'))} className="mt-5 grid gap-3">
+          <Field label="Reason for canceling (optional)" htmlFor="bm-reason" error={f.error('reason')}>
+            <Textarea id="bm-reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} onBlur={f.blur('reason')} placeholder="Let them know why" />
+          </Field>
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="secondary" onClick={() => setMode('view')}>Keep it</Button>
-            <Button type="submit" variant="destructive" disabled={busy}>{busy && <Loader2 className="animate-spin" />} Cancel meeting</Button>
+            <Button type="button" variant="secondary" onClick={() => setMode('view')} disabled={busy}>Keep it</Button>
+            <Button type="submit" variant="destructive" pending={busy} pendingLabel="Canceling…">Cancel meeting</Button>
           </div>
         </form>
       )}
@@ -104,9 +109,9 @@ function Manage({token, initial, action}: {token: string; initial: BookedMeeting
           <SlotPicker linkId={booking.linkId} duration={booking.duration} timezone={tz} onTimezone={setTz} value={start} onChange={setStart} reschedule={token} />
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             {start && <p className="text-sm font-semibold text-slate-700 sm:mr-auto">{whenIn(start, tz)}</p>}
-            <Button variant="secondary" onClick={() => setMode('view')}>Back</Button>
-            <Button disabled={!start || busy} onClick={() => run('reschedule', {start, timezone: tz}, 'Meeting rescheduled')}>
-              {busy && <Loader2 className="animate-spin" />} Confirm new time
+            <Button variant="secondary" onClick={() => setMode('view')} disabled={busy}>Back</Button>
+            <Button disabled={!start} pending={busy} pendingLabel="Rescheduling…" onClick={() => run('reschedule', {start, timezone: tz}, 'Meeting rescheduled')}>
+              Confirm new time
             </Button>
           </div>
         </div>

@@ -2,6 +2,7 @@ import {createFileRoute, Link} from '@tanstack/react-router';
 import {BarChart3, CalendarClock, LayoutGrid} from 'lucide-react';
 import {useState} from 'react';
 
+import {LoadError} from '@/components/data-table';
 import {ScheduleDrawer, ScheduleMenu, ScheduleStatusBadge, useSchedules, whenLocal, type ScheduleRow} from '@/components/reports/schedules';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
@@ -29,7 +30,12 @@ function SchedulesPage() {
         description={`Reports and dashboards emailed on a schedule. ${isAdmin ? 'You see everyone’s.' : 'You see the ones you set up.'} Next sends show in your time zone.`}
       />
       {list.isLoading && <Card className="p-6 text-sm text-muted-foreground">Loading…</Card>}
-      {!list.isLoading && !rows.length && (
+      {list.isError && (
+        <Card>
+          <LoadError error={list.error} onRetry={() => list.refetch()} />
+        </Card>
+      )}
+      {!list.isLoading && !list.isError && !rows.length && (
         <Card>
           <EmptyState
             icon={<CalendarClock />}

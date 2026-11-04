@@ -4,6 +4,7 @@ import {Loader2} from 'lucide-react';
 import {useEffect, useState, type ReactNode} from 'react';
 
 import {TagInput} from '@/components/pickers';
+import {LoadError} from '@/components/data-table';
 import {AdminOnly, SettingsSection} from '@/components/settings-section';
 import {Button} from '@/components/ui/button';
 import {Checkbox, Field, Input, NativeSelect, Switch} from '@/components/ui/form';
@@ -73,6 +74,7 @@ function InboxSettingsPage() {
   const save = useApiMutation(() => api.put<{settings: InboxSettings}>('/inbox/settings', form), {invalidate: [keys.inbox], success: 'Inbox settings saved', onSuccess: (r) => setForm(r.settings)});
 
   if (!isAdmin) return <AdminOnly />;
+  if (q.isError && !q.data) return <LoadError error={q.error} onRetry={() => q.refetch()} />;
   if (!form || !q.data) return <Loader2 className="size-5 animate-spin text-primary" />;
   const set = (patch: Partial<InboxSettings>) => setForm({...form, ...patch});
   const shared = q.data.sharedAccounts;
@@ -81,7 +83,7 @@ function InboxSettingsPage() {
   const canWork = (id: string) => admins.has(id) || form.access === 'everyone' || form.memberIds.includes(id);
 
   return (
-    <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))}>
+    <form noValidate onSubmit={(e) => (e.preventDefault(), !save.isPending && save.mutate(undefined))}>
       <SettingsSection title="Team inbox mailboxes" description="Mail to these shared mailboxes lands in the team inbox, from known contacts and new senders alike. Personal mailboxes always stay private to their owner.">
         {shared.length === 0 ? (
           <p className="text-sm text-muted-foreground">No shared mailboxes yet. <Link to="/settings/email" className="font-semibold text-primary hover:underline">Connect one in Settings → Email</Link> (as a shared team account).</p>
@@ -147,7 +149,7 @@ function InboxSettingsPage() {
           <Toggle label="Close conversations without a reply" checked={form.autoCloseDays !== null} onChange={(on) => set({autoCloseDays: on ? 7 : null})} />
           {form.autoCloseDays !== null && (
             <Field label="Days without a reply" htmlFor="ib-days" className="max-w-48">
-              <Input id="ib-days" type="number" min={1} max={365} value={form.autoCloseDays} onChange={(e) => set({autoCloseDays: Math.max(1, Math.min(365, Number(e.target.value) || 1))})} />
+              <Input id="ib-days" type="number" inputMode="numeric" value={form.autoCloseDays} onChange={(e) => set({autoCloseDays: Math.max(1, Math.min(365, Number(e.target.value) || 1))})} />
             </Field>
           )}
         </div>
@@ -161,7 +163,7 @@ function InboxSettingsPage() {
       </SettingsSection>
 
       <div className="mb-6 flex justify-end">
-        <Button type="submit" disabled={save.isPending}>{save.isPending && <Loader2 className="animate-spin" />} Save changes</Button>
+        <Button type="submit" pending={save.isPending} pendingLabel="Saving…">Save changes</Button>
       </div>
     </form>
   );

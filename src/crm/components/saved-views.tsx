@@ -28,9 +28,11 @@ export function SavedViews({entity, presets, current, onApply}: {entity: EntityT
         return (
           <span key={v.id} className="group relative inline-flex">
             <button
+              type="button"
+              aria-pressed={on}
               onClick={() => onApply(v.filters)}
               className={cn(
-                'inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all',
+                'inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
                 on ? 'border-transparent bg-brand text-white shadow-btn' : 'border-border bg-card text-slate-600 hover:border-slate-300 hover:text-slate-900',
               )}
             >
@@ -38,7 +40,14 @@ export function SavedViews({entity, presets, current, onApply}: {entity: EntityT
               {v.name}
             </button>
             {!v.id.startsWith('preset-') && (v.ownerId === me.id || isAdmin) && (
-              <button aria-label={`Delete view ${v.name}`} onClick={() => remove.mutate(v.id)} className="absolute -top-1.5 -right-1.5 hidden size-5 cursor-pointer items-center justify-center rounded-full bg-card text-slate-400 shadow-soft group-hover:flex hover:text-destructive">
+              <button
+                type="button"
+                aria-label={`Delete view ${v.name}`}
+                disabled={remove.isPending}
+                aria-busy={(remove.isPending && remove.variables === v.id) || undefined}
+                onClick={async () => (await confirm({title: `Delete the view "${v.name}"?`, description: 'The records stay; only this saved filter is removed.', confirmLabel: 'Delete', destructive: true})) && remove.mutate(v.id)}
+                className="absolute -top-1.5 -right-1.5 flex size-5 cursor-pointer items-center justify-center rounded-full bg-card text-slate-400 opacity-0 shadow-soft transition-opacity outline-none group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed pointer-coarse:opacity-100"
+              >
                 <Trash2 className="size-3" />
               </button>
             )}
@@ -50,6 +59,8 @@ export function SavedViews({entity, presets, current, onApply}: {entity: EntityT
           variant="ghost"
           size="sm"
           className="h-7 rounded-full text-xs"
+          pending={save.isPending}
+          pendingLabel="Saving…"
           onClick={async () => {
             const name = await prompt({title: 'Name this view', label: 'View name', placeholder: 'e.g. My hot leads', confirmLabel: 'Continue'});
             if (name) save.mutate({name, shared: isAdmin && (await confirm({title: 'Share this view with the whole team?', confirmLabel: 'Share', cancelLabel: 'Just me'}))});

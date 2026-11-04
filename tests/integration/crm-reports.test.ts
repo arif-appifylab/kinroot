@@ -1,5 +1,6 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
+import {cache} from '../../src/platform/cache';
 import {owner, resetCrm, teammate, userId} from './support/crm';
 import {type Browser, configureEnv, DATABASE_URL, db} from './support/harness';
 
@@ -110,6 +111,7 @@ describe.skipIf(!DATABASE_URL)('Kinroot reports (integration, real Postgres)', (
 
   it('limits a member to their own records when visibility is owner-only', async () => {
     await db.setting.upsert({where: {key: 'workspace'}, create: {key: 'workspace', value: {recordVisibility: 'owner'}}, update: {value: {recordVisibility: 'owner'}}});
+    await cache.del('crm:settings'); // written straight to the table: clear what the app cached
     expect((await run(memberBrowser, {object: 'deals', measure: {op: 'count'}})).total.count).toBe(1);
     // Tickets: their own and unassigned ones (the object's own scope).
     expect((await run(memberBrowser, {object: 'tickets', measure: {op: 'count'}})).total.count).toBe(2);

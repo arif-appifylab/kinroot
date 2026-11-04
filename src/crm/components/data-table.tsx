@@ -1,11 +1,11 @@
-import {ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Search, X} from 'lucide-react';
+import {AlertTriangle, ArrowDown, ArrowUp, ChevronLeft, ChevronRight, RotateCw, Search, X} from 'lucide-react';
 import type {ReactNode} from 'react';
 
 import {cn} from '@/lib/utils';
 
 import {Button} from './ui/button';
 import {Checkbox, Input} from './ui/form';
-import {Skeleton} from './ui/misc';
+import {EmptyState, Skeleton} from './ui/misc';
 
 export type Column<T> = {
   key: string;
@@ -29,6 +29,8 @@ export function DataTable<T extends {id: string}>({
   onSelect,
   onRowClick,
   empty,
+  error,
+  onRetry,
 }: {
   rows: T[] | undefined;
   columns: Column<T>[];
@@ -40,7 +42,11 @@ export function DataTable<T extends {id: string}>({
   onSelect?: (ids: Set<string>) => void;
   onRowClick?: (row: T) => void;
   empty?: ReactNode;
+  /** The load failed (`query.error`): shows an error state with Retry instead of rows. */
+  error?: unknown;
+  onRetry?: () => void;
 }) {
+  if (error && !loading) return <LoadError error={error} onRetry={onRetry} />;
   const allSelected = !!rows?.length && rows.every((r) => selected?.has(r.id));
   return (
     <div className="overflow-x-auto scrollbar-thin">
@@ -101,6 +107,27 @@ export function DataTable<T extends {id: string}>({
         </tbody>
       </table>
       {!loading && rows?.length === 0 && empty}
+    </div>
+  );
+}
+
+/** A failed load: what happened, in words, and a Retry button. */
+export function LoadError({error, onRetry, title = 'This could not be loaded', className}: {error?: unknown; onRetry?: () => void; title?: string; className?: string}) {
+  const message = error instanceof Error && error.message ? error.message : 'Check your connection and try again.';
+  return (
+    <div role="alert" className={className}>
+      <EmptyState
+        icon={<AlertTriangle />}
+        title={title}
+        description={message}
+        action={
+          onRetry && (
+            <Button type="button" variant="secondary" onClick={onRetry}>
+              <RotateCw /> Retry
+            </Button>
+          )
+        }
+      />
     </div>
   );
 }

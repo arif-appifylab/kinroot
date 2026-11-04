@@ -1,5 +1,4 @@
 import {useNavigate} from '@tanstack/react-router';
-import {Loader2} from 'lucide-react';
 import {useState} from 'react';
 
 import {api} from '@/lib/api';
@@ -12,6 +11,7 @@ import {CompanyPicker, ContactsPicker, DealPicker, UserSelect} from '../pickers'
 import {Button} from '../ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '../ui/dialog';
 import {Field, Input, NativeSelect} from '../ui/form';
+import {is, useFormState} from '../ui/form-state';
 import {useTicketSettings} from './ticket-badges';
 
 export type TicketDefaults = {contact?: ContactLite | null; company?: CompanyLite | null; deal?: {id: string; title: string} | null};
@@ -53,17 +53,25 @@ export function NewTicketDialog({defaults = {}, onClose}: {defaults?: TicketDefa
     },
   );
 
+  const f = useFormState(
+    {subject, email},
+    {
+      subject: [is.required('Enter a subject, like "Refund for order 1042".'), is.maxLength(300)],
+      email: [is.email()],
+    },
+  );
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !create.isPending && onClose()}>
       <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>New ticket</DialogTitle>
           <DialogDescription>Log a request that came in by phone, chat or in person.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={(e) => (e.preventDefault(), subject.trim() && create.mutate(undefined))} className="contents">
+        <form {...f.form(() => create.mutate(undefined, {onError: f.fail}))} className="contents">
           <DialogBody>
-            <Field label="Subject" htmlFor="t-subject">
-              <Input id="t-subject" autoFocus value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="What does the customer need?" />
+            <Field label="Subject" htmlFor="t-subject" error={f.error('subject')}>
+              <Input id="t-subject" autoFocus value={subject} onChange={(e) => setSubject(e.target.value)} onBlur={f.blur('subject')} placeholder="What does the customer need?" />
             </Field>
             <Field label="Description">
               <RichEditor variant="text" compact minHeight={110} value={description} onChange={setDescription} ariaLabel="Description" placeholder="Details, steps to reproduce, order numbers…" />
@@ -73,8 +81,8 @@ export function NewTicketDialog({defaults = {}, onClose}: {defaults?: TicketDefa
                 <ContactsPicker id="t-contact" value={contacts} onChange={(v) => setContacts(v.slice(-1))} />
               </Field>
               {!contacts.length && (
-                <Field label="…or their email" htmlFor="t-email" hint="Creates the contact if it's new.">
-                  <Input id="t-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" />
+                <Field label="…or their email" htmlFor="t-email" hint="Creates the contact if it's new." error={f.error('email')}>
+                  <Input id="t-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} onBlur={f.blur('email')} placeholder="name@company.com" />
                 </Field>
               )}
               <Field label="Company" htmlFor="t-company" hint={contacts.length ? "Defaults to the contact's company." : undefined}>
@@ -106,8 +114,8 @@ export function NewTicketDialog({defaults = {}, onClose}: {defaults?: TicketDefa
             </div>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={!subject.trim() || create.isPending}>{create.isPending && <Loader2 className="animate-spin" />} Create ticket</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={create.isPending}>Cancel</Button>
+            <Button type="submit" pending={create.isPending} pendingLabel="Creating…">Create ticket</Button>
           </DialogFooter>
         </form>
       </DialogContent>

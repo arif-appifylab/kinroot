@@ -4,7 +4,7 @@
  *   scoreEvents(db, eventIds)       job: behaviour points for domain events, then rescore
  *   rescoreContacts(db, ids)        property rules → awards, totals, band crossings
  *   startRecalc(db) / recalcJob     "Recalculate all" (a chain of small jobs)
- *   scoringTick(db)                 periodic pass from /jobs/run (decay, time-based rules)
+ *   scoringTick(db)                 periodic pass from the `crm-tick` schedule (decay, time-based rules)
  *
  * A contact's score is the sum of its ScoreEvent points from enabled rules:
  * property awards count fully while they are active, behaviour awards age with
@@ -32,7 +32,8 @@ import {
 } from '@/lib/scoring';
 import {asRules, customSegmentFields, referencedLists, ruleComplete, SEGMENT_FIELDS, type SegmentRules} from '@/lib/segments';
 import {emitMany} from './events';
-import {enqueue, kickJobs} from './jobs';
+import {enqueue} from './jobs';
+import {cache} from '../../../platform/cache';
 import {notify, recordLink} from './notify';
 import {loadSegmentDefs, segmentWhere, type CustomDefs} from './segments';
 
@@ -49,9 +50,15 @@ const SUMMARY_AFTER = 3;
 
 // ─── Settings ───────────────────────────────────────────────────────────────
 
+/** Bands are read wherever a score is shown: Site Cache, cleared by saveScoringSettings() (the only writer). */
+const CACHE_KEY = 'crm:scoring:settings';
+const CACHE_TTL_S = 7 * 86_400;
+
 export async function getScoringSettings(db: Db): Promise<ScoringSettings> {
-  const row = await db.setting.findUnique({where: {key: KEY}});
-  const stored = (row?.value ?? {}) as Partial<ScoringSettings>;
+  const stored = await cache.getOrSet(CACHE_KEY, CACHE_TTL_S, async () => {
+    const row = await db.setting.findUnique({where: {key: KEY}, select: {value: true}});
+    return (row?.value ?? {}) as Partial<ScoringSettings>;
+  });
   const d = defaultScoringSettings();
   return {bands: stored.bands?.length ? stored.bands : d.bands, decay: {...d.decay, ...stored.decay}, notify: stored.notify ?? d.notify};
 }
@@ -72,6 +79,7 @@ export async function saveScoringSettings(db: Db, next: ScoringSettings) {
   const value = {...next, bands: normaliseBands(next.bands)};
   const json = value as unknown as Prisma.InputJsonValue;
   await db.setting.upsert({where: {key: KEY}, create: {key: KEY, value: json}, update: {value: json}});
+  await cache.del(CACHE_KEY);
   return value;
 }
 
@@ -348,12 +356,13 @@ async function sharedOpts(db: Db): Promise<RescoreOpts> {
 export async function startRecalc(db: Db) {
   const state: RecalcState = {runId: crypto.randomUUID(), startedAt: new Date().toISOString(), processed: 0, total: await db.contact.count(), finishedAt: null};
   await writeSetting(db, RECALC_KEY, state);
-  await enqueue(db, 'scoring.recalc', {runId: state.runId, after: null});
-  kickJobs();
+  await enqueue(db, 'scoring.recalc', {runId: state.runId, after: null}, {key: `recalc-${state.runId}-start`});
   return state;
 }
 
-/** Job `scoring.recalc`: a few batches, then queues itself for the rest. A newer run supersedes it. */
+const RECALC_BUDGET_MS = 25_000;
+
+/** Job `scoring.recalc`: batches for RECALC_BUDGET_MS, then queues itself for the rest. A newer run supersedes it. */
 export async function recalcJob(db: Db, p: {runId: string; after: string | null}) {
   const state = await readSetting<RecalcState>(db, RECALC_KEY);
   if (!state || state.runId !== p.runId || state.finishedAt) return;
@@ -365,12 +374,13 @@ export async function recalcJob(db: Db, p: {runId: string; after: string | null}
     const r = await recomputeBatch(db, after, shared);
     processed += r.processed;
     after = r.next;
-  } while (after && Date.now() - started < 8_000);
+    // Fuller jobs, fewer of them: the platform takes only so many new jobs a minute (a job has 60 s).
+  } while (after && Date.now() - started < RECALC_BUDGET_MS);
   const latest = await readSetting<RecalcState>(db, RECALC_KEY);
   if (latest?.runId !== p.runId) return;
   if (after) {
     await writeSetting(db, RECALC_KEY, {...state, processed});
-    await enqueue(db, 'scoring.recalc', {runId: p.runId, after});
+    await enqueue(db, 'scoring.recalc', {runId: p.runId, after}, {key: `recalc-${p.runId}-${after}`});
   } else {
     const now = new Date().toISOString();
     await writeSetting(db, RECALC_KEY, {...state, processed, finishedAt: now});
@@ -379,7 +389,7 @@ export async function recalcJob(db: Db, p: {runId: string; after: string | null}
 }
 
 /**
- * From /jobs/run: walks all contacts in small batches so decay and time-based
+ * From the `crm-tick` schedule: walks all contacts in small batches so decay and time-based
  * property rules ("opened an email in the last 30 days") stay current, then
  * rests for an hour after each full pass.
  */

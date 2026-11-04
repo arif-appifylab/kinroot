@@ -66,7 +66,7 @@ describe.skipIf(!DATABASE_URL)('Ported: lead scoring (integration, real Postgres
     const scoreSeg = must(await owner.post('/site-api/crm/lists', {name: 'Score seg', kind: 'DYNAMIC', rules: rulesOf({field: 'score', op: 'gt', value: '10'})}), 'score segment').list as {id: string};
     expect((await owner.post('/site-api/crm/scoring/rules', {kind: 'property', name: 'loop2', points: 5, rules: rulesOf({field: 'list', op: 'in', value: scoreSeg.id})})).status).toBe(400);
     expect((await owner.post('/site-api/crm/scoring/rules', {kind: 'property', name: 'empty', points: 5, rules: rulesOf({field: 'title', op: 'contains', value: ''})})).status).toBe(400);
-    expect((await owner.post('/site-api/crm/scoring/rules', {kind: 'behavior', name: 'zero', points: 0, event: 'email.opened'})).status).toBe(400);
+    expect((await owner.post('/site-api/crm/scoring/rules', {kind: 'behavior', name: 'zero', points: 0, event: 'email.opened'})).status).toBe(422);
     expect((await owner.post('/site-api/crm/scoring/rules', {kind: 'behavior', name: 'bad', points: 5, event: 'contact.deleted'})).status).toBe(400);
 
     must(await owner.request('PATCH', `/site-api/crm/contacts/${B.id}`, {title: 'VP Marketing'}), 'B → VP');

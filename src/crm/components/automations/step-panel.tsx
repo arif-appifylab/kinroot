@@ -1,4 +1,5 @@
-import {Eye, KeyRound, Loader2, Trash2} from 'lucide-react';
+import {Eye, KeyRound, Trash2} from 'lucide-react';
+import {toast} from 'sonner';
 import {useState} from 'react';
 
 import {STEP_TYPES, TARGETS, targetLabel, WEEKDAY_SHORT, type AssigneeMode, type AutoObject, type Problem, type RecordField, type Step, type Target} from '@/lib/automations';
@@ -32,7 +33,7 @@ export function StepPanel({step, object, onChange, onDelete, problems, readOnly,
       <div className="flex items-start gap-3">
         <IconBadge tone={tone}><Icon /></IconBadge>
         <div className="min-w-0 flex-1">
-          <h3 className="text-base font-bold text-slate-900">{meta.label}</h3>
+          <h2 className="text-base font-bold text-slate-900">{meta.label}</h2>
           <p className="text-xs text-muted-foreground">{meta.description}</p>
         </div>
         {!readOnly && <Button variant="ghost" size="icon-sm" className="text-slate-400 hover:text-destructive" onClick={onDelete} aria-label="Delete step"><Trash2 /></Button>}
@@ -443,6 +444,8 @@ function WebhookStep({step, onChange, automationId, isAdmin}: Props & {automatio
     setLoading(true);
     try {
       setSecret((await api.post<{secret: string}>(`/automations/${automationId}/secret`)).secret);
+    } catch (e) {
+      toast.error((e as Error).message);
     } finally {
       setLoading(false);
     }
@@ -457,7 +460,7 @@ function WebhookStep({step, onChange, automationId, isAdmin}: Props & {automatio
           Signed like Settings → Webhooks: <code>X-Webhook-Signature: t=…,v1=…</code> (HMAC-SHA256 of <code>{'"<t>.<body>"'}</code>) with this automation's signing secret. <code>X-Webhook-Id</code> is the same on retries, so receivers can ignore repeats.
         </p>
         {isAdmin && (
-          secret ? <code className="break-all rounded-md bg-card px-2 py-1.5 text-slate-800">{secret}</code> : <Button type="button" variant="secondary" size="sm" className="justify-self-start" onClick={reveal} disabled={loading}>{loading ? <Loader2 className="animate-spin" /> : <KeyRound />} Show signing secret</Button>
+          secret ? <code className="break-all rounded-md bg-card px-2 py-1.5 text-slate-800">{secret}</code> : <Button type="button" variant="secondary" size="sm" className="justify-self-start" onClick={reveal} pending={loading} pendingLabel="Loading…"><KeyRound /> Show signing secret</Button>
         )}
       </div>
     </>

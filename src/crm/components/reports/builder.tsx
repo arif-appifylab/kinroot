@@ -94,7 +94,7 @@ const noValue: CondOp[] = ['empty', 'not_empty', 'is_true', 'is_false'];
 function Section({title, children}: {title: string; children: ReactNode}) {
   return (
     <section className="grid gap-3 border-b border-slate-100 px-5 py-4 last:border-0">
-      <h3 className="text-xs font-bold tracking-wider text-slate-400 uppercase">{title}</h3>
+      <h2 className="text-xs font-bold tracking-wider text-slate-400 uppercase">{title}</h2>
       {children}
     </section>
   );
@@ -168,12 +168,13 @@ function ConditionRow({object, cond, onChange, onRemove}: {object: CatalogueObje
         (picker ? (
           <OptionPicker options={options} value={list} onChange={(v) => onChange({...cond, value: v})} placeholder="Pick values" />
         ) : field?.kind === 'date' ? (
-          <Input type="date" className="h-9" value={typeof cond.value === 'string' ? cond.value : ''} onChange={(e) => onChange({...cond, value: e.target.value})} />
+          <Input type="date" aria-label="Date" className="h-9" value={typeof cond.value === 'string' ? cond.value : ''} onChange={(e) => onChange({...cond, value: e.target.value})} />
         ) : field && (field.kind === 'number' || field.kind === 'currency') ? (
-          <Input type="number" className="h-9" value={cond.value === undefined ? '' : String(cond.value)} onChange={(e) => onChange({...cond, value: e.target.value === '' ? undefined : Number(e.target.value)})} />
+          <Input type="number" aria-label="Number" className="h-9" value={cond.value === undefined ? '' : String(cond.value)} onChange={(e) => onChange({...cond, value: e.target.value === '' ? undefined : Number(e.target.value)})} />
         ) : (
           <Input
             className="h-9"
+            aria-label={cond.op === 'contains' ? 'Text' : 'Values, comma separated'}
             placeholder={cond.op === 'contains' ? 'Text' : 'Values, comma separated'}
             value={Array.isArray(cond.value) ? cond.value.join(', ') : String(cond.value ?? '')}
             onChange={(e) => onChange({...cond, value: e.target.value})}

@@ -10,8 +10,10 @@ import {Input} from '../ui/form';
 import {IconBadge} from '../ui/misc';
 
 function copy(text: string, what = 'Copied') {
-  navigator.clipboard.writeText(text);
-  toast.success(what);
+  navigator.clipboard.writeText(text).then(
+    () => toast.success(what),
+    () => toast.error('Copying is blocked in this browser. Select the text and copy it instead.'),
+  );
 }
 
 function Snippet({code, label}: {code: string; label: string}) {
@@ -40,8 +42,8 @@ function Way({icon, title, description, children}: {icon: ReactNode; title: stri
   );
 }
 
-/** Share tab: hosted link, inline embed, popup button, and the React component for AI-built pages. */
-export function SharePanel({slug, status, onPublish}: {slug: string; status: FormStatus; onPublish: () => void}) {
+/** Share tab: hosted link, a button for other websites, a popup on any element, and the React component for AI-built pages. */
+export function SharePanel({slug, status, onPublish, publishing = false}: {slug: string; status: FormStatus; onPublish: () => void; publishing?: boolean}) {
   const origin = typeof window === 'undefined' ? '' : window.location.origin;
   const url = `${origin}/f/${slug}`;
   const script = `<script src="${origin}/site-api/crm/public/forms/embed.js" async></script>`;
@@ -49,8 +51,8 @@ export function SharePanel({slug, status, onPublish}: {slug: string; status: For
     <div className="max-w-3xl">
       {status !== 'PUBLISHED' && (
         <div className="mb-6 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 sm:flex-row sm:items-center">
-          <p className="flex-1">{status === 'CLOSED' ? 'This form is closed. Links and embeds show the closed message.' : 'This form is a draft. Publish it so the link and embeds accept responses.'}</p>
-          <Button size="sm" onClick={onPublish}>{status === 'CLOSED' ? 'Reopen form' : 'Publish now'}</Button>
+          <p className="flex-1">{status === 'CLOSED' ? 'This form is closed. Its link and website buttons show the closed message.' : 'This form is a draft. Publish it so its link and website buttons accept responses.'}</p>
+          <Button size="sm" onClick={onPublish} pending={publishing} pendingLabel={status === 'CLOSED' ? 'Reopening…' : 'Publishing…'}>{status === 'CLOSED' ? 'Reopen form' : 'Publish now'}</Button>
         </div>
       )}
       <SettingsSection title="Share" description="Use any of these; responses all land in the same place.">
@@ -62,7 +64,7 @@ export function SharePanel({slug, status, onPublish}: {slug: string; status: For
           </div>
         </Way>
         <Way icon={<Code2 />} title="Button on a website" description="Paste where the button should appear. It opens the form in a small window and passes the page's UTM parameters along.">
-          <Snippet label="Embed code" code={`<div data-crm-form="${slug}" data-label="Get in touch"></div>\n${script}`} />
+          <Snippet label="Button code" code={`<div data-crm-form="${slug}" data-label="Get in touch"></div>\n${script}`} />
           <p className="text-xs text-muted-foreground">
             Forms open as a page of this site: other websites can't show it inside their own page. Change the button with <code>data-label</code> and <code>data-color</code>.
           </p>

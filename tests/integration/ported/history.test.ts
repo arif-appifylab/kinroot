@@ -244,7 +244,7 @@ describe.skipIf(!DATABASE_URL)('ported: property history and tab counts (scripts
       must(await o.patch('/settings', {recordVisibility: 'everyone'}), 'visibility back');
     }
     expect((await o.get('/history?entity=contact&id=nope')).status, 'unknown record → 404').toBe(404);
-    expect((await o.get(`/history?entity=widget&id=${A.id}`)).status, 'unknown entity → 400').toBe(400);
+    expect((await o.get(`/history?entity=widget&id=${A.id}`)).status, 'unknown entity → 422').toBe(422);
   });
 
   it('tab counts match the feed', async () => {

@@ -1,7 +1,7 @@
 import {useMutation, useQuery, useQueryClient, type QueryKey} from '@tanstack/react-query';
 import {toast} from 'sonner';
 
-import {api} from '@/lib/api';
+import {api, ApiError} from '@/lib/api';
 import type {CustomField, EmailAccount, EmailDesignResponse, EmailTemplate, EntityType, Me, Pipeline, SettingsResponse} from '@/lib/types';
 
 export const keys = {
@@ -44,7 +44,20 @@ export const keys = {
   imports: ['imports'] as const,
   exports: ['exports'] as const,
   inbox: ['inbox'] as const,
+  badges: ['badges'] as const,
 };
+
+/** The app shell's numbers (GET /badges: one capped query; counts above 99 show as "99+"). */
+export type Badges = {tasks: number; reminders: number; inbox: number; tickets: number; notifications: number; latestNotificationId: string | null};
+
+/**
+ * Shared by the sidebar and the notification bell (one request for both). Polled every 30 s while
+ * the tab is visible (never in the background); any successful write refreshes it (app-shell).
+ */
+export const badgesQuery = {queryKey: keys.badges, queryFn: () => api.get<Badges>('/badges'), refetchInterval: 30_000} as const;
+
+/** A badge's text: "99+" past 99. */
+export const badgeText = (n: number) => (n > 99 ? '99+' : String(n));
 
 /**
  * Who is here (GET /auth/state). Signing in is the site's (`/account/login/`); `user` is the team
@@ -115,7 +128,12 @@ export function useApiMutation<TVars, TResult = unknown>(
       if (opts.success) toast.success(typeof opts.success === 'function' ? opts.success(result) : opts.success);
       opts.onSuccess?.(result, vars);
     },
-    onError: (e: Error) => toast.error(e.message),
+    // A 422 with plain field names shows them under the fields (forms pass `f.fail`): the toast only points
+    // there. Nested keys (`stages.0.name`) have no field to land on, so their words stay in the toast.
+    onError: (e: Error) => {
+      const keys = e instanceof ApiError ? Object.keys(e.fields ?? {}) : [];
+      toast.error(keys.length && keys.every((k) => !k.includes('.')) ? 'Check the highlighted fields.' : e.message);
+    },
   });
 }
 

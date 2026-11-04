@@ -9,6 +9,7 @@ import type {ContactListMembership, ContactListRow} from '@/lib/types';
 
 import {PropertyCard} from '../properties';
 import {Button} from '../ui/button';
+import {confirm} from '../ui/confirm';
 import {ListMenu} from './list-picker';
 
 /** Lists a contact is in: static memberships (removable) and segments that match right now. */
@@ -32,13 +33,19 @@ export function ContactListsCard({contactId}: {contactId: string}) {
             exclude={rows.map((r) => r.id)}
             onPick={(l) => add.mutate(l)}
             onCreate={(name) => name && create.mutate(name)}
-            trigger={<Button variant="ghost" size="sm"><Plus /> Add</Button>}
+            trigger={<Button variant="ghost" size="sm" pending={add.isPending || create.isPending} pendingLabel="Adding…"><Plus /> Add</Button>}
           />
         )
       }
     >
       {q.isLoading && <p className="px-3 py-3 text-sm text-muted-foreground">Loading…</p>}
-      {!q.isLoading && rows.length === 0 && <p className="px-3 py-3 text-sm text-muted-foreground">Not in any list</p>}
+      {q.isError && (
+        <p role="alert" className="px-3 py-3 text-sm text-destructive">
+          Could not load the lists.{' '}
+          <button type="button" onClick={() => q.refetch()} className="cursor-pointer font-semibold underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none">Retry</button>
+        </p>
+      )}
+      {!q.isLoading && !q.isError && rows.length === 0 && <p className="px-3 py-3 text-sm text-muted-foreground">Not in any list</p>}
       {rows.map((l) => (
         <div key={l.id} className="group flex items-center gap-2.5 px-3 py-2">
           <span className="flex size-8 items-center justify-center rounded-lg bg-slate-100 text-slate-500">{l.kind === 'DYNAMIC' ? <Filter className="size-4" /> : <List className="size-4" />}</span>
@@ -47,7 +54,16 @@ export function ContactListsCard({contactId}: {contactId: string}) {
             <p className="text-xs text-muted-foreground">{l.kind === 'DYNAMIC' ? 'Segment · matches now' : `Added ${ago(l.addedAt)}${l.source && l.source !== 'manual' ? ` · ${l.source}` : ''}`}</p>
           </Link>
           {canEdit && l.kind === 'STATIC' && (
-            <button aria-label={`Remove from ${l.name}`} onClick={() => remove.mutate(l.id)} className="cursor-pointer rounded p-1 text-slate-300 opacity-0 group-hover:opacity-100 hover:text-destructive focus-visible:opacity-100">
+            <button
+              type="button"
+              aria-label={`Remove from ${l.name}`}
+              disabled={remove.isPending}
+              aria-busy={(remove.isPending && remove.variables === l.id) || undefined}
+              onClick={async () => {
+                if (await confirm({title: `Remove from ${l.name}?`, description: 'The contact leaves this list. You can add them back later.', confirmLabel: 'Remove', destructive: true})) remove.mutate(l.id);
+              }}
+              className="cursor-pointer rounded p-1 text-slate-300 opacity-0 group-hover:opacity-100 hover:text-destructive focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none disabled:cursor-not-allowed"
+            >
               <X className="size-4" />
             </button>
           )}

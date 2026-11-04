@@ -4,10 +4,10 @@ import {z} from 'zod';
 
 import type {Prisma} from '../../../generated/prisma/client';
 import {answerText, defaultSettings, FORM_TEMPLATES, slugify, type FieldType, type StoredAnswer} from '@/lib/forms';
-import {currentUser, isAdmin, requireRole, type AppEnv} from '../kit/guards';
+import {currentUser, isAdmin, requireRole, type AppEnv, type User} from '../kit/guards';
 import {audit} from '../lib/audit';
 import {formFields, formSettings} from '../lib/form-submit';
-import {notFound, valid} from '../lib/http';
+import {httpUrl, notFound, valid} from '../lib/http';
 import {moveToBin} from '../lib/recycle-bin';
 import {userSelect} from '../lib/users';
 import {csv} from './import-export';
@@ -53,7 +53,7 @@ const settings = z.object({
   responseLimit: z.number().int().min(1).nullish(),
   onePerContact: z.boolean().optional(),
   spamCheck: z.boolean().optional(),
-  endings: z.array(z.object({id: z.string().max(80), title: z.string().max(200), message: z.string().max(4000), redirectUrl: z.string().max(2000).optional(), when: group.optional()})).min(1).max(10),
+  endings: z.array(z.object({id: z.string().max(80), title: z.string().max(200), message: z.string().max(4000), redirectUrl: httpUrl.transform((v) => v ?? undefined), when: group.optional()})).min(1).max(10), // redirectUrl: http(s) only, never `javascript:`
   contactSource: z.string().max(100).optional(),
   lifecycleStage: z.enum(['LEAD', 'QUALIFIED', 'OPPORTUNITY', 'CUSTOMER', 'CHURNED', 'OTHER']).nullish(),
   tags: z.array(z.string().max(40)).max(20).optional(),
@@ -68,6 +68,11 @@ const settings = z.object({
 });
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** The form's creator or an admin may publish, close, delete it and delete its responses. */
+function canManage(me: Pick<User, 'id' | 'role'>, form: {createdById: string | null}) {
+  return form.createdById === me.id || isAdmin(me);
+}
 
 async function uniqueSlug(db: AppEnv['Variables']['db'], base: string, exceptId?: string) {
   const root = slugify(base);
@@ -156,8 +161,9 @@ export const forms = new Hono<AppEnv>()
 
   .post('/:id/status', valid('json', z.object({status: z.enum(['DRAFT', 'PUBLISHED', 'CLOSED'])})), async (c) => {
     const {status} = c.req.valid('json');
-    const existing = await c.var.db.form.findUnique({where: {id: c.req.param('id')}, select: {id: true, fields: true, publishedAt: true}});
+    const existing = await c.var.db.form.findUnique({where: {id: c.req.param('id')}, select: {id: true, fields: true, publishedAt: true, createdById: true}});
     if (!existing) throw notFound('Form');
+    if (!canManage(currentUser(c), existing)) throw new HTTPException(403, {message: 'Only the creator or an admin can publish or close this form'});
     if (status === 'PUBLISHED' && !formFields(existing).some((f) => f.type !== 'heading' && f.type !== 'page_break' && f.type !== 'hidden')) {
       throw new HTTPException(400, {message: 'Add at least one question before publishing'});
     }
@@ -187,7 +193,7 @@ export const forms = new Hono<AppEnv>()
     const me = currentUser(c);
     const form = await c.var.db.form.findUnique({where: {id: c.req.param('id')}, select: {id: true, name: true, createdById: true}});
     if (!form) throw notFound('Form');
-    if (form.createdById !== me.id && !isAdmin(me)) throw new HTTPException(403, {message: 'Only the creator or an admin can delete this form'});
+    if (!canManage(me, form)) throw new HTTPException(403, {message: 'Only the creator or an admin can delete this form'});
     const [bin] = await moveToBin(c.var.db, 'form', [form.id], me);
     await audit(c.var.db, c, {action: 'form.deleted', entity: 'form', recordId: form.id, label: form.name});
     return c.json({ok: true, binId: bin?.id ?? null});
@@ -195,7 +201,7 @@ export const forms = new Hono<AppEnv>()
 
   // ─── Results ───
 
-  .get('/:id/submissions', valid('query', z.object({page: z.coerce.number().int().min(1).default(1), q: z.string().optional()})), async (c) => {
+  .get('/:id/submissions', valid('query', z.object({page: z.string().regex(/^\d{1,4}$/, 'must be a page number').transform(Number).pipe(z.number().int().min(1).max(1000)).default(1), q: z.string().trim().max(200).optional()})), async (c) => {
     const {page, q} = c.req.valid('query');
     const pageSize = 25;
     const where: Prisma.FormSubmissionWhereInput = {
@@ -266,8 +272,9 @@ export const forms = new Hono<AppEnv>()
   })
 
   .delete('/submissions/:id', async (c) => {
-    const sub = await c.var.db.formSubmission.findUnique({where: {id: c.req.param('id')}, select: {id: true, formId: true, email: true}});
+    const sub = await c.var.db.formSubmission.findUnique({where: {id: c.req.param('id')}, select: {id: true, formId: true, email: true, form: {select: {createdById: true}}}});
     if (!sub) throw notFound('Response');
+    if (!canManage(currentUser(c), sub.form)) throw new HTTPException(403, {message: 'Only the form’s creator or an admin can delete its responses'});
     await c.var.db.formSubmission.delete({where: {id: sub.id}});
     await c.var.db.form.update({where: {id: sub.formId}, data: {submissionCount: {decrement: 1}}});
     await c.var.db.activity.deleteMany({where: {type: 'form_submitted', refId: sub.id}});

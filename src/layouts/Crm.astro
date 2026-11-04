@@ -25,6 +25,8 @@ const THEME_BOOT = themeBootScript;
 const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(THEME_BOOT));
 Astro.csp?.insertScriptHash(`sha256-${btoa(String.fromCharCode(...new Uint8Array(digest)))}`);
 const name = brand.name || BRAND.name;
+// No logo: the sprout mark in the brand's colours; the colours are in the URL, so it can be cached.
+const favicon = `/site-api/crm/public/favicon.svg?v=${`${brand.primary}${brand.secondary}`.replace(/[^0-9a-f]/gi, '').slice(0, 12) || 'default'}`;
 ---
 
 <!doctype html>
@@ -38,7 +40,7 @@ const name = brand.name || BRAND.name;
     <meta name="theme-color" content={brand.primary || BRAND.primary} />
     <!-- Signed-in screens are never search results. -->
     <meta name="robots" content="noindex" />
-    <link rel="icon" href={brand.logo || '/kinroot-mark.svg'} />
+    <link rel="icon" href={brand.logo || favicon} />
     <!-- The company's own colours (Settings → Branding), as a stylesheet from this site: the CSP allows no inline style. -->
     {(brand.primary || brand.secondary) && <link rel="stylesheet" href="/site-api/crm/public/brand.css" />}
     <!-- Before the first paint, so the page never flashes the wrong theme (src/crm/lib/theme.ts).

@@ -10,9 +10,14 @@ import {keys, useTeam} from '@/lib/queries';
 import type {CompanyLite, ContactLite, EntityType, Paged} from '@/lib/types';
 import {cn} from '@/lib/utils';
 
-import {NativeSelect} from './ui/form';
+import {NativeSelect, useFieldControl} from './ui/form';
 import {Popover, PopoverAnchor, PopoverContent, PopoverTrigger} from './ui/menu';
 import {Avatar} from './ui/misc';
+
+/** Delete / Backspace on a picker's button clears it (the ✕ inside the button is for the mouse). */
+const clearOnKey = (clear?: () => void) => (e: React.KeyboardEvent) => {
+  if (clear && (e.key === 'Delete' || e.key === 'Backspace')) (e.preventDefault(), clear());
+};
 
 const trigger =
   'flex h-10 w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg border border-input bg-card px-3 text-left text-sm shadow-xs transition-all outline-none hover:border-slate-300 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/25';
@@ -36,6 +41,7 @@ function SearchList({placeholder, search, onSearch, children, loading}: {placeho
         value={search}
         onValueChange={onSearch}
         placeholder={placeholder}
+        aria-label={placeholder}
         className="h-11 border-b border-slate-100 px-3 text-sm outline-none placeholder:text-slate-400"
       />
       <Command.List className="max-h-64 overflow-y-auto p-1 scrollbar-thin">
@@ -60,6 +66,7 @@ function CreateItem({label, onSelect}: {label: string; onSelect: () => void}) {
 }
 
 export function CompanyPicker({value, onChange, id}: {value: CompanyLite | null; onChange: (c: CompanyLite | null) => void; id?: string}) {
+  const wired = useFieldControl({id});
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const list = useQuery({
@@ -85,11 +92,11 @@ export function CompanyPicker({value, onChange, id}: {value: CompanyLite | null;
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type="button" id={id} className={trigger}>
+        <button type="button" {...wired} className={trigger} onKeyDown={clearOnKey(value ? () => onChange(null) : undefined)}>
           <Building2 className="size-4 text-slate-400" />
           <span className={cn('flex-1 truncate', !value && 'text-slate-400')}>{value?.name ?? 'Select company'}</span>
           {value ? (
-            <X className="size-4 text-slate-400 hover:text-slate-700" onClick={(e) => (e.stopPropagation(), onChange(null))} />
+            <X aria-hidden className="size-4 text-slate-400 hover:text-slate-700" onClick={(e) => (e.stopPropagation(), onChange(null))} />
           ) : (
             <ChevronsUpDown className="size-4 text-slate-400" />
           )}
@@ -113,6 +120,7 @@ export function CompanyPicker({value, onChange, id}: {value: CompanyLite | null;
 }
 
 export function ContactsPicker({value, onChange, id}: {value: ContactLite[]; onChange: (c: ContactLite[]) => void; id?: string}) {
+  const wired = useFieldControl({id});
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const list = useQuery({
@@ -146,13 +154,13 @@ export function ContactsPicker({value, onChange, id}: {value: ContactLite[]; onC
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type="button" id={id} className={cn(trigger, 'h-auto min-h-10 flex-wrap py-1.5')}>
+        <button type="button" {...wired} className={cn(trigger, 'h-auto min-h-10 flex-wrap py-1.5')} onKeyDown={clearOnKey(value.length ? () => onChange(value.slice(0, -1)) : undefined)}>
           <User className="size-4 text-slate-400" />
           {value.length === 0 && <span className="flex-1 text-slate-400">Add people</span>}
           {value.map((c) => (
             <span key={c.id} className="inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-xs font-semibold text-accent-foreground">
               {fullName(c)}
-              <X className="size-3 cursor-pointer" onClick={(e) => (e.stopPropagation(), toggle(c))} />
+              <X aria-hidden className="size-3 cursor-pointer" onClick={(e) => (e.stopPropagation(), toggle(c))} />
             </span>
           ))}
           <ChevronsUpDown className="ml-auto size-4 text-slate-400" />
@@ -202,6 +210,7 @@ export function CreatableSelect({
   /** Wording of the create row; default "Add <noun> “…”". */
   createLabel?: (text: string) => string;
 }) {
+  const wired = useFieldControl({id});
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const selected = Array.isArray(value) ? value : value ? [value] : [];
@@ -226,18 +235,23 @@ export function CreatableSelect({
   return (
     <Popover open={open} onOpenChange={(o) => (setOpen(o), !o && setSearch(''))}>
       <PopoverTrigger asChild>
-        <button type="button" id={id} className={cn(trigger, multiple && 'h-auto min-h-10 flex-wrap py-1.5')}>
+        <button
+          type="button"
+          {...wired}
+          className={cn(trigger, multiple && 'h-auto min-h-10 flex-wrap py-1.5')}
+          onKeyDown={clearOnKey(selected.length ? () => (multiple ? onChange(selected.slice(0, -1)) : onChange(null)) : undefined)}
+        >
           {selected.length === 0 && <span className="flex-1 truncate text-slate-400">{placeholder}</span>}
           {multiple
             ? selected.map((o) => (
                 <span key={o} className="inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-xs font-semibold text-accent-foreground">
                   {o}
-                  <X className="size-3 cursor-pointer" onClick={(e) => (e.stopPropagation(), pick(o))} />
+                  <X aria-hidden className="size-3 cursor-pointer" onClick={(e) => (e.stopPropagation(), pick(o))} />
                 </span>
               ))
             : selected[0] && <span className="flex-1 truncate">{selected[0]}</span>}
           {!multiple && selected[0] ? (
-            <X className="ml-auto size-4 shrink-0 text-slate-400 hover:text-slate-700" onClick={(e) => (e.stopPropagation(), onChange(null))} />
+            <X aria-hidden className="ml-auto size-4 shrink-0 text-slate-400 hover:text-slate-700" onClick={(e) => (e.stopPropagation(), onChange(null))} />
           ) : (
             <ChevronsUpDown className="ml-auto size-4 shrink-0 text-slate-400" />
           )}
@@ -308,6 +322,7 @@ export function TagInput({
   lowercase?: boolean;
   noun?: string;
 }) {
+  const wired = useFieldControl({id});
   const [draft, setDraft] = useState('');
   const [focused, setFocused] = useState(false);
   const [active, setActive] = useState(0);
@@ -347,14 +362,14 @@ export function TagInput({
           {value.map((t) => (
             <span key={t} className="inline-flex items-center gap-1 rounded-full bg-teal-50 px-2 py-0.5 text-xs font-semibold text-teal-700">
               {t}
-              <button type="button" aria-label={`Remove ${t}`} className="cursor-pointer" onClick={(e) => (e.stopPropagation(), onChange(value.filter((x) => x !== t)))}>
+              <button type="button" aria-label={`Remove ${t}`} className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary/30" onClick={(e) => (e.stopPropagation(), onChange(value.filter((x) => x !== t)))}>
                 <X className="size-3" />
               </button>
             </span>
           ))}
           <input
             ref={inputRef}
-            id={id}
+            {...wired}
             role="combobox"
             aria-expanded={open}
             aria-autocomplete="list"
@@ -449,6 +464,7 @@ export function SingleCompanyPicker({onChange, exclude}: {onChange: (id: string 
 
 /** One deal, searched across all pipelines. */
 export function DealPicker({value, onChange, id}: {value: {id: string; title: string} | null; onChange: (d: {id: string; title: string} | null) => void; id?: string}) {
+  const wired = useFieldControl({id});
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const list = useQuery({
@@ -459,9 +475,9 @@ export function DealPicker({value, onChange, id}: {value: {id: string; title: st
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type="button" id={id} className={trigger}>
+        <button type="button" {...wired} className={trigger} onKeyDown={clearOnKey(value ? () => onChange(null) : undefined)}>
           <span className={cn('flex-1 truncate', !value && 'text-slate-400')}>{value?.title ?? 'Select deal'}</span>
-          {value ? <X className="size-4 text-slate-400 hover:text-slate-700" onClick={(e) => (e.stopPropagation(), onChange(null))} /> : <ChevronsUpDown className="size-4 text-slate-400" />}
+          {value ? <X aria-hidden className="size-4 text-slate-400 hover:text-slate-700" onClick={(e) => (e.stopPropagation(), onChange(null))} /> : <ChevronsUpDown className="size-4 text-slate-400" />}
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-[var(--radix-popover-trigger-width)] min-w-64">

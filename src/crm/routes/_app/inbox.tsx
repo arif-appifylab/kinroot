@@ -1,6 +1,6 @@
 import {keepPreviousData, useQuery, useQueryClient} from '@tanstack/react-query';
 import {createFileRoute, Link, useNavigate} from '@tanstack/react-router';
-import {Bell, BellOff, Inbox, Keyboard, Loader2, PenSquare, RefreshCw, Settings} from 'lucide-react';
+import {Bell, BellOff, Inbox, Keyboard, PenSquare, RefreshCw, Settings} from 'lucide-react';
 import {useEffect, useState} from 'react';
 import {toast} from 'sonner';
 import {z} from 'zod';
@@ -137,13 +137,16 @@ function InboxPage() {
   async function syncNow() {
     setSyncing(true);
     let stored = 0;
+    let queued = false;
     for (const a of accounts.data?.filter((x) => x.info.kind === 'oauth') ?? []) {
-      const r = await api.post<{stored: number; error?: string}>(`/email/accounts/${a.id}/sync`).catch((e: Error) => ({stored: 0, error: e.message}));
+      const r = await api.post<{stored: number; queued?: boolean; error?: string}>(`/email/accounts/${a.id}/sync`).catch((e: Error) => ({stored: 0, queued: false, error: e.message}));
       stored += r.stored;
+      queued ||= !!r.queued;
       if (r.error) toast.error(`${a.fromEmail}: ${r.error}`);
     }
     setSyncing(false);
-    toast.success(stored ? `${stored} new email${stored > 1 ? 's' : ''} logged` : 'Up to date');
+    // Syncs run as background jobs: new emails show up shortly (the inbox polls).
+    toast.success(queued ? 'Syncing in the background. New emails appear in a minute.' : stored ? `${stored} new email${stored > 1 ? 's' : ''} logged` : 'Up to date');
     qc.invalidateQueries({queryKey: keys.inbox});
   }
 
@@ -160,7 +163,7 @@ function InboxPage() {
               <Button variant="ghost" size="icon-sm" className="h-9 w-9" aria-pressed={sound} aria-label="Sound for new chat messages" onClick={() => setSound(!sound)}>{sound ? <Bell /> : <BellOff />}</Button>
             </Tooltip>
             <ShortcutsHelp open={help} onOpenChange={setHelp} />
-            {hasOAuth && <Button variant="secondary" size="sm" className="h-9" onClick={syncNow} disabled={syncing}>{syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />} Sync now</Button>}
+            {hasOAuth && <Button variant="secondary" size="sm" className="h-9" onClick={syncNow} pending={syncing} pendingLabel="Syncing…"><RefreshCw /> Sync now</Button>}
             <Button variant="secondary" size="sm" className="h-9" asChild><Link to="/settings/email"><Settings /> Email settings</Link></Button>
             {canEdit && <Button size="sm" className="h-9" onClick={() => setComposing(true)}><PenSquare /> Compose</Button>}
           </>
@@ -173,7 +176,7 @@ function InboxPage() {
         <div className={cn('flex min-h-0 flex-col border-r border-slate-100', s.thread && 'hidden lg:flex')}>
           <div className="border-b border-slate-100 p-3 xl:hidden"><InboxNavSelect value={nav} counts={counts.data} onChange={setNav} /></div>
           <div className="min-h-0 flex-1">
-            <ConversationList view={view} rows={rows} total={list.data?.total ?? 0} loading={list.isLoading} selectedId={s.thread} filters={filters} onFilters={setFilters} onOpen={open} />
+            <ConversationList view={view} rows={rows} total={list.data?.total ?? 0} loading={list.isLoading} error={list.isError ? list.error : undefined} onRetry={() => list.refetch()} selectedId={s.thread} filters={filters} onFilters={setFilters} onOpen={open} />
           </div>
         </div>
         <div className={cn('min-h-0 min-w-0', !s.thread && 'hidden lg:block')}>

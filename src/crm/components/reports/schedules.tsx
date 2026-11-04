@@ -8,6 +8,8 @@ import {Button} from '@/components/ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {confirm} from '@/components/ui/confirm';
 import {Checkbox, Field, Input, NativeSelect, Switch, Textarea} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
+import {LoadError} from '@/components/data-table';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/menu';
 import {Avatar, Skeleton} from '@/components/ui/misc';
 import type * as P from '../../../generated/prisma/client';
@@ -95,8 +97,8 @@ export function ScheduleMenu({row, onEdit}: {row: ScheduleRow; onEdit: () => voi
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${row.name}`} disabled={sendNow.isPending}>
-          {sendNow.isPending ? <Loader2 className="animate-spin" /> : <MoreHorizontal />}
+        <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${row.name}`} pending={sendNow.isPending || toggle.isPending || remove.isPending}>
+          <MoreHorizontal />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent>
@@ -164,6 +166,7 @@ export function ScheduleDrawer({open, onOpenChange, target, editing}: {open: boo
           <>
             <DialogBody className="content-start">
               {list.isLoading && <Skeleton className="h-24" />}
+              {list.isError && <LoadError error={list.error} onRetry={() => list.refetch()} />}
               {list.data?.map((row) => (
                 <div key={row.id} className="flex items-start gap-3 rounded-xl border border-slate-100 bg-card p-4 shadow-soft">
                   <span className={cn('mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-lg [&_svg]:size-4', row.active ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-400')}><Mail /></span>
@@ -281,10 +284,17 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
     setEmailInput(bad.join(' '));
   }
 
+  const f = useFormState(draft, {
+    userIds: [() => !count && 'Add at least one recipient: someone on the team or an email address.', () => count > MAX_RECIPIENTS && `Use at most ${MAX_RECIPIENTS} recipients.`],
+    subject: [is.maxLength(200)],
+    note: [is.maxLength(2000)],
+  });
+  const submit = f.submit(() => (problem ? undefined : save.mutate(undefined, {onError: f.fail})));
+
   const toggleUser = (id: string, on: boolean) => set({userIds: on ? [...draft.userIds, id] : draft.userIds.filter((x) => x !== id)});
 
   return (
-    <>
+    <form ref={f.ref} noValidate onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
       <DialogBody className="grid-cols-1 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @4xl:items-start @4xl:gap-6">
         <div className="grid min-w-0 content-start gap-4">
           <Field label="Frequency">
@@ -325,8 +335,15 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
             {next.data ? <>Next: {next.data.slots.map(whenLocal).join(' · ')} <span>(your time)</span></> : next.error ? next.error.message : 'Working out the next sends…'}
           </p>
 
-          <Field label={`Recipients (${count} of ${MAX_RECIPIENTS})`}>
-            <div className="max-h-44 overflow-y-auto rounded-lg border border-input p-1 scrollbar-thin">
+          <Field label={`Recipients (${count} of ${MAX_RECIPIENTS})`} htmlFor="schedule-recipients" error={f.error('userIds')}>
+            <div
+              id="schedule-recipients"
+              role="group"
+              tabIndex={-1}
+              aria-invalid={f.invalid('userIds') || undefined}
+              aria-describedby={f.invalid('userIds') ? 'schedule-recipients-error' : undefined}
+              className="max-h-44 overflow-y-auto rounded-lg border border-input p-1 outline-none scrollbar-thin focus-visible:ring-2 focus-visible:ring-primary/25 aria-invalid:border-destructive"
+            >
               {activeTeam.map((u) => (
                 <label key={u.id} className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-sm hover:bg-slate-50">
                   <Checkbox checked={draft.userIds.includes(u.id)} onCheckedChange={(v) => toggleUser(u.id, v === true)} />
@@ -393,11 +410,11 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
             </div>
           </Field>
 
-          <Field label="Subject" hint="Leave empty for the report name and date range.">
-            <Input value={draft.subject} maxLength={200} placeholder={preview.data?.subject ?? target.name} onChange={(e) => set({subject: e.target.value})} />
+          <Field label="Subject" hint="Leave empty for the report name and date range." error={f.error('subject')}>
+            <Input value={draft.subject} maxLength={200} placeholder={preview.data?.subject ?? target.name} onChange={(e) => set({subject: e.target.value})} onBlur={f.blur('subject')} />
           </Field>
-          <Field label="Note" hint="Shown above the numbers.">
-            <Textarea value={draft.note} maxLength={2000} rows={2} className="min-h-16" placeholder="Here are this week's numbers." onChange={(e) => set({note: e.target.value})} />
+          <Field label="Note" hint="Shown above the numbers." error={f.error('note')}>
+            <Textarea value={draft.note} maxLength={2000} rows={2} className="min-h-16" placeholder="Here are this week's numbers." onChange={(e) => set({note: e.target.value})} onBlur={f.blur('note')} />
           </Field>
           <label className="flex items-center justify-between gap-3 text-sm text-slate-700">
             <span className="font-semibold">Active</span>
@@ -409,12 +426,13 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
         </div>
       </DialogBody>
       <DialogFooter>
-        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
-        <Button onClick={() => save.mutate(undefined)} disabled={!!problem || save.isPending} title={problem ?? undefined}>
-          {save.isPending && <Loader2 className="animate-spin" />} {row ? 'Save' : 'Create schedule'}
+        {problem && f.valid() && <p role="alert" className="mr-auto text-sm font-medium text-destructive">{problem}.</p>}
+        <Button type="button" variant="secondary" onClick={onCancel} disabled={save.isPending}>Cancel</Button>
+        <Button type="submit" pending={save.isPending} pendingLabel={row ? 'Saving…' : 'Creating…'}>
+          {row ? 'Save' : 'Create schedule'}
         </Button>
       </DialogFooter>
-    </>
+    </form>
   );
 }
 

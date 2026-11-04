@@ -90,17 +90,23 @@ export function AttachmentsCard({record}: {record: RecordLink}) {
       }}
     >
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-        <h3 className="text-sm font-bold text-slate-900">Attachments{rows.length ? ` · ${rows.length}` : ''}</h3>
+        <h2 className="text-sm font-bold text-slate-900">Attachments{rows.length ? ` · ${rows.length}` : ''}</h2>
         {canEdit && (
-          <Button variant="ghost" size="sm" onClick={() => input.current?.click()} disabled={uploading > 0}>
-            <Upload /> {uploading ? 'Uploading…' : 'Add'}
+          <Button variant="ghost" size="sm" onClick={() => input.current?.click()} pending={uploading > 0} pendingLabel="Uploading…">
+            <Upload /> Add
           </Button>
         )}
         <input ref={input} type="file" multiple hidden onChange={(e) => e.target.files && upload(e.target.files).finally(() => (e.target.value = ''))} />
       </div>
       <div className="px-1 py-1">
         {files.isLoading && <p className="px-3 py-3 text-sm text-muted-foreground">Loading…</p>}
-        {!files.isLoading && rows.length === 0 && (
+        {files.isError && (
+          <p role="alert" className="flex flex-wrap items-center gap-x-2 px-3 py-3 text-sm text-destructive">
+            Files could not be loaded.
+            <button type="button" className="cursor-pointer font-semibold text-primary hover:underline" onClick={() => files.refetch()}>Retry</button>
+          </p>
+        )}
+        {!files.isLoading && !files.isError && rows.length === 0 && (
           <button
             type="button"
             disabled={!canEdit}
@@ -125,7 +131,7 @@ export function AttachmentsCard({record}: {record: RecordLink}) {
               </a>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon-sm" className="opacity-60 group-hover:opacity-100" aria-label={`Options for ${f.name}`}>
+                  <Button variant="ghost" size="icon-sm" className="opacity-60 group-hover:opacity-100 focus-visible:opacity-100" pending={remove.isPending && remove.variables === f.id} aria-label={`Options for ${f.name}`}>
                     <MoreHorizontal />
                   </Button>
                 </DropdownMenuTrigger>
@@ -137,7 +143,7 @@ export function AttachmentsCard({record}: {record: RecordLink}) {
                   {(f.uploadedBy?.id === me.id || isAdmin) && (
                     <>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem destructive onSelect={async () => (await confirm({title: `Delete ${f.name}?`, confirmLabel: 'Delete', destructive: true})) && remove.mutate(f.id)}><Trash2 /> Delete</DropdownMenuItem>
+                      <DropdownMenuItem destructive onSelect={async () => (await confirm({title: `Delete ${f.name}?`, description: "This can't be undone.", confirmLabel: 'Delete', destructive: true})) && remove.mutate(f.id)}><Trash2 /> Delete</DropdownMenuItem>
                     </>
                   )}
                 </DropdownMenuContent>

@@ -1,13 +1,15 @@
 import {createFileRoute} from '@tanstack/react-router';
-import {Loader2, Plus, Trash2} from 'lucide-react';
+import {Plus, Trash2} from 'lucide-react';
 import {useState} from 'react';
 
 import {TagInput} from '@/components/pickers';
+import {LoadError} from '@/components/data-table';
 import {AdminOnly, SettingsSection} from '@/components/settings-section';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {confirm} from '@/components/ui/confirm';
 import {Field, Input, NativeSelect} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {Tabs, TabsList, TabsTrigger} from '@/components/ui/misc';
 import {api} from '@/lib/api';
 import {keys, useApiMutation, useFields, useMe} from '@/lib/queries';
@@ -33,9 +35,13 @@ function FieldSettings() {
   const [entity, setEntity] = useState<EntityType>('CONTACT');
   const fields = useFields(entity);
   const [draft, setDraft] = useState({label: '', type: 'TEXT' as FieldType, options: [] as string[]});
-  const create = useApiMutation(() => api.post('/fields', {...draft, entity}), {invalidate: [keys.fields(entity)], success: 'Field added', onSuccess: () => setDraft({label: '', type: 'TEXT', options: []})});
+  const create = useApiMutation(() => api.post('/fields', {...draft, entity}), {invalidate: [keys.fields(entity)], success: 'Field added', onSuccess: () => (setDraft({label: '', type: 'TEXT', options: []}), form.reset())});
   const remove = useApiMutation((id: string) => api.del(`/fields/${id}`), {invalidate: [keys.fields(entity)], success: 'Field removed'});
   const needsOptions = draft.type === 'SELECT' || draft.type === 'MULTISELECT';
+  const form = useFormState(draft, {
+    label: [is.required('Give the field a label.'), is.maxLength(60)],
+    options: [(options, d) => ((d.type === 'SELECT' || d.type === 'MULTISELECT') && !options.length ? 'Add at least one option.' : null)],
+  });
 
   return (
     <div>
@@ -48,6 +54,7 @@ function FieldSettings() {
         </TabsList>
       </Tabs>
       <SettingsSection title="Custom fields" description="Extra properties shown on records, forms and CSV exports.">
+        {fields.isError && <LoadError error={fields.error} onRetry={() => fields.refetch()} />}
         <div className="divide-y divide-slate-100">
           {fields.data?.length === 0 && <p className="pb-2 text-sm text-muted-foreground">No custom fields yet.</p>}
           {fields.data?.map((f) => (
@@ -60,7 +67,7 @@ function FieldSettings() {
               </div>
               <Badge tone="blue">{TYPES[f.type]}</Badge>
               {isAdmin && (
-                <Button variant="ghost" size="icon-sm" aria-label={`Delete ${f.label}`} onClick={async () => (await confirm({title: `Remove "${f.label}"?`, description: `Saved values are kept but hidden.`, confirmLabel: 'Remove', destructive: true})) && remove.mutate(f.id)}><Trash2 /></Button>
+                <Button variant="ghost" size="icon-sm" aria-label={`Delete ${f.label}`} pending={remove.isPending && remove.variables === f.id} disabled={remove.isPending} onClick={async () => (await confirm({title: `Remove "${f.label}"?`, description: `Saved values are kept but hidden.`, confirmLabel: 'Remove', destructive: true})) && remove.mutate(f.id)}><Trash2 /></Button>
               )}
             </div>
           ))}
@@ -68,9 +75,9 @@ function FieldSettings() {
       </SettingsSection>
       {isAdmin && (
         <SettingsSection title="Add a field">
-          <form onSubmit={(e) => (e.preventDefault(), create.mutate(undefined))} className="grid gap-4">
+          <form {...form.form(() => create.mutate(undefined, {onError: form.fail}))} className="grid gap-4">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Label" htmlFor="f-label"><Input id="f-label" required value={draft.label} onChange={(e) => setDraft({...draft, label: e.target.value})} placeholder="e.g. Contract renewal date" /></Field>
+              <Field label="Label" htmlFor="f-label" error={form.error('label')}><Input id="f-label" value={draft.label} onChange={(e) => setDraft({...draft, label: e.target.value})} onBlur={form.blur('label')} placeholder="e.g. Contract renewal date" /></Field>
               <Field label="Type" htmlFor="f-type">
                 <NativeSelect id="f-type" value={draft.type} onChange={(e) => setDraft({...draft, type: e.target.value as FieldType})}>
                   {Object.entries(TYPES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -78,11 +85,11 @@ function FieldSettings() {
               </Field>
             </div>
             {needsOptions && (
-              <Field label="Options" htmlFor="f-opts" hint="Press Enter after each option">
+              <Field label="Options" htmlFor="f-opts" hint="Press Enter after each option" error={form.error('options')}>
                 <TagInput id="f-opts" noun="option" lowercase={false} value={draft.options} onChange={(options) => setDraft({...draft, options})} />
               </Field>
             )}
-            <div><Button type="submit" disabled={create.isPending}>{create.isPending ? <Loader2 className="animate-spin" /> : <Plus />} Add field</Button></div>
+            <div><Button type="submit" pending={create.isPending} pendingLabel="Adding…"><Plus /> Add field</Button></div>
           </form>
         </SettingsSection>
       )}

@@ -16,7 +16,7 @@ export function PropertyCard({title, children, action}: {title: string; children
   return (
     <Card className="overflow-hidden">
       <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-        <h3 className="text-sm font-bold text-slate-900">{title}</h3>
+        <h2 className="text-sm font-bold text-slate-900">{title}</h2>
         {action}
       </div>
       <dl className="divide-y divide-slate-50 px-1 py-1">{children}</dl>
@@ -24,10 +24,11 @@ export function PropertyCard({title, children, action}: {title: string; children
   );
 }
 
-function Row({label, children, onEdit, editing, field}: {label: string; children: ReactNode; onEdit?: () => void; editing?: boolean; field?: string}) {
+function Row({label, children, onEdit, editing, field, editRef}: {label: string; children: ReactNode; onEdit?: () => void; editing?: boolean; field?: string; editRef?: React.Ref<HTMLButtonElement>}) {
   const history = usePropertyHistory();
   return (
-    <div className={cn('group grid grid-cols-[110px_minmax(0,1fr)] items-start gap-2 rounded-lg px-3 py-2', onEdit && !editing && 'cursor-pointer hover:bg-slate-50')} onClick={!editing ? onEdit : undefined}>
+    // A click anywhere on the row edits it (mouse); keyboard users reach the row's own "Edit" button.
+    <div className={cn('group grid grid-cols-[110px_minmax(0,1fr)] items-start gap-2 rounded-lg px-3 py-2', onEdit && !editing && 'cursor-pointer hover:bg-slate-50 focus-within:bg-slate-50')} onClick={!editing ? onEdit : undefined}>
       <dt className="pt-0.5 text-xs font-semibold text-muted-foreground">{label}</dt>
       <dd className="flex min-w-0 items-start gap-1 text-sm text-slate-800">
         <div className="min-w-0 flex-1 break-words">{children}</div>
@@ -43,7 +44,17 @@ function Row({label, children, onEdit, editing, field}: {label: string; children
             </button>
           </Tooltip>
         )}
-        {onEdit && !editing && <Pencil className="mt-0.5 size-3 shrink-0 text-slate-300 opacity-0 transition-opacity group-hover:opacity-100" />}
+        {onEdit && !editing && (
+          <button
+            ref={editRef}
+            type="button"
+            aria-label={`Edit ${label}`}
+            onClick={(e) => (e.stopPropagation(), onEdit())}
+            className="-my-0.5 shrink-0 cursor-pointer rounded p-0.5 text-slate-300 opacity-0 transition-opacity outline-none group-hover:opacity-100 hover:text-primary focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 pointer-coarse:opacity-100"
+          >
+            <Pencil className="size-3" />
+          </button>
+        )}
       </dd>
     </div>
   );
@@ -66,6 +77,13 @@ export function EditableProperty<T>({label, value, display, editor, onSave, fiel
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
+  // Back from editing (Enter, Escape, Save, Cancel): focus returns to the row's Edit button.
+  const editRef = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  useEffect(() => {
+    if (wasEditing.current && !editing && (!document.activeElement || document.activeElement === document.body)) editRef.current?.focus();
+    wasEditing.current = editing;
+  }, [editing]);
 
   const commit = async () => {
     setEditing(false);
@@ -74,12 +92,12 @@ export function EditableProperty<T>({label, value, display, editor, onSave, fiel
   const cancel = () => (setDraft(value), setEditing(false));
 
   return (
-    <Row label={label} field={field} onEdit={canEdit ? () => setEditing(true) : undefined} editing={editing}>
+    <Row label={label} field={field} onEdit={canEdit ? () => setEditing(true) : undefined} editing={editing} editRef={editRef}>
       {editing ? (
         <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1">{editor({value: draft, onChange: setDraft, onCommit: commit, onCancel: cancel})}</div>
-          <button type="button" aria-label="Save" onClick={commit} className="cursor-pointer rounded-md p-1 text-primary hover:bg-accent"><Check className="size-4" /></button>
-          <button type="button" aria-label="Cancel" onClick={cancel} className="cursor-pointer rounded-md p-1 text-slate-400 hover:bg-slate-100"><X className="size-4" /></button>
+          <button type="button" aria-label={`Save ${label}`} onClick={commit} className="cursor-pointer rounded-md p-1 text-primary outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-primary/30"><Check className="size-4" /></button>
+          <button type="button" aria-label="Cancel" onClick={cancel} className="cursor-pointer rounded-md p-1 text-slate-400 outline-none hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-primary/30"><X className="size-4" /></button>
         </div>
       ) : (
         display
@@ -103,6 +121,7 @@ export function TextProperty({label, value, onSave, type = 'text', href, field}:
         <Input
           ref={ref}
           autoFocus
+          aria-label={label}
           type={type}
           className="h-8"
           value={v}
@@ -126,7 +145,7 @@ export function SelectProperty({label, value, options, onSave, display, field}: 
       onSave={(v) => onSave(v || null)}
       display={display ?? (options.find((o) => o.value === value)?.label ?? empty)}
       editor={({value: v, onChange, onCancel}) => (
-        <NativeSelect autoFocus className="h-8" value={v} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
+        <NativeSelect autoFocus aria-label={label} className="h-8" value={v} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && onCancel()}>
           {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </NativeSelect>
       )}
@@ -174,7 +193,7 @@ export function NumberProperty({label, value, onSave, format, field}: {label: st
       value={value === null || value === undefined ? '' : String(value)}
       display={value === null || value === undefined ? empty : format ? format(value) : value.toLocaleString()}
       editor={({value: v, onChange, onCommit, onCancel}) => (
-        <Input autoFocus type="number" min={0} step="any" className="h-8" value={v} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => (e.key === 'Enter' ? onCommit() : e.key === 'Escape' && onCancel())} />
+        <Input autoFocus aria-label={label} type="number" inputMode="decimal" step="any" className="h-8" value={v} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => (e.key === 'Enter' ? onCommit() : e.key === 'Escape' && onCancel())} />
       )}
       onSave={(v) => onSave(v === '' ? null : Number(v))}
     />

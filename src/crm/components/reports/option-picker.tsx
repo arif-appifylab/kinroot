@@ -60,7 +60,7 @@ export function OptionPicker({options, value, onChange, placeholder = 'Any value
       <PopoverContent className="w-64">
         {options.length > 8 && (
           <div className="border-b border-slate-100 p-2">
-            <Input autoFocus className="h-8" placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
+            <Input autoFocus className="h-8" placeholder="Search…" aria-label="Search options" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
         )}
         <ul className="max-h-64 overflow-y-auto p-1 scrollbar-thin" role="listbox" aria-multiselectable>

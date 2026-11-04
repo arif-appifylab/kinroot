@@ -198,15 +198,29 @@ export async function deleteConversations(db: Db, threads: EmailThread[], who: W
  * a reply for N days (Settings → Inbox), and moves conversations trashed more
  * than 30 days ago to the recycle bin.
  */
-export async function inboxTick(db: Db) {
+/** Per pass and per loop: the rest waits for the next minute (oldest first, so nothing starves). */
+const TICK_CAP = 25;
+
+/**
+ * The every-minute inbox step (lib/ticks.ts): snoozed conversations wake, quiet ones auto-close,
+ * 30-day-old Trash goes to the recycle bin. `until` (ms since 1970) is the tick's shared deadline:
+ * each loop stops once it has passed, so one slow step never eats the minute.
+ */
+export async function inboxTick(db: Db, opts: {until?: number} = {}) {
   const now = new Date();
-  const due = await db.emailThread.findMany({where: {snoozedUntil: {lte: now}}, select: {id: true}, take: 200});
-  for (const t of due) await wakeConversation(db, t.id);
+  const late = () => opts.until !== undefined && Date.now() > opts.until;
+  const due = await db.emailThread.findMany({where: {snoozedUntil: {lte: now}}, orderBy: {snoozedUntil: 'asc'}, select: {id: true}, take: TICK_CAP});
+  let woke = 0;
+  for (const t of due) {
+    if (late()) break;
+    await wakeConversation(db, t.id);
+    woke++;
+  }
 
   const ctx = await inboxContext(db);
   let closed = 0;
   const days = ctx.settings.autoCloseDays;
-  if (days && days > 0) {
+  if (days && days > 0 && !late()) {
     const stale = await db.emailThread.findMany({
       where: {
         status: 'OPEN',
@@ -218,16 +232,18 @@ export async function inboxTick(db: Db) {
         lastMessageAt: {lt: new Date(now.getTime() - days * 86_400_000)},
         OR: [{channel: 'email', accountId: {in: ctx.teamAccountIds}}, {channel: {in: ['form', ...MESSAGE_CHANNELS]}}],
       },
-      take: 200,
+      orderBy: {lastMessageAt: 'asc'},
+      take: TICK_CAP,
     });
     for (const t of stale) {
+      if (late()) break;
       await closeConversation(db, t, SYSTEM, {reason: 'auto'});
       closed++;
     }
   }
 
-  const expired = await db.emailThread.findMany({where: {trashedAt: {lt: new Date(now.getTime() - TRASH_DAYS * 86_400_000)}}, take: 200});
-  await deleteConversations(db, expired, SYSTEM);
-  if (due.length || closed || expired.length) kickJobs();
-  return {woke: due.length, closed, purged: expired.length};
+  const expired = late() ? [] : await db.emailThread.findMany({where: {trashedAt: {lt: new Date(now.getTime() - TRASH_DAYS * 86_400_000)}}, orderBy: {trashedAt: 'asc'}, take: TICK_CAP});
+  if (expired.length) await deleteConversations(db, expired, SYSTEM);
+  if (woke || closed || expired.length) kickJobs();
+  return {woke, closed, purged: expired.length};
 }

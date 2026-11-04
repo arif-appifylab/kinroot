@@ -7,6 +7,7 @@ import {
   automationProblems,
   flattenSteps,
   INACTIVITY_RULES,
+  mapSteps,
   OBJECTS as OBJECT_LABELS,
   STEP_TYPES,
   TEST_MODES,
@@ -18,16 +19,16 @@ import {
   type Trigger,
 } from '@/lib/automations';
 import {isTimeZone} from '@/lib/scheduling';
+import {webhookLabel} from '@/lib/webhook-targets';
 import {publicOrigin} from '../kit/config';
 import type {Db} from '../kit/db';
-import {currentUser, requireRole, type AppContext, type AppEnv} from '../kit/guards';
+import {currentUser, isAdmin, requireRole, type AppContext, type AppEnv} from '../kit/guards';
 import {audit, fingerprint} from '../lib/audit';
 import {invalidateAutomationInterest} from '../lib/automation-hook';
 import {fieldsFor} from '../lib/automation-records';
 import {automationSecret} from '../lib/automation-steps';
-import {definitionOf, runOnList, runOnRecord, sampleRecord, startTestRun, stepsOf, testAutomation} from '../lib/automations';
+import {definitionOf, queueRun, runOnList, runOnRecord, sampleRecord, startTestRun, stepsOf, testAutomation} from '../lib/automations';
 import {notFound, ownerScope, valid} from '../lib/http';
-import {enqueue, kickJobs} from '../lib/jobs';
 import {segmentRulesSchema} from '../lib/segments';
 import {ticketScope} from '../lib/tickets';
 
@@ -214,10 +215,22 @@ function dataOf(input: Body, c: AppContext): Prisma.AutomationUncheckedCreateInp
   };
 }
 
-const publicAutomation = (a: Automation) => {
+/** "Send a webhook" URLs work like passwords (Slack, Zapier…): only admins see them, others see the service. */
+const maskSteps = (steps: unknown) => (Array.isArray(steps) ? mapSteps(steps as Step[], (s) => (s.type === 'webhook' && s.url ? {...s, url: webhookLabel(s.url)} : s)) : steps);
+
+const publicAutomation = (a: Automation, admin = true) => {
   const {webhookSecret, state: _state, ...rest} = a;
-  return {...rest, hasSecret: !!webhookSecret};
+  return {...rest, ...(admin ? {} : {steps: maskSteps(rest.steps) as Prisma.JsonValue}), hasSecret: !!webhookSecret};
 };
+
+/** A run for a non-admin: the draft a test run keeps has its webhook URLs masked too. */
+function maskRun<R extends {definition: Prisma.JsonValue}>(run: R, admin: boolean): R {
+  const d = run.definition;
+  if (admin || !d || typeof d !== 'object' || Array.isArray(d)) return run;
+  return {...run, definition: {...d, steps: maskSteps(d.steps) as Prisma.JsonValue}};
+}
+
+const adminOf = (c: AppContext) => isAdmin(currentUser(c));
 
 /** Records the user may see: owner scope for contacts / companies / deals, ticket scope for tickets. */
 async function visibleRecord(c: AppContext, object: AutoObject, recordId: string) {
@@ -277,9 +290,10 @@ export const automations = new Hono<AppEnv>()
     const since = new Date(Date.now() - 7 * DAY);
     const stats = await db.automationRun.groupBy({by: ['automationId', 'status'], where: {startedAt: {gte: since}, test: null}, _count: {_all: true}});
     const count = (automationId: string, statuses?: string[]) => stats.filter((s) => s.automationId === automationId && (!statuses || statuses.includes(s.status))).reduce((n, s) => n + s._count._all, 0);
+    const admin = adminOf(c);
     return c.json({
       rows: rows.map((a) => ({
-        ...publicAutomation(a),
+        ...publicAutomation(a, admin),
         stepCount: flattenSteps(stepsOf(a)).length,
         stats: {runs7d: count(a.id, ['running', 'waiting', 'done', 'failed', 'canceled']), failed7d: count(a.id, ['failed']), waiting: count(a.id, ['waiting'])},
       })),
@@ -303,7 +317,8 @@ export const automations = new Hono<AppEnv>()
       db.automationRun.findMany({where: {recordId, object}, orderBy: {startedAt: 'desc'}, take: 15, include: {automation: {select: {id: true, name: true}}}}),
       db.automation.findMany({where: {enabled: true, triggerKind: 'manual', object}, orderBy: {name: 'asc'}, select: {id: true, name: true, description: true}}),
     ]);
-    return c.json({runs, manual});
+    const admin = adminOf(c);
+    return c.json({runs: runs.map((r) => maskRun(r, admin)), manual});
   })
 
   .get('/runs/:runId', async (c) => {
@@ -313,9 +328,9 @@ export const automations = new Hono<AppEnv>()
       include: {steps: {orderBy: {startedAt: 'asc'}}, automation: {select: {id: true, name: true, steps: true, object: true, trigger: true}}},
     });
     if (!run) throw notFound('Run');
-    // The editor polls a test it shows: a wait that is over (a quick test's few seconds) goes on now.
-    if (run.test && (run.status === 'running' || (run.status === 'waiting' && run.waitUntil && run.waitUntil.getTime() <= Date.now()))) kickJobs();
-    return c.json({run: testView(run)});
+    const view = testView(run);
+    if (adminOf(c)) return c.json({run: view});
+    return c.json({run: {...maskRun(view, false), automation: {...view.automation, steps: maskSteps(view.automation.steps)}}});
   })
 
   .post('/runs/:runId/cancel', requireRole('ADMIN'), async (c) => {
@@ -338,14 +353,14 @@ export const automations = new Hono<AppEnv>()
     if (!failed) throw new HTTPException(400, {message: 'This run has no failed step to retry'});
     await db.automationRunStep.update({where: {id: failed.id}, data: {status: 'running'}});
     await db.automationRun.update({where: {id: run.id}, data: {status: 'running', cursor: failed.stepId, error: null, finishedAt: null}});
-    await enqueue(db, 'automation.run', {runId: run.id});
-    kickJobs();
+    // One retry job per failed step and minute (a double click queues it once).
+    await queueRun(db, run.id, `retry-${failed.stepId}-${Math.floor(Date.now() / 60_000)}`);
     return c.json({ok: true});
   })
 
   .get('/:id', async (c) => {
     const a = await load(c);
-    return c.json({automation: publicAutomation(a), problems: await problemsOf(c.var.db, a)});
+    return c.json({automation: publicAutomation(a, adminOf(c)), problems: await problemsOf(c.var.db, a)});
   })
 
   .patch('/:id', requireRole('ADMIN'), valid('json', body), async (c) => {
@@ -456,7 +471,6 @@ export const automations = new Hono<AppEnv>()
     if (!run) throw new HTTPException(400, {message: reason ?? 'The test did not start'});
     // A test for real changes records, sends and calls: it goes in the audit log like a manual run.
     if (mode === 'record') await audit(db, c, {action: 'automation.test_started', entity: 'automation', recordId: a.id, label: a.name, meta: {mode, object, recordId: target, record: run.recordLabel, runId: run.id}});
-    kickJobs();
     return c.json({run, conditions}, 201);
   })
 
@@ -476,7 +490,6 @@ export const automations = new Hono<AppEnv>()
     const {run, reason} = await runOnRecord(c.var.db, a, recordId, me.id);
     if (!run) throw new HTTPException(400, {message: reason ?? 'The automation did not start'});
     await audit(c.var.db, c, {action: 'automation.run_started', entity: 'automation', recordId: a.id, label: a.name, meta: {object: a.object, recordId}});
-    kickJobs();
     return c.json({run}, 201);
   })
 
@@ -511,7 +524,8 @@ export const automations = new Hono<AppEnv>()
       db.automationRun.findMany({where, orderBy: {startedAt: 'desc'}, skip: (q.page - 1) * q.pageSize, take: q.pageSize, include: {_count: {select: {steps: true}}}}),
       db.automationRun.count({where}),
     ]);
-    return c.json({rows, total, page: q.page, pageSize: q.pageSize});
+    const admin = adminOf(c);
+    return c.json({rows: rows.map((r) => maskRun(r, admin)), total, page: q.page, pageSize: q.pageSize});
   })
 
   /** The signing secret for webhook steps (created on first view). Admins only; audited. */

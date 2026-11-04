@@ -5,13 +5,17 @@
  *
  *   events      emit() → queueAutomations() (automation-hook.ts) → `automation.events`
  *               job → matchEvents(): one run per (automation, event)
- *   dates       automationTick() from /jobs/run: records whose trigger moment fell
- *               between the last check and now (missed ticks caught up), exactly
- *               once per (automation, record, value) via AutomationFire
- *   manual      runOnRecord() / runOnList() (`automation.batch`, 100 contacts a job)
+ *   dates       automationTick() from the `crm-tick` schedule: records whose trigger
+ *               moment fell between the last check and now (missed ticks caught up),
+ *               exactly once per (automation, record, value) via the run's dedupe key
+ *               and AutomationFire; a capped number per tick, advanced inline
+ *   manual      runOnRecord() / runOnList() (`automation.batch`, LIST_STEP contacts a
+ *               job, each run advanced inline while the job has time)
  *   runs        `automation.run` job → advanceRun(): executes steps in order, one
  *               AutomationRunStep row each; waits re-queue the job with runAt;
- *               transient errors retry the job (finished steps are skipped)
+ *               transient errors retry the job (finished steps are skipped). Every
+ *               run job is keyed `run-<id>-<point>` (at most one waiting per point
+ *               of a run) and a run lease keeps two jobs off the same run
  *   dry runs    testAutomation(): same executors with `dry`, nothing written
  *   test runs   startTestRun(): a flagged run of the editor's draft (kept in
  *               `definition`) through the same job; simulations (`quick`,
@@ -53,7 +57,7 @@ import {evaluateConditions, fieldsFor, labelOf, loadRecords, ownerIdOf, primaryO
 import {executeStep, isPermanent, StepError, type StepCtx, type StepResult} from './automation-steps';
 import {emit} from './events';
 import {userScope} from './http';
-import {enqueue, kickJobs} from './jobs';
+import {deleteInChunks, enqueue} from './jobs';
 import {notify} from './notify';
 import {listContactWhere} from './segments';
 
@@ -83,6 +87,8 @@ type StartInput = {
   records?: Records;
   /** Single manual runs skip the re-enrollment and rate limits (someone asked for it). */
   explicit?: boolean;
+  /** The caller advances the run itself (`advanceInline`): no job is queued for it. */
+  inline?: boolean;
 };
 
 export type StartResult = {run: AutomationRun | null; reason?: string};
@@ -187,32 +193,58 @@ export async function startRun(db: Db, a: Automation, input: StartInput): Promis
   } catch {
     return {run: null, reason: 'Already started'}; // dedupeKey taken by a concurrent attempt
   }
-  await enqueue(db, 'automation.run', {runId: run.id});
+  if (!input.inline) await queueRun(db, run.id, 'start');
   await db.automation.update({where: {id: a.id}, data: {lastRunAt: now}}).catch(() => null);
   return {run};
+}
+
+/**
+ * Queues the `automation.run` job of a run at one point of its progress (`start`, a wait's time,
+ * the step it goes on from…). The key is `run-<id>-<point>`: one job waits per point, and a
+ * second queueing of the same point (a retried job, a rescue) is the platform's dedupe, not a
+ * second run. A run's key is never reused for a later point (the platform keeps keys 24 h).
+ */
+export function queueRun(db: Db, runId: string, point: string, runAt?: Date) {
+  return enqueue(db, 'automation.run', {runId}, {key: `run-${runId}-${point}`.slice(0, 120), ...(runAt ? {runAt} : {})});
 }
 
 /** Queues the job of a running run that has none (its job was lost to an error between the two writes). */
 async function ensureJob(db: Db, run: {id: string; status: string}) {
   if (run.status !== 'running') return;
-  // The key keeps it to one such job per run every ten minutes; a duplicate run is harmless (steps never repeat).
-  await enqueue(db, 'automation.run', {runId: run.id}, {key: `ensure-${run.id}-${Math.floor(Date.now() / 600_000)}`});
+  // The start job's own key: when that job still waits (or ran), this is a no-op; a stalled run is rescueRuns()'.
+  await queueRun(db, run.id, 'start');
 }
 
+/** A run with no progress for this long is rescued; one whose job is retrying waits out the platform's backoff (1, 2, 10, 60 min). */
+const STALLED_MS = 5 * 60_000;
+const RETRYING_STALLED_MS = 90 * 60_000;
+
 /**
- * Safety net from the `crm-tick` schedule: runs left without a job (running for over two
- * minutes, or waiting past their time) are queued again. Finished steps are never repeated, so
- * this is always safe; the key keeps it to one rescue per run every ten minutes.
+ * Safety net from the `crm-tick` schedule: runs left without a job are queued again. "Stalled" is
+ * measured from the run's last progress (its newest step, else its start), never its start alone:
+ * a long run that keeps moving is left alone. Runs whose job still waits here for the job rate are
+ * skipped. Finished steps are never repeated and the run lease keeps two jobs apart, so a rescue is
+ * always safe; its key is one per run per progress point per hour.
  */
 async function rescueRuns(db: Db) {
-  // The cut-off is bound from here: the columns hold UTC wall times, and now() would follow the database's zone.
-  const before = new Date(Date.now() - 2 * 60_000);
-  const stuck = await db.$queryRaw<{id: string}[]>`
-    SELECT r.id FROM "AutomationRun" r
-    WHERE (r.status = 'running' AND r."startedAt" < ${before}) OR (r.status = 'waiting' AND r."waitUntil" < ${before})
+  // Cut-offs are bound from here: the columns hold UTC wall times, and now() would follow the database's zone.
+  const now = Date.now();
+  const stalled = new Date(now - STALLED_MS);
+  const retrying = new Date(now - RETRYING_STALLED_MS);
+  const stuck = await db.$queryRaw<{id: string; progress: Date}[]>`
+    SELECT r.id, COALESCE(p.at, r."startedAt") AS progress FROM "AutomationRun" r
+    LEFT JOIN LATERAL (
+      SELECT max(GREATEST(s."startedAt", COALESCE(s."finishedAt", s."startedAt"))) AS at FROM "AutomationRunStep" s WHERE s."runId" = r.id
+    ) p ON true
+    WHERE (
+      (r.status = 'running' AND COALESCE(p.at, r."startedAt") < CASE WHEN r.error LIKE 'Retrying:%' THEN ${retrying}::timestamp ELSE ${stalled}::timestamp END)
+      OR (r.status = 'waiting' AND r."waitUntil" < ${stalled}::timestamp)
+    )
+    AND NOT EXISTS (SELECT 1 FROM "JobBacklog" b WHERE b.list = 'crm-automation-run' AND b."failedAt" IS NULL AND b.data ->> 'runId' = r.id)
+    ORDER BY progress
     LIMIT 50`;
-  const slot = Math.floor(Date.now() / 600_000);
-  for (const r of stuck) await enqueue(db, 'automation.run', {runId: r.id}, {key: `rescue-${r.id}-${slot}`});
+  const hour = Math.floor(now / 3_600_000);
+  for (const r of stuck) await queueRun(db, r.id, `p${new Date(r.progress).getTime()}-${hour}`);
   return stuck.length;
 }
 
@@ -273,8 +305,12 @@ export function filterMatches(filter: EventFilter | undefined, event: Pick<Event
   return true;
 }
 
-/** `automation.events` job: starts one run per (automation, event) that matches. Safe to run twice. */
-export async function matchEvents(db: Db, eventIds: string[], origin: Origin | null) {
+/**
+ * `automation.events` job: starts one run per (automation, event) that matches, and advances each
+ * here while the job has time (a run costs a job of its own only when it waits or time is up).
+ * Safe to run twice.
+ */
+export async function matchEvents(db: Db, eventIds: string[], origin: Origin | null, until = Date.now() + 40_000) {
   const events = await db.event.findMany({where: {id: {in: eventIds}}, orderBy: {createdAt: 'asc'}});
   if (!events.length) return;
   const autos = await db.automation.findMany({where: {enabled: true, triggerKind: 'event', triggerEvent: {in: [...new Set(events.map((e) => e.type))]}}});
@@ -285,14 +321,16 @@ export async function matchEvents(db: Db, eventIds: string[], origin: Origin | n
       if (!filterMatches(t.filter, event)) continue;
       const recordId = await subjectId(db, event, objectOf(a));
       if (objectOf(a) !== 'none' && !recordId) continue;
-      await startRun(db, a, {
+      const {run} = await startRun(db, a, {
         recordId,
         source: 'event',
         eventType: event.type,
         dedupeKey: `${a.id}:${event.id}`,
         context: {eventId: event.id, type: event.type, data: event.data},
         origin,
+        inline: true,
       });
+      if (run) await advanceInline(db, run.id, until);
     }
   }
 }
@@ -414,19 +452,42 @@ async function inactivityCandidates(db: Db, a: Automation, t: Extract<Trigger, {
 
 /** How far back a tick looks when the scheduler was down (or the automation was just switched on). */
 const MAX_CATCH_UP = 30 * DAY;
+/** Runs one tick starts at most (each may need a job: the platform takes only so many a minute). */
+const FIRES_PER_TICK = 50;
 
 /**
- * Date and inactivity triggers, from /jobs/run. For each automation: the
- * records whose trigger moment is in (last check, now] start one run each;
- * AutomationFire makes it exactly-once even when ticks overlap.
+ * Starts a run the caller advances itself while it has time (`until`), saving the job a run
+ * would cost. Out of time, or a step that must be retried later: the run gets its job.
  */
-export async function automationTick(db: Db, {budgetMs = 8_000} = {}) {
-  const started = Date.now();
+async function advanceInline(db: Db, runId: string, until: number) {
+  if (Date.now() >= until) return queueRun(db, runId, 'start');
+  try {
+    // Not the last try: a transient error throws here instead of failing the run.
+    await advanceRun(db, runId, {attempts: 1, maxAttempts: 2});
+  } catch (e) {
+    console.warn('[automations] run', runId, String((e as Error)?.message ?? e).slice(0, 200));
+    await queueRun(db, runId, 'inline');
+  }
+}
+
+/**
+ * Date and inactivity triggers, from the `crm-tick` schedule. For each automation: the records
+ * whose trigger moment is in (last check, now] start one run each. The run's dedupe key makes it
+ * exactly-once even when ticks overlap or one stops midway, and AutomationFire (written after the
+ * run exists) remembers it was handled. The time budget is checked for every record, at most
+ * FIRES_PER_TICK runs start per tick, and the cursor is saved at the last moment handled, so the
+ * next tick goes on from there.
+ */
+export async function automationTick(db: Db, opts: {budgetMs?: number; until?: number; cap?: number} = {}) {
+  const until = opts.until ?? Date.now() + (opts.budgetMs ?? 8_000);
+  const cap = opts.cap ?? FIRES_PER_TICK;
   const autos = await db.automation.findMany({where: {enabled: true, triggerKind: {in: ['date', 'inactivity']}}, orderBy: {cursorAt: {sort: 'asc', nulls: 'first'}}});
   let fired = 0;
   let checked = 0;
+  // Half the time for starting runs, the rest for advancing them inline.
+  const startUntil = Date.now() + (until - Date.now()) / 2;
   for (const a of autos) {
-    if (Date.now() - started > budgetMs) break;
+    if (Date.now() > startUntil || fired >= cap) break;
     const now = new Date();
     const fromMs = Math.max((a.cursorAt ?? a.enabledAt ?? now).getTime(), now.getTime() - MAX_CATCH_UP);
     if (fromMs >= now.getTime()) continue;
@@ -441,19 +502,36 @@ export async function automationTick(db: Db, {budgetMs = 8_000} = {}) {
       continue;
     }
     found.sort((x, y) => x.moment - y.moment);
-    // A full page means there may be more: resume after the last moment handled.
-    const cursor = found.length >= LIMIT ? new Date(found.at(-1)!.moment) : now;
     checked++;
-    for (const c of found) {
-      const fresh = await db.automationFire.create({data: {automationId: a.id, recordId: c.recordId, value: c.value}}).then(() => true, () => false);
-      if (!fresh) continue;
-      const {run} = await startRun(db, a, {recordId: c.recordId, source: t.kind === 'date' ? 'date' : 'inactivity', dedupeKey: `${a.id}:fire:${c.recordId}:${c.value}`, context: {...c.context, moment: new Date(c.moment).toISOString()}});
-      if (run) fired++;
+    // Handled before (an earlier tick that stopped midway): one query for the whole page.
+    const done = found.length
+      ? new Set((await db.automationFire.findMany({where: {automationId: a.id, recordId: {in: [...new Set(found.map((c) => c.recordId))]}}, select: {recordId: true, value: true}})).map((f) => `${f.recordId}|${f.value}`))
+      : new Set<string>();
+    // A full page means there may be more: resume after the last moment found.
+    let cursor = found.length >= LIMIT ? new Date(found.at(-1)!.moment) : now;
+    for (const [i, c] of found.entries()) {
+      if (Date.now() > startUntil || fired >= cap) {
+        // Stopped midway: the next tick starts just before this moment (records of the same moment are not skipped).
+        cursor = new Date(Math.max(fromMs, c.moment - 1));
+        if (i === 0) cursor = from;
+        break;
+      }
+      if (done.has(`${c.recordId}|${c.value}`)) continue;
+      const source = t.kind === 'date' ? 'date' : 'inactivity';
+      const {run} = await startRun(db, a, {recordId: c.recordId, source, dedupeKey: `${a.id}:fire:${c.recordId}:${c.value}`, context: {...c.context, moment: new Date(c.moment).toISOString()}, inline: true});
+      // Only now: a tick that dies before this line leaves no mark, and the dedupe key stops a second run.
+      await db.automationFire.createMany({data: [{automationId: a.id, recordId: c.recordId, value: c.value}], skipDuplicates: true});
+      if (run) {
+        fired++;
+        await advanceInline(db, run.id, until);
+      }
     }
     await db.automation.update({where: {id: a.id}, data: {cursorAt: cursor}});
   }
-  const rescued = await rescueRuns(db).catch(() => 0);
-  if (fired || rescued) kickJobs();
+  const rescued = await rescueRuns(db).catch((e) => {
+    console.error('[automations] rescue', String((e as Error)?.message || (e as {code?: string})?.code || e).slice(0, 200));
+    return 0;
+  });
   return {automations: checked, fired, rescued};
 }
 
@@ -463,25 +541,36 @@ export async function runOnRecord(db: Db, a: Automation, recordId: string, userI
   return startRun(db, a, {recordId, source: 'manual', dedupeKey: null, context: {by: userId}, startedById: userId, explicit: true});
 }
 
-/** Queues "run on a list / segment": contacts the user can see, 100 per job. */
+/** Contacts one `automation.batch` job starts runs for (each advanced inline while the job has time). */
+const LIST_STEP = 10;
+
+/** Queues "run on a list / segment": contacts the user can see, LIST_STEP per job. */
 export async function runOnList(db: Db, a: Automation, listId: string, userId: string) {
   const batchId = randomToken(6);
-  await enqueue(db, 'automation.batch', {automationId: a.id, listId, userId, batchId, after: null});
-  kickJobs();
+  await enqueue(db, 'automation.batch', {automationId: a.id, listId, userId, batchId, after: null}, {key: `auto-list-${batchId}-start`});
   return batchId;
 }
 
-export async function runBatch(db: Db, p: Record<string, unknown>) {
+/**
+ * One step of "run on a list": up to LIST_STEP contacts after the cursor, each run advanced here
+ * while the job has time (runs that wait, or are out of time, get their own job), then the next
+ * step with the cursor. Stops when the automation is off or the member who started it is gone.
+ */
+export async function runBatch(db: Db, p: Record<string, unknown>, until = Date.now() + 40_000) {
   const a = await db.automation.findUnique({where: {id: String(p.automationId)}});
-  const user = await db.member.findUnique({where: {id: String(p.userId)}});
-  if (!a || !user || !a.enabled) return;
+  const user = await db.member.findUnique({where: {id: String(p.userId)}, select: {id: true, role: true, active: true}});
+  if (!a || !a.enabled || !user?.active) return;
   const after = typeof p.after === 'string' ? p.after : null;
   const where = {AND: [await listContactWhere(db, String(p.listId)), ...(after ? [{id: {gt: after}}] : [])], ...(await userScope(db, user))};
-  const contacts = await db.contact.findMany({where, orderBy: {id: 'asc'}, take: 100, select: {id: true}});
+  const contacts = await db.contact.findMany({where, orderBy: {id: 'asc'}, take: LIST_STEP, select: {id: true}});
   for (const c of contacts) {
-    await startRun(db, a, {recordId: c.id, source: 'list', dedupeKey: `${a.id}:list:${p.batchId}:${c.id}`, context: {listId: p.listId, by: user.id}, startedById: user.id});
+    const {run} = await startRun(db, a, {recordId: c.id, source: 'list', dedupeKey: `${a.id}:list:${p.batchId}:${c.id}`, context: {listId: p.listId, by: user.id}, startedById: user.id, inline: true});
+    if (run) await advanceInline(db, run.id, until);
   }
-  if (contacts.length === 100) await enqueue(db, 'automation.batch', {...(p as Prisma.InputJsonObject), after: contacts.at(-1)!.id});
+  if (contacts.length === LIST_STEP) {
+    const next = contacts.at(-1)!.id;
+    await enqueue(db, 'automation.batch', {...(p as Prisma.InputJsonObject), after: next}, {key: `auto-list-${p.batchId}-${next}`});
+  }
 }
 
 // ─── Executing runs ─────────────────────────────────────────────────────────
@@ -506,12 +595,50 @@ async function finish(db: Db, run: AutomationRun, status: 'done' | 'failed' | 'c
   }
 }
 
+// ─── Run lease ──────────────────────────────────────────────────────────────
+
+/**
+ * One job at a time per run. A lease row in Settings (`lock:run:<id>`), taken with one
+ * INSERT … ON CONFLICT and renewed while the run goes on: a transaction-scoped advisory lock would
+ * be let go the moment its statement commits (each query is its own transaction over the Site
+ * Database's HTTP driver), and a session lock needs a connection the run does not keep. A lease
+ * left by a run that died ends after LEASE_MS (a job has 60 s).
+ */
+const LEASE_MS = 70_000;
+const RENEW_AFTER_MS = 20_000;
+export const LEASE_PREFIX = 'lock:run:';
+
+async function takeLease(db: Db, runId: string) {
+  const now = new Date();
+  const rows = await db.$queryRaw<{key: string}[]>`
+    INSERT INTO "Setting" (key, value, "updatedAt") VALUES (${LEASE_PREFIX + runId}, '{}'::jsonb, ${now})
+    ON CONFLICT (key) DO UPDATE SET "updatedAt" = EXCLUDED."updatedAt" WHERE "Setting"."updatedAt" < ${new Date(now.getTime() - LEASE_MS)}
+    RETURNING key`;
+  return rows.length > 0;
+}
+
+const renewLease = (db: Db, runId: string) => db.$executeRaw`UPDATE "Setting" SET "updatedAt" = ${new Date()} WHERE key = ${LEASE_PREFIX + runId}`;
+const releaseLease = (db: Db, runId: string) => db.$executeRaw`DELETE FROM "Setting" WHERE key = ${LEASE_PREFIX + runId}`;
+
+/** A job that wakes a wait this much early goes on (the platform keeps job times to the minute). */
+const EARLY_OK_MS = 60_000;
+
 /**
  * `automation.run` job: executes the run from its cursor. Finished steps are
  * never repeated (their rows say so); a transient error re-throws so the job
  * runner retries with backoff, a permanent one (or the last attempt) fails the run.
+ * Another job already running this run: this one has nothing to do.
  */
 export async function advanceRun(db: Db, runId: string, job: Pick<JobRun, 'attempts' | 'maxAttempts'>) {
+  if (!(await takeLease(db, runId))) return;
+  try {
+    await advance(db, runId, job);
+  } finally {
+    await releaseLease(db, runId).catch(() => 0);
+  }
+}
+
+async function advance(db: Db, runId: string, job: Pick<JobRun, 'attempts' | 'maxAttempts'>) {
   let run = await db.automationRun.findUnique({where: {id: runId}});
   if (!run || (run.status !== 'running' && run.status !== 'waiting')) return;
   const saved = await db.automation.findUnique({where: {id: run.automationId}});
@@ -519,9 +646,9 @@ export async function advanceRun(db: Db, runId: string, job: Pick<JobRun, 'attem
   const a = definitionOf(saved, run);
   const dry = !!run.test && !!TEST_MODES[run.test as TestMode]?.dry;
   if (run.status === 'waiting') {
-    // Woken early (a duplicate job): sleep again until it's time.
-    if (run.waitUntil && run.waitUntil.getTime() > Date.now() + 1000) {
-      await enqueue(db, 'automation.run', {runId}, {runAt: run.waitUntil, key: `wake-${runId}-${run.waitUntil.getTime()}`});
+    // Woken early (a duplicate job): sleep again until it's time, under the wait's own key.
+    if (run.waitUntil && run.waitUntil.getTime() > Date.now() + EARLY_OK_MS) {
+      await queueRun(db, runId, `w${run.waitUntil.getTime()}`, run.waitUntil);
       return;
     }
     if (!a.enabled && !run.test) return finish(db, run, 'canceled', 'The automation was turned off while this run was waiting');
@@ -534,10 +661,15 @@ export async function advanceRun(db: Db, runId: string, job: Pick<JobRun, 'attem
   const context = run.context as {data?: Record<string, unknown>} | null;
   let cursor = run.cursor;
   let count = 0;
+  let renewed = Date.now();
   while (cursor) {
     if (++count > STEPS_PER_JOB) {
-      await enqueue(db, 'automation.run', {runId: run.id});
+      await queueRun(db, run.id, `c${cursor}`);
       return;
+    }
+    if (Date.now() - renewed > RENEW_AFTER_MS) {
+      await renewLease(db, run.id);
+      renewed = Date.now();
     }
     const step = findStep(steps, cursor);
     if (!step) return finish(db, run, 'canceled', 'The automation was edited and this step no longer exists');
@@ -598,7 +730,7 @@ export async function advanceRun(db: Db, runId: string, job: Pick<JobRun, 'attem
     if (result.waitUntil && result.waitUntil.getTime() > Date.now()) {
       // Only a run still going starts waiting (it may have been canceled meanwhile).
       const {count: waiting} = await db.automationRun.updateMany({where: {id: run.id, status: 'running'}, data: {status: 'waiting', cursor, waitUntil: result.waitUntil, error: null}});
-      if (waiting) await enqueue(db, 'automation.run', {runId: run.id}, {runAt: result.waitUntil});
+      if (waiting) await queueRun(db, run.id, `w${result.waitUntil.getTime()}`, result.waitUntil);
       return;
     }
     run = await db.automationRun.update({where: {id: run.id}, data: {cursor, error: null}});
@@ -723,13 +855,21 @@ export async function startTestRun(db: Db, a: Automation, input: {mode: TestMode
       definition: json(definition),
     },
   });
-  await enqueue(db, 'automation.run', {runId: run.id});
+  await queueRun(db, run.id, 'start');
   return {run, conditions};
 }
 
-/** Finished runs (and their steps) are kept 90 days (test simulations 30); fire logs a year after the date passed. From pruneJobs(). */
-export async function pruneAutomations(db: Db) {
-  await db.automationRun.deleteMany({where: {test: {in: ['quick', 'timed']}, status: {in: ['done', 'failed', 'canceled']}, finishedAt: {lt: new Date(Date.now() - 30 * DAY)}}});
-  await db.automationRun.deleteMany({where: {status: {in: ['done', 'failed', 'skipped', 'canceled']}, finishedAt: {lt: new Date(Date.now() - 90 * DAY)}}});
-  await db.automationFire.deleteMany({where: {createdAt: {lt: new Date(Date.now() - 400 * DAY)}}});
+/**
+ * Finished runs (and their steps) are kept 90 days (test simulations 30); fire logs a year after the
+ * date passed; run leases a day after they ended. From pruneJobs(), in chunks until `until`.
+ */
+export async function pruneAutomations(db: Db, until = Date.now() + 20_000) {
+  const tests = new Date(Date.now() - 30 * DAY);
+  const runs = new Date(Date.now() - 90 * DAY);
+  const fires = new Date(Date.now() - 400 * DAY);
+  const leases = new Date(Date.now() - DAY);
+  await deleteInChunks(until, (n) => db.$executeRaw`DELETE FROM "AutomationRun" WHERE id IN (SELECT id FROM "AutomationRun" WHERE test IN ('quick', 'timed') AND status IN ('done', 'failed', 'canceled') AND "finishedAt" < ${tests} LIMIT ${n})`);
+  await deleteInChunks(until, (n) => db.$executeRaw`DELETE FROM "AutomationRun" WHERE id IN (SELECT id FROM "AutomationRun" WHERE status IN ('done', 'failed', 'skipped', 'canceled') AND "finishedAt" < ${runs} LIMIT ${n})`);
+  await deleteInChunks(until, (n) => db.$executeRaw`DELETE FROM "AutomationFire" WHERE ctid IN (SELECT ctid FROM "AutomationFire" WHERE "createdAt" < ${fires} LIMIT ${n})`);
+  await db.$executeRaw`DELETE FROM "Setting" WHERE key LIKE ${LEASE_PREFIX + '%'} AND "updatedAt" < ${leases}`;
 }

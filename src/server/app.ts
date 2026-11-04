@@ -7,7 +7,6 @@ import {config} from '../platform/config';
 import {csrf, previewCookies, problem, sameOrigin} from '../platform/guards';
 import {syncPermissions} from '../platform/permission-sync';
 import {authSettings} from './auth-settings';
-import {checkoutRoutes, membershipRoutes} from './routes/checkout';
 import {crmApp, crmHooks} from './crm/app';
 import {abilitiesFor, CATALOGUE} from './permissions';
 import {siteRoutes} from './routes/site';
@@ -25,8 +24,6 @@ import {siteRoutes} from './routes/site';
  *   *    /auth/...      sign-up, sign-in, sessions, passwords   platform/auth/routes.ts
  *   *    /admin/...     users, roles, audit log (admins)        platform/auth/admin.ts
  *   GET  /site          the site's brand                        routes/site.ts
- *   *    /checkout/...  start and confirm a payment             routes/checkout.ts
- *   *    /memberships/... the member's memberships               routes/checkout.ts
  *   *    /crm/...      Kinroot CRM (its own Site API)           crm/app.ts
  *
  * Add a feature as a new `routes/<name>.ts` and one `.route()` line below,
@@ -36,20 +33,21 @@ import {siteRoutes} from './routes/site';
  * that must accept a cross-site write gets its own app, mounted before them,
  * with its own authentication).
  */
+const siteBodyLimit = bodyLimit({maxSize: 64 * 1024, onError: c => c.json(problem('too_large', 'That request is too large.'), 413)});
+const isCrmPath = (path: string) => path === '/site-api/crm' || path.startsWith('/site-api/crm/');
+
 export const app = new Hono()
   .basePath('/site-api')
   // The editor Preview only: auth cookies carried in headers (its gateway drops cookies).
   .use(previewCookies)
   .use(sameOrigin)
-  // The Buy button posts here as a plain form too (no JavaScript): BEFORE `csrf`, with its own
-  // `formCsrf` (the token, or a same-origin form post). Keep it here (docs/agent/payments.md).
-  .route('/checkout', checkoutRoutes)
   // Kinroot: what other services send (inbound email, incoming webhooks, Data in API, tracking
   // links). They carry no CSRF token and authenticate themselves; BEFORE `csrf` for that reason.
   .route('/crm', crmHooks)
   .use(csrf)
-  // No route here takes a big body; uploads never pass through the Worker.
-  .use(bodyLimit({maxSize: 64 * 1024, onError: c => c.json(problem('too_large', 'That request is too large.'), 413)}))
+  // No route here takes a big body; uploads never pass through the Worker. Kinroot (`/crm`) sets its
+  // own limits (src/server/crm/app.ts: 64 KB, 512 KB where HTML is saved), so this one skips it.
+  .use((c, next) => (isCrmPath(c.req.path) ? next() : siteBodyLimit(c, next)))
   // New catalogue codenames reach the `permissions` table (once per isolate; no migration).
   .use(syncPermissions(CATALOGUE))
 
@@ -77,7 +75,6 @@ export const app = new Hono()
   .route('/auth', authRoutes(authSettings))
   .route('/admin', adminRoutes)
   .route('/site', siteRoutes)
-  .route('/memberships', membershipRoutes)
   .route('/crm', crmApp)
 
   .notFound(c => c.json(problem('not_found', 'No such Site API route.'), 404))

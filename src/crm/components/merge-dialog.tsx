@@ -82,7 +82,7 @@ export function MergeDialog<T extends Rec>({
   );
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open onOpenChange={(open) => !open && !merge.isPending && onClose()}>
       <DialogContent size="xl">
         <DialogHeader>
           <DialogTitle>Merge duplicate {noun}s</DialogTitle>
@@ -92,6 +92,7 @@ export function MergeDialog<T extends Rec>({
           <div className="grid grid-cols-1 gap-5 @3xl:grid-cols-[minmax(0,1fr)_280px]">
             <div className="grid content-start gap-4">
               <Field label={`${noun[0]!.toUpperCase()}${noun.slice(1)} to merge in`}>{picker(otherId, (id) => (setOtherId(id === current.id ? null : id), setChoices({})))}</Field>
+              {other.isError && <p role="alert" className="text-sm text-destructive">That {noun} could not be loaded. {other.error.message}</p>}
               {o && (
                 <>
                   <div className="grid grid-cols-1 gap-3 @lg:grid-cols-2">
@@ -145,8 +146,8 @@ export function MergeDialog<T extends Rec>({
           </div>
         </DialogBody>
         <DialogFooter>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button variant="destructive" disabled={!o || merge.isPending} onClick={() => merge.mutate(undefined)}><GitMerge /> Merge</Button>
+          <Button variant="secondary" onClick={onClose} disabled={merge.isPending}>Cancel</Button>
+          <Button variant="destructive" disabled={!o} pending={merge.isPending} pendingLabel="Merging…" onClick={() => merge.mutate(undefined)}><GitMerge /> Merge</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

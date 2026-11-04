@@ -1,8 +1,8 @@
 import {Link} from '@tanstack/react-router';
-import {Building2, Clock, ExternalLink, Globe, Handshake, LifeBuoy, Link2, Loader2, Mail, MapPin, Phone, Plus, User, UserPlus} from 'lucide-react';
+import {Building2, Clock, ExternalLink, Globe, Handshake, LifeBuoy, Link2, Mail, MapPin, Phone, Plus, User, UserPlus} from 'lucide-react';
 import {useState} from 'react';
 
-import {api} from '@/lib/api';
+import {api, ApiError} from '@/lib/api';
 import {visitorTime} from '@/lib/chat';
 import {ago, fullName, LIFECYCLE, money} from '@/lib/format';
 import {keys, useApiMutation, useMe} from '@/lib/queries';
@@ -14,6 +14,7 @@ import {Badge} from '../ui/badge';
 import {Button} from '../ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '../ui/dialog';
 import {Field, Input, NativeSelect} from '../ui/form';
+import {is, useFormState} from '../ui/form-state';
 import {Avatar} from '../ui/misc';
 
 const invalidate = [keys.inbox, keys.timeline, keys.contacts, keys.deals, keys.tickets];
@@ -39,10 +40,18 @@ function ContactDrawer({detail, mode, onClose}: {detail: ConversationDetail; mod
     () => api.post(`/inbox/conversations/${detail.conversation.id}/contact`, mode === 'create' ? {create: {...form, lastName: form.lastName || null, email: form.email || null}} : {contactId}),
     {invalidate, success: mode === 'create' ? 'Contact created and linked' : 'Contact linked', onSuccess: onClose},
   );
+  const f = useFormState(
+    {...form, contactId},
+    mode === 'create'
+      ? {firstName: [is.required('Enter a first name.'), is.maxLength(100)], lastName: [is.maxLength(100)], email: [is.email()]}
+      : {contactId: [is.required('Choose the contact to link.')]},
+  );
+  // The server names the new contact's fields `create.<field>`.
+  const fail = (e: unknown) => f.fail(e instanceof ApiError ? new ApiError(e.message, e.status, Object.fromEntries(Object.entries(e.fields).map(([k, v]) => [k.replace(/^create\./, ''), v]))) : e);
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !save.isPending && onClose()}>
       <DialogContent size="sm">
-        <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => save.mutate(undefined, {onError: fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>{mode === 'create' ? 'Create contact' : 'Link to a contact'}</DialogTitle>
             <DialogDescription>The conversation and its earlier emails move to the contact's timeline.</DialogDescription>
@@ -50,17 +59,17 @@ function ContactDrawer({detail, mode, onClose}: {detail: ConversationDetail; mod
           <DialogBody>
             {mode === 'create' ? (
               <>
-                <Field label="First name" htmlFor="ic-first"><Input id="ic-first" required value={form.firstName} onChange={(e) => setForm({...form, firstName: e.target.value})} /></Field>
-                <Field label="Last name" htmlFor="ic-last"><Input id="ic-last" value={form.lastName} onChange={(e) => setForm({...form, lastName: e.target.value})} /></Field>
-                <Field label="Email" htmlFor="ic-email"><Input id="ic-email" type="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} /></Field>
+                <Field label="First name" htmlFor="ic-first" error={f.error('firstName')}><Input id="ic-first" value={form.firstName} onChange={(e) => setForm({...form, firstName: e.target.value})} onBlur={f.blur('firstName')} /></Field>
+                <Field label="Last name" htmlFor="ic-last" error={f.error('lastName')}><Input id="ic-last" value={form.lastName} onChange={(e) => setForm({...form, lastName: e.target.value})} onBlur={f.blur('lastName')} /></Field>
+                <Field label="Email" htmlFor="ic-email" error={f.error('email')}><Input id="ic-email" type="email" value={form.email} onChange={(e) => setForm({...form, email: e.target.value})} onBlur={f.blur('email')} /></Field>
               </>
             ) : (
-              <Field label="Contact"><SingleContactPicker onChange={setContactId} /></Field>
+              <Field label="Contact" error={f.error('contactId')}><SingleContactPicker onChange={setContactId} /></Field>
             )}
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending || (mode === 'link' && !contactId)}>{save.isPending && <Loader2 className="animate-spin" />} {mode === 'create' ? 'Create' : 'Link'}</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel={mode === 'create' ? 'Creating…' : 'Linking…'}>{mode === 'create' ? 'Create' : 'Link'}</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -72,9 +81,9 @@ function DealDrawer({detail, onClose}: {detail: ConversationDetail; onClose: () 
   const [deal, setDeal] = useState<{id: string; title: string} | null>(detail.sidebar.deal);
   const save = useApiMutation(() => api.patch(`/inbox/conversations/${detail.conversation.id}`, {dealId: deal?.id ?? null}), {invalidate, success: deal ? 'Deal associated' : 'Deal removed', onSuccess: onClose});
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !save.isPending && onClose()}>
       <DialogContent size="sm">
-        <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form noValidate onSubmit={(e) => (e.preventDefault(), !save.isPending && save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>Associate deal</DialogTitle>
             <DialogDescription>Replies from this conversation are logged on the deal too.</DialogDescription>
@@ -93,8 +102,8 @@ function DealDrawer({detail, onClose}: {detail: ConversationDetail; onClose: () 
             )}
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending}>{save.isPending && <Loader2 className="animate-spin" />} Save</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel="Saving…">Save</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -106,16 +115,17 @@ function TicketDrawer({detail, onClose}: {detail: ConversationDetail; onClose: (
   const [subject, setSubject] = useState(detail.conversation.subject);
   const [priority, setPriority] = useState<TicketPriority>('NORMAL');
   const save = useApiMutation(() => api.post<{ticket: {number: number}}>(`/inbox/conversations/${detail.conversation.id}/ticket`, {subject, priority}), {invalidate, success: (r) => `Ticket #${r.ticket.number} created`, onSuccess: onClose});
+  const f = useFormState({subject}, {subject: [is.required('Enter a subject for the ticket.'), is.maxLength(300)]});
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !save.isPending && onClose()}>
       <DialogContent size="sm">
-        <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>Create ticket</DialogTitle>
             <DialogDescription>Opens a support ticket for this contact with the latest message as its description. The conversation stays in the inbox.</DialogDescription>
           </DialogHeader>
           <DialogBody>
-            <Field label="Subject" htmlFor="it-subject"><Input id="it-subject" required value={subject} onChange={(e) => setSubject(e.target.value)} /></Field>
+            <Field label="Subject" htmlFor="it-subject" error={f.error('subject')}><Input id="it-subject" value={subject} onChange={(e) => setSubject(e.target.value)} onBlur={f.blur('subject')} /></Field>
             <Field label="Priority" htmlFor="it-priority">
               <NativeSelect id="it-priority" value={priority} onChange={(e) => setPriority(e.target.value as TicketPriority)}>
                 {TICKET_PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
@@ -123,8 +133,8 @@ function TicketDrawer({detail, onClose}: {detail: ConversationDetail; onClose: (
             </Field>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending}>{save.isPending && <Loader2 className="animate-spin" />} Create ticket</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel="Creating…">Create ticket</Button>
           </DialogFooter>
         </form>
       </DialogContent>

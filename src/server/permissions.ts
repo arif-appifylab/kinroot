@@ -17,18 +17,6 @@ import {abilitiesOf, type AbilitiesOf, codenamesOf, CORE_PERMISSIONS, definePerm
 export const CATALOGUE = definePermissions({
   ...CORE_PERMISSIONS,
   /**
-   * The template's job board (removed in phase 10D: no route checks it now). Kept so roles that
-   * hold it stay valid; remove it with the `jobs` table in a later clean-up.
-   */
-  JOB_MANAGE: {
-    codename: 'site:job:manage',
-    title: 'Manage jobs',
-    description: 'Post, edit, close and delete jobs on the job board.',
-    group: 'Jobs',
-    ability: 'manageJobs',
-    roles: ['admin'],
-  },
-  /**
    * Kinroot: who may claim the CRM workspace. A holder with no team row becomes its Owner on
    * the first visit (it replaces Kinroot's old first-run setup). Everyone else joins through a
    * team invite; ranks inside the team (Owner, Admin, Member, Viewer) are the CRM's own data
@@ -43,7 +31,7 @@ export const CATALOGUE = definePermissions({
   },
 });
 
-/** Codenames by key: `PERMISSIONS.JOB_MANAGE` is `'site:job:manage'`. */
+/** Codenames by key: `PERMISSIONS.CRM_OWN` is `'site:crm:own'`. */
 export const PERMISSIONS = codenamesOf(CATALOGUE);
 
 export type Codename = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];

@@ -10,6 +10,7 @@ import {cn} from '@/lib/utils';
 
 import {TASK_ICONS, useCreate} from './create-dialogs';
 import {Badge} from './ui/badge';
+import {confirm} from './ui/confirm';
 import {Checkbox} from './ui/form';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from './ui/menu';
 import {Avatar} from './ui/misc';
@@ -57,7 +58,18 @@ export function TaskRow({task, compact, showRecord = true}: {task: Task; compact
           <Tooltip content={TASK_TYPES[task.type]}>
             <Icon className="size-3.5 shrink-0 text-slate-400" />
           </Tooltip>
-          <p className={cn('truncate text-sm font-medium text-slate-800', task.done && 'line-through')}>{task.title}</p>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={() => create.open({kind: 'task', task})}
+              aria-label={`Edit task: ${task.title}`}
+              className={cn('min-w-0 cursor-pointer truncate rounded text-left text-sm font-medium text-slate-800 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30', task.done && 'line-through')}
+            >
+              {task.title}
+            </button>
+          ) : (
+            <p className={cn('truncate text-sm font-medium text-slate-800', task.done && 'line-through')}>{task.title}</p>
+          )}
           {task.priority === 'HIGH' && !task.done && <Badge tone="rose">High</Badge>}
           {task.repeat && (
             <Tooltip content="Repeats">
@@ -94,13 +106,18 @@ export function TaskRow({task, compact, showRecord = true}: {task: Task; compact
       {canEdit && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="cursor-pointer rounded-md p-1 text-slate-400 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-card hover:text-slate-700 focus-visible:opacity-100 data-[state=open]:opacity-100" aria-label="Task actions">
+            <button type="button" disabled={remove.isPending} aria-busy={remove.isPending || undefined} className="cursor-pointer rounded-md p-1 text-slate-400 opacity-0 transition-opacity outline-none group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-card hover:text-slate-700 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed data-[state=open]:opacity-100 pointer-coarse:opacity-100" aria-label={`Actions for task ${task.title}`}>
               <MoreHorizontal className="size-4" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
             <DropdownMenuItem onSelect={() => create.open({kind: 'task', task})}><Pencil /> Edit</DropdownMenuItem>
-            <DropdownMenuItem destructive onSelect={() => remove.mutate(undefined)}><Trash2 /> Delete</DropdownMenuItem>
+            <DropdownMenuItem
+              destructive
+              onSelect={async () => (await confirm({title: `Delete the task "${task.title}"?`, description: "This can't be undone.", confirmLabel: 'Delete', destructive: true})) && remove.mutate(undefined)}
+            >
+              <Trash2 /> Delete
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       )}

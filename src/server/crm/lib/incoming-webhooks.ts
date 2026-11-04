@@ -36,6 +36,7 @@ import {
 import {config as site} from '../../../platform/config';
 import {fromB64, sha256Hex} from '../kit/crypto';
 import type {Db} from '../kit/db';
+import {firstDelivery} from '../email/inbound-auth';
 import {mergeFields} from '../email/render';
 import {companyBody, normalizeDomain} from '../routes/companies';
 import {contactBody, contactName} from '../routes/contacts';
@@ -69,6 +70,9 @@ import {createTicket} from './tickets';
 // ─── Receiving ──────────────────────────────────────────────────────────────
 
 export const tokenHash = (token: string) => sha256Hex(`inhook:${token}`);
+
+/** SHA-256 of the raw body, hex. */
+const bytesHash = async (raw: Uint8Array<ArrayBuffer>) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', raw))].map((b) => b.toString(16).padStart(2, '0')).join('');
 
 /** Unknown tokens from one address: after this many in 10 minutes, every request from it gets 429 without a lookup. */
 const BAD_TOKEN_LIMIT = 30;
@@ -179,13 +183,43 @@ export async function verifyRequest(hook: Pick<IncomingWebhook, 'verify' | 'veri
   if (!secret) return `The site secret ${hook.secretName} is not added yet`;
   const value = headers.get(name);
   if (!value) return `Missing the ${name} header`;
-  if (hook.verify === 'header') return (await safeEqual(value.trim(), secret)) ? null : `The ${name} header does not match the secret`;
+  const stamp = headers.get(TIMESTAMP_HEADER)?.trim() ?? null;
+  if (hook.verify === 'header') {
+    if (!(await safeEqual(value.trim(), secret))) return `The ${name} header does not match the secret`;
+    return stamp === null || freshStamp(stamp) ? null : STALE;
+  }
   const sig = decodeSignature(value, hook.verifyEncoding === 'base64' ? 'base64' : 'hex');
   if (!sig) return `The ${name} header is not a ${hook.verifyEncoding === 'base64' ? 'base64' : 'hex'} HMAC-SHA256 signature`;
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), {name: 'HMAC', hash: 'SHA-256'}, false, ['verify']);
-  // crypto.subtle.verify compares in constant time.
-  return (await crypto.subtle.verify('HMAC', key, sig, raw)) ? null : 'The signature does not match the body';
+  // crypto.subtle.verify compares in constant time. With a timestamp, the signature may cover
+  // `<timestamp>.<body>` (then an old request can't be sent again with a new time).
+  const signed =
+    (await crypto.subtle.verify('HMAC', key, sig, raw)) ||
+    (stamp !== null && (await crypto.subtle.verify('HMAC', key, sig, concat(enc.encode(`${stamp}.`), raw))));
+  if (!signed) return 'The signature does not match the body';
+  return stamp === null || freshStamp(stamp) ? null : STALE;
 }
+
+/** Optional: when the sender adds it, the time it sent the request (seconds or milliseconds since 1970, or ISO 8601). */
+export const TIMESTAMP_HEADER = 'x-webhook-timestamp';
+const STAMP_TOLERANCE_MS = 5 * 60_000;
+const STALE = 'The X-Webhook-Timestamp header is more than 5 minutes from now: send the time the request is sent';
+
+function freshStamp(stamp: string) {
+  const n = /^\d{1,16}$/.test(stamp) ? Number(stamp) : NaN;
+  const ms = Number.isFinite(n) ? (n < 1e12 ? n * 1000 : n) : stamp.length <= 40 ? Date.parse(stamp) : NaN;
+  return Number.isFinite(ms) && Math.abs(Date.now() - ms) <= STAMP_TOLERANCE_MS;
+}
+
+function concat(a: Uint8Array, b: Uint8Array): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(a.byteLength + b.byteLength);
+  out.set(a, 0);
+  out.set(b, a.byteLength);
+  return out;
+}
+
+/** How long an identical body (and timestamp) is remembered when the hook has no idempotency key. */
+const SAME_BODY_WINDOW_S = 10 * 60;
 
 export type Received = {status: 200 | 400 | 401 | 403 | 404 | 405 | 413 | 429; body: Record<string, unknown>};
 
@@ -253,10 +287,19 @@ export async function receiveIncoming(db: Db, input: ReceiveInput): Promise<Rece
 
   const fromPath = config.idempotencyPath ? cellOf(getPath(payload, config.idempotencyPath)) : undefined;
   const key = (fromPath || input.headers.get('idempotency-key') || input.headers.get('x-idempotency-key') || '').trim().slice(0, 200) || null;
+  // No idempotency key: the very same signed body (and timestamp) again within 10 minutes is a
+  // replay or a resend, taken once (AUDIT P2-12). A key, when there is one, is the sender's own rule.
+  const seen = key ? null : await firstDelivery(db, `inhook:${hook.id}:${input.headers.get(TIMESTAMP_HEADER) ?? ''}:${await bytesHash(raw)}`, SAME_BODY_WINDOW_S);
+  if (seen && !seen.first) {
+    const dupe = await log('duplicate', null, {size: raw.byteLength, payload: json, result: {outcome: 'none', reason: 'Same body as a request in the last 10 minutes (send an Idempotency-Key to tell them apart)'}});
+    await db.incomingWebhook.update({where: {id: hook.id}, data: {lastRequestAt: new Date(), lastStatus: 'duplicate'}});
+    return {status: 200, body: {ok: true, id: dupe.id, duplicate: true}};
+  }
   let row: IncomingWebhookRequest;
   try {
     row = await db.incomingWebhookRequest.create({data: {webhookId: hook.id, status: 'accepted', idempotencyKey: key, contentType: contentType?.slice(0, 200), size: raw.byteLength, payload: json, headers}});
   } catch (e) {
+    await seen?.forget(); // not taken: the sender's retry must go through
     if ((e as {code?: string}).code !== 'P2002' || !key) throw e;
     const first = await db.incomingWebhookRequest.findUnique({where: {webhookId_idempotencyKey: {webhookId: hook.id, idempotencyKey: key}}, select: {id: true}});
     const dupe = await log('duplicate', null, {size: raw.byteLength, payload: json, result: {outcome: 'none', duplicateOf: first?.id ?? null, reason: `Same ${config.idempotencyPath || 'Idempotency-Key'} as an earlier request (${key})`}});

@@ -107,7 +107,14 @@ function TasksPage() {
       className: 'w-8 pr-0',
       cell: (t) => (
         <span onClick={(e) => e.stopPropagation()}>
-          <Checkbox aria-label={t.done ? 'Mark not done' : 'Mark done'} checked={t.done} disabled={!canEdit} onCheckedChange={() => toggle.mutate(t)} className="rounded-full" />
+          <Checkbox
+            aria-label={`Mark "${t.title}" ${t.done ? 'not done' : 'done'}`}
+            checked={t.done}
+            disabled={!canEdit || (toggle.isPending && toggle.variables?.id === t.id)}
+            aria-busy={(toggle.isPending && toggle.variables?.id === t.id) || undefined}
+            onCheckedChange={() => toggle.mutate(t)}
+            className="rounded-full"
+          />
         </span>
       ),
     },
@@ -119,7 +126,17 @@ function TasksPage() {
         return (
           <div className="flex min-w-0 items-center gap-2">
             <Icon className="size-4 shrink-0 text-slate-400" />
-            <span className={cn('truncate font-semibold text-slate-900', t.done && 'text-slate-400 line-through')}>{t.title}</span>
+            {canEdit ? (
+              <button
+                type="button"
+                onClick={(e) => (e.stopPropagation(), create.open({kind: 'task', task: t}))}
+                className={cn('min-w-0 cursor-pointer truncate rounded text-left font-semibold text-slate-900 outline-none hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30', t.done && 'text-slate-400 line-through')}
+              >
+                {t.title}
+              </button>
+            ) : (
+              <span className={cn('truncate font-semibold text-slate-900', t.done && 'text-slate-400 line-through')}>{t.title}</span>
+            )}
             {t.repeat && <Repeat className="size-3.5 shrink-0 text-slate-400" aria-label="Repeats" />}
             {t.reminderAt && !t.done && <Bell className="size-3.5 shrink-0 text-slate-400" aria-label="Has reminder" />}
           </div>
@@ -177,8 +194,10 @@ function TasksPage() {
         {TABS.map((t) => (
           <button
             key={t.id}
+            type="button"
+            aria-pressed={tab.id === t.id}
             onClick={() => (set({tab: t.id === 'all' ? undefined : t.id}), setSelected(new Set()))}
-            className={cn('-mb-px inline-flex cursor-pointer items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-semibold whitespace-nowrap transition-colors', tab.id === t.id ? 'border-primary text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800')}
+            className={cn('-mb-px inline-flex cursor-pointer items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-semibold whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/30', tab.id === t.id ? 'border-primary text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800')}
           >
             {t.label}
             {t.id === 'today' && !!counts.data?.today && <span className="rounded-full bg-blue-100 px-1.5 text-[11px] font-bold text-blue-700">{counts.data.today}</span>}
@@ -189,7 +208,7 @@ function TasksPage() {
 
       <Card className="overflow-hidden">
         <FilterBar className="border-b border-slate-100 p-3" active={filtersActive} onClear={() => (setQDraft(''), navigate({search: {tab: s.tab, sort: s.sort}, replace: true}))}>
-          <form onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
+          <form noValidate onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
             <SearchInput size="sm" value={qDraft} onChange={(v) => (setQDraft(v), !v && set({q: undefined}))} placeholder="Search tasks, people, deals…" />
           </form>
           <NativeSelect size="sm" aria-label="Assigned to" value={assignee} onChange={(e) => set({assignee: e.target.value === me.id ? undefined : e.target.value})}>
@@ -225,6 +244,8 @@ function TasksPage() {
           rows={list.data}
           columns={columns}
           loading={list.isLoading}
+          error={list.error}
+          onRetry={() => list.refetch()}
           selected={canEdit ? selected : undefined}
           onSelect={canEdit ? setSelected : undefined}
           onRowClick={(t) => canEdit && create.open({kind: 'task', task: t})}
@@ -242,19 +263,19 @@ function TasksPage() {
 
       <BulkBar count={selected.size} onClear={() => setSelected(new Set())}>
         {tab.id === 'done' ? (
-          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => bulk.mutate({action: 'reopen'})}><RotateCcw /> Reopen</Button>
+          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={bulk.isPending} pending={bulk.isPending && bulk.variables?.action === 'reopen'} pendingLabel="Reopening…" onClick={() => bulk.mutate({action: 'reopen'})}><RotateCcw /> Reopen</Button>
         ) : (
-          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" onClick={() => bulk.mutate({action: 'complete'})}><CheckCircle2 /> Complete</Button>
+          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={bulk.isPending} pending={bulk.isPending && bulk.variables?.action === 'complete'} pendingLabel="Completing…" onClick={() => bulk.mutate({action: 'complete'})}><CheckCircle2 /> Complete</Button>
         )}
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white"><UserCheck /> Assign</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={bulk.isPending} aria-busy={(bulk.isPending && bulk.variables?.action === 'assign') || undefined}><UserCheck /> Assign</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             {team.data?.map((u) => <DropdownMenuItem key={u.id} onSelect={() => bulk.mutate({action: 'assign', value: u.id})}>{u.name}</DropdownMenuItem>)}
           </DropdownMenuContent>
         </DropdownMenu>
-        <RescheduleMenu onPick={(iso) => bulk.mutate({action: 'reschedule', value: iso})} />
+        <RescheduleMenu busy={bulk.isPending} onPick={(iso) => bulk.mutate({action: 'reschedule', value: iso})} />
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200"><Trash2 /> Delete</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" disabled={bulk.isPending} aria-busy={(bulk.isPending && bulk.variables?.action === 'delete') || undefined}><Trash2 /> Delete</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             <DropdownMenuLabel>Delete {selected.size} tasks?</DropdownMenuLabel>
             <DropdownMenuItem destructive onSelect={() => bulk.mutate({action: 'delete'})}>Yes, delete</DropdownMenuItem>
@@ -265,7 +286,7 @@ function TasksPage() {
   );
 }
 
-function RescheduleMenu({onPick}: {onPick: (iso: string) => void}) {
+function RescheduleMenu({onPick, busy}: {onPick: (iso: string) => void; busy?: boolean}) {
   const [custom, setCustom] = useState('');
   const at = (days: number) => {
     const d = new Date();
@@ -275,7 +296,7 @@ function RescheduleMenu({onPick}: {onPick: (iso: string) => void}) {
   };
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white"><CalendarClock /> Reschedule</Button></DropdownMenuTrigger>
+      <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={busy}><CalendarClock /> Reschedule</Button></DropdownMenuTrigger>
       <DropdownMenuContent align="center" className="w-56">
         <DropdownMenuItem onSelect={() => onPick(at(0))}>Today</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => onPick(at(1))}>Tomorrow</DropdownMenuItem>

@@ -31,7 +31,7 @@ function ReportsLayout() {
                 to={n.to}
                 aria-current={active ? 'page' : undefined}
                 className={cn(
-                  'inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-all',
+                  'inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-semibold whitespace-nowrap transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30',
                   active ? 'bg-card text-slate-900 shadow-soft' : 'text-slate-500 hover:text-slate-800',
                 )}
               >

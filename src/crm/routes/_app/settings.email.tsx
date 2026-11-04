@@ -14,9 +14,11 @@ import {Card} from '@/components/ui/card';
 import {confirm} from '@/components/ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Checkbox, Field, Input, Label, NativeSelect, Switch} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
+import {LoadError} from '@/components/data-table';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/menu';
 import {IconBadge} from '@/components/ui/misc';
-import {api} from '@/lib/api';
+import {api, ApiError} from '@/lib/api';
 import {ago} from '@/lib/format';
 import {keys, useApiMutation, useEmailAccounts, useMe, useSettings} from '@/lib/queries';
 import type {EmailAccount, EmailProvider} from '@/lib/types';
@@ -58,6 +60,10 @@ const API_PROVIDERS: {id: Extract<EmailProvider, 'RESEND' | 'POSTMARK' | 'SENDGR
   {id: 'MAILGUN', name: 'Mailgun', note: 'US or EU region, inbound routes'},
 ];
 
+/** The server names nested fields `account.fromEmail`, `credentials.domain`: they belong on `fromEmail`, `domain`. */
+const flatFields = (e: unknown) =>
+  e instanceof ApiError ? new ApiError(e.message, e.status, Object.fromEntries(Object.entries(e.fields).map(([k, v]) => [k.replace(/^(account|credentials)\./, ''), v]))) : e;
+
 function copy(text: string) {
   navigator.clipboard.writeText(text);
   toast.success('Copied');
@@ -81,7 +87,7 @@ function OptionCard({step, icon, title, description, bullets, onClick, tone}: {s
     <Card interactive className="group relative flex flex-col p-5">
       <span className="absolute top-4 right-4 flex size-6 items-center justify-center rounded-full bg-brand text-[11px] font-extrabold text-white shadow-glow">{step}</span>
       <IconBadge tone={tone} className="size-12">{icon}</IconBadge>
-      <h3 className="mt-4 text-base font-bold text-slate-900">{title}</h3>
+      <h2 className="mt-4 text-base font-bold text-slate-900">{title}</h2>
       <p className="mt-1 text-sm text-muted-foreground">{description}</p>
       <ul className="mt-3 grid flex-1 gap-1.5 text-sm text-slate-600">
         {bullets.map((b) => <li key={b} className="flex items-start gap-2"><CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />{b}</li>)}
@@ -97,13 +103,13 @@ function OptionCard({step, icon, title, description, bullets, onClick, tone}: {s
 
 type Meta = {fromName: string; fromEmail: string; shared: boolean};
 
-function SenderFields({meta, setMeta}: {meta: Meta; setMeta: (m: Meta) => void}) {
+function SenderFields({meta, setMeta, error, blur}: {meta: Meta; setMeta: (m: Meta) => void; error: (name: 'fromName' | 'fromEmail') => string | undefined; blur: (name: 'fromName' | 'fromEmail') => () => void}) {
   const {isAdmin} = useMe();
   return (
     <div className="grid gap-4 border-t border-slate-100 pt-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="From name" htmlFor="m-name"><Input id="m-name" required value={meta.fromName} onChange={(e) => setMeta({...meta, fromName: e.target.value})} /></Field>
-        <Field label="From email" htmlFor="m-email"><Input id="m-email" type="email" required value={meta.fromEmail} onChange={(e) => setMeta({...meta, fromEmail: e.target.value})} /></Field>
+        <Field label="From name" htmlFor="m-name" error={error('fromName')}><Input id="m-name" value={meta.fromName} onChange={(e) => setMeta({...meta, fromName: e.target.value})} onBlur={blur('fromName')} /></Field>
+        <Field label="From email" htmlFor="m-email" error={error('fromEmail')}><Input id="m-email" type="email" value={meta.fromEmail} onChange={(e) => setMeta({...meta, fromEmail: e.target.value})} onBlur={blur('fromEmail')} /></Field>
       </div>
       <p className="text-xs text-muted-foreground">Add a signature (with a logo or headshot) from the account's menu once it's connected.</p>
       {isAdmin && (
@@ -144,10 +150,23 @@ function SetupDialog({onClose}: {onClose: () => void}) {
     },
   );
 
+  const f = useFormState(
+    {fromName: meta.fromName, fromEmail: meta.fromEmail, domain: key.domain, messageStream: key.messageStream},
+    {
+      fromName: [is.required('Enter the name people see, like your name or company.'), is.maxLength(120)],
+      fromEmail: [is.required('Enter the address you send from.'), is.email()],
+      domain:
+        provider === 'MAILGUN'
+          ? [is.required('Enter your Mailgun sending domain.'), is.pattern(/^[a-z0-9.-]{3,253}$/i, 'Use a domain name like mg.example.com.')]
+          : [],
+      messageStream: [is.maxLength(100)],
+    },
+  );
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !create.isPending && onClose()}>
       <DialogContent size="md">
-        <form onSubmit={(e) => (e.preventDefault(), create.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => create.mutate(undefined, {onError: (e) => f.fail(flatFields(e))}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>Connect a sending API</DialogTitle>
             <DialogDescription>Deliver through a transactional email service using your verified domain.</DialogDescription>
@@ -155,7 +174,7 @@ function SetupDialog({onClose}: {onClose: () => void}) {
           <DialogBody>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               {API_PROVIDERS.map((p) => (
-                <button key={p.id} type="button" onClick={() => setProvider(p.id)} className={cn('cursor-pointer rounded-xl border p-3 text-left transition-all', provider === p.id ? 'border-primary bg-accent/60 ring-2 ring-primary/15' : 'border-border hover:border-slate-300')}>
+                <button key={p.id} type="button" aria-pressed={provider === p.id} onClick={() => setProvider(p.id)} className={cn('cursor-pointer rounded-xl border p-3 text-left transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30', provider === p.id ? 'border-primary bg-accent/60 ring-2 ring-primary/15' : 'border-border hover:border-slate-300')}>
                   <p className="text-sm font-bold text-slate-900">{p.name}</p>
                   <p className="text-xs text-muted-foreground">{p.note}</p>
                 </button>
@@ -163,22 +182,22 @@ function SetupDialog({onClose}: {onClose: () => void}) {
             </div>
             <SecretLine name={secret} present={secrets.data?.[secret]} />
             {provider === 'POSTMARK' && (
-              <Field label="Message stream" htmlFor="k-stream" hint="Default: outbound"><Input id="k-stream" value={key.messageStream} onChange={(e) => setKey({...key, messageStream: e.target.value})} placeholder="outbound" /></Field>
+              <Field label="Message stream" htmlFor="k-stream" hint="Default: outbound" error={f.error('messageStream')}><Input id="k-stream" value={key.messageStream} onChange={(e) => setKey({...key, messageStream: e.target.value})} onBlur={f.blur('messageStream')} placeholder="outbound" /></Field>
             )}
             <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">Sending APIs don't receive mail. After connecting, open the account's menu → <b>How replies come back</b> to add your provider's inbound address as the reply-to.</p>
             {provider === 'MAILGUN' && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Field label="Sending domain" htmlFor="k-domain"><Input id="k-domain" required value={key.domain} onChange={(e) => setKey({...key, domain: e.target.value})} placeholder="mg.yourdomain.com" /></Field>
+                <Field label="Sending domain" htmlFor="k-domain" error={f.error('domain')}><Input id="k-domain" value={key.domain} onChange={(e) => setKey({...key, domain: e.target.value})} onBlur={f.blur('domain')} placeholder="mg.yourdomain.com" /></Field>
                 <Field label="Region" htmlFor="k-region">
                   <NativeSelect id="k-region" value={key.region} onChange={(e) => setKey({...key, region: e.target.value})}><option value="us">US</option><option value="eu">EU</option></NativeSelect>
                 </Field>
               </div>
             )}
-            <SenderFields meta={meta} setMeta={setMeta} />
+            <SenderFields meta={meta} setMeta={setMeta} error={f.error} blur={f.blur} />
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={create.isPending || !secrets.data?.[secret]}>{create.isPending ? <Loader2 className="animate-spin" /> : <Zap />} Test & connect</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={create.isPending}>Cancel</Button>
+            <Button type="submit" disabled={!secrets.data?.[secret]} pending={create.isPending} pendingLabel="Connecting…"><Zap /> Test & connect</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -205,7 +224,7 @@ function OAuthDialog({onClose}: {onClose: () => void}) {
             {kind: 'google' as const, name: 'Gmail / Google Workspace', ok: oauth?.googleConfigured, color: 'bg-rose-50 text-rose-600'},
             {kind: 'microsoft' as const, name: 'Outlook / Microsoft 365', ok: oauth?.microsoftConfigured, color: 'bg-sky-50 text-sky-600'},
           ].map((p) => (
-            <button key={p.kind} disabled={!p.ok} onClick={() => start(p.kind)} className="group flex cursor-pointer items-center gap-4 rounded-xl border border-border p-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary hover:shadow-lift disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none">
+            <button key={p.kind} type="button" disabled={!p.ok} onClick={() => start(p.kind)} className="group flex cursor-pointer items-center gap-4 rounded-xl border border-border p-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary hover:shadow-lift disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-none">
               <span className={cn('flex size-11 items-center justify-center rounded-xl', p.color)}><Mail className="size-5" /></span>
               <div className="flex-1">
                 <p className="text-sm font-bold text-slate-900">{p.name}</p>
@@ -240,11 +259,13 @@ function AccountRow({account}: {account: EmailAccount}) {
     invalidate: [keys.email],
     onSuccess: (r) => (r.ok ? toast.success(r.detail) : toast.error(r.detail), setTestTo(null)),
   });
-  const sync = useApiMutation(() => api.post<{stored: number; error?: string}>(`/email/accounts/${account.id}/sync`), {
+  // The sync runs as a background job now: say so instead of counting emails here.
+  const sync = useApiMutation(() => api.post<{stored: number; queued?: boolean; error?: string}>(`/email/accounts/${account.id}/sync`), {
     invalidate: [keys.email],
-    onSuccess: (r) => (r.error ? toast.error(r.error) : toast.success(`${r.stored} new email${r.stored === 1 ? '' : 's'} logged`)),
+    onSuccess: (r) => (r.error ? toast.error(r.error) : toast.success(r.queued ? 'Syncing in the background. New emails appear in a minute.' : `${r.stored} new email${r.stored === 1 ? '' : 's'} logged`)),
   });
   const st = STATUS[account.status];
+  const testForm = useFormState({testTo: testTo ?? ''}, {testTo: [is.required('Enter the address to send the test to.'), is.email()]});
 
   return (
     <div className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-center">
@@ -266,10 +287,10 @@ function AccountRow({account}: {account: EmailAccount}) {
         <ReplyCaptureLine account={account} onSetup={() => setDialog('replies')} />
       </div>
       <div className="flex items-center gap-3 self-start sm:self-center">
-        <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600"><Switch checked={account.trackOpens} onCheckedChange={(v) => update.mutate({trackOpens: v})} aria-label="Track opens" /> Opens</label>
-        <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600"><Switch checked={account.trackClicks} onCheckedChange={(v) => update.mutate({trackClicks: v})} aria-label="Track clicks" /> Clicks</label>
+        <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600"><Switch checked={account.trackOpens} disabled={update.isPending} onCheckedChange={(v) => update.mutate({trackOpens: v})} aria-label="Track opens" /> Opens</label>
+        <label className="flex items-center gap-1.5 text-xs font-medium text-slate-600"><Switch checked={account.trackClicks} disabled={update.isPending} onCheckedChange={(v) => update.mutate({trackClicks: v})} aria-label="Track clicks" /> Clicks</label>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button variant="secondary" size="icon-sm" aria-label="Account actions">{test.isPending || sync.isPending ? <Loader2 className="animate-spin" /> : <MoreHorizontal />}</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button variant="secondary" size="icon-sm" aria-label={test.isPending ? 'Testing…' : sync.isPending ? 'Syncing…' : 'Account actions'} pending={(test.isPending && testTo === null) || sync.isPending}><MoreHorizontal /></Button></DropdownMenuTrigger>
           <DropdownMenuContent>
             <DropdownMenuItem onSelect={() => test.mutate(undefined)}><Zap /> Test connection</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setTestTo(account.fromEmail)}><Send /> Send test email…</DropdownMenuItem>
@@ -287,12 +308,12 @@ function AccountRow({account}: {account: EmailAccount}) {
       {testTo !== null && (
         <Dialog open onOpenChange={(o) => !o && setTestTo(null)}>
           <DialogContent size="sm">
-            <form onSubmit={(e) => (e.preventDefault(), test.mutate(testTo))} className="flex min-h-0 flex-1 flex-col">
+            <form {...testForm.form(() => test.mutate(testTo, {onError: testForm.fail}))} className="flex min-h-0 flex-1 flex-col">
               <DialogHeader><DialogTitle>Send a test email</DialogTitle></DialogHeader>
-              <DialogBody><Field label="Send to" htmlFor="t-to"><Input id="t-to" type="email" required value={testTo} onChange={(e) => setTestTo(e.target.value)} /></Field></DialogBody>
+              <DialogBody><Field label="Send to" htmlFor="t-to" error={testForm.error('testTo')}><Input id="t-to" type="email" value={testTo} onChange={(e) => setTestTo(e.target.value)} onBlur={testForm.blur('testTo')} /></Field></DialogBody>
               <DialogFooter>
-                <Button type="button" variant="secondary" onClick={() => setTestTo(null)}>Cancel</Button>
-                <Button type="submit" disabled={test.isPending}>{test.isPending ? <Loader2 className="animate-spin" /> : <Send />} Send test</Button>
+                <Button type="button" variant="secondary" onClick={() => setTestTo(null)} disabled={test.isPending}>Cancel</Button>
+                <Button type="submit" pending={test.isPending} pendingLabel="Sending…"><Send /> Send test</Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -328,6 +349,13 @@ function EmailSettings() {
 
   const saveSettings = useApiMutation((patch: Record<string, string>) => api.patch('/settings', patch), {invalidate: [keys.settings], success: 'Saved'});
   const oauth = settings.data?.oauth;
+  const saving = (key: string) => saveSettings.isPending && !!saveSettings.variables && key in saveSettings.variables;
+  const bccForm = useFormState({bccAddress: bcc}, {bccAddress: [is.email('Enter a valid address, like log@inbound.yourdomain.com.')]});
+  const googleForm = useFormState({googleClientId: oauthForm.googleClientId}, {googleClientId: [is.maxLength(300)]});
+  const msForm = useFormState(
+    {microsoftClientId: oauthForm.microsoftClientId, microsoftTenant: oauthForm.microsoftTenant},
+    {microsoftClientId: [is.maxLength(300)], microsoftTenant: [is.pattern(/^[A-Za-z0-9.-]{1,100}$/, 'Use common, organizations, or your tenant ID (letters, numbers, dots and dashes).')]},
+  );
 
   return (
     <div>
@@ -355,6 +383,8 @@ function EmailSettings() {
       <SettingsSection title="Connected accounts" description="Your accounts and shared team accounts you can send from.">
         {accounts.isLoading ? (
           <Loader2 className="size-5 animate-spin text-primary" />
+        ) : accounts.isError && !accounts.data ? (
+          <LoadError error={accounts.error} onRetry={() => accounts.refetch()} />
         ) : accounts.data?.length ? (
           <div className="divide-y divide-slate-100">{accounts.data.map((a) => <AccountRow key={a.id} account={a} />)}</div>
         ) : (
@@ -382,39 +412,41 @@ function EmailSettings() {
                   (<code>https://user:password@your-site/…</code>).
                 </p>
               </div>
-              <Field label="BCC logging address" htmlFor="bcc" hint="The inbound address you created at the provider (e.g. log@inbound.yourdomain.com). Reps BCC it from any mail client and the email lands on the contact's timeline.">
-                <div className="flex gap-2">
-                  <Input id="bcc" type="email" value={bcc} onChange={(e) => setBcc(e.target.value)} placeholder="log@inbound.yourdomain.com" />
-                  <Button variant="secondary" onClick={() => saveSettings.mutate({bccAddress: bcc})}>Save</Button>
-                </div>
-              </Field>
+              <form {...bccForm.form(() => saveSettings.mutate({bccAddress: bcc}, {onError: bccForm.fail}))}>
+                <Field label="BCC logging address" htmlFor="bcc" hint="The inbound address you created at the provider (e.g. log@inbound.yourdomain.com). Reps BCC it from any mail client and the email lands on the contact's timeline." error={bccForm.error('bccAddress')}>
+                  <div className="flex items-start gap-2">
+                    <Input id="bcc" type="email" value={bcc} onChange={(e) => setBcc(e.target.value)} onBlur={bccForm.blur('bccAddress')} placeholder="log@inbound.yourdomain.com" />
+                    <Button type="submit" variant="secondary" disabled={saveSettings.isPending} pending={saving('bccAddress')} pendingLabel="Saving…">Save</Button>
+                  </div>
+                </Field>
+              </form>
             </div>
           </SettingsSection>
 
           <SettingsSection title="OAuth apps for Gmail & Outlook" description="One-time admin setup. Create an OAuth client in Google Cloud / Microsoft Entra: its client ID goes here, its secret in the site dashboard.">
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              <div className="grid content-start gap-3 rounded-xl bg-slate-50 p-4">
+              <form {...googleForm.form(() => saveSettings.mutate({googleClientId: oauthForm.googleClientId}, {onError: googleForm.fail}))} className="grid content-start gap-3 rounded-xl bg-slate-50 p-4">
                 <div className="flex items-center justify-between">
                   <p className="flex items-center gap-2 text-sm font-bold text-slate-900"><KeyRound className="size-4 text-rose-500" /> Google</p>
                   {oauth?.googleConfigured && <Badge tone="green">Configured</Badge>}
                 </div>
                 <CopyField label="Authorized redirect URI" value={oauth?.googleRedirectUri ?? ''} />
-                <Field label="Client ID" htmlFor="g-id"><Input id="g-id" value={oauthForm.googleClientId} onChange={(e) => setOauthForm({...oauthForm, googleClientId: e.target.value})} /></Field>
+                <Field label="Client ID" htmlFor="g-id" error={googleForm.error('googleClientId')}><Input id="g-id" value={oauthForm.googleClientId} onChange={(e) => setOauthForm({...oauthForm, googleClientId: e.target.value})} onBlur={googleForm.blur('googleClientId')} /></Field>
                 <SecretLine name="GOOGLE_CLIENT_SECRET" present={secrets.data?.GOOGLE_CLIENT_SECRET} />
                 <p className="text-xs text-muted-foreground">Scopes: gmail.send, gmail.readonly. Public apps need Google's verification for these scopes; internal Workspace apps don't.</p>
-                <Button variant="secondary" onClick={() => saveSettings.mutate({googleClientId: oauthForm.googleClientId})}>Save Google app</Button>
-              </div>
-              <div className="grid content-start gap-3 rounded-xl bg-slate-50 p-4">
+                <Button type="submit" variant="secondary" disabled={saveSettings.isPending} pending={saving('googleClientId')} pendingLabel="Saving…">Save Google app</Button>
+              </form>
+              <form {...msForm.form(() => saveSettings.mutate({microsoftClientId: oauthForm.microsoftClientId, microsoftTenant: oauthForm.microsoftTenant}, {onError: msForm.fail}))} className="grid content-start gap-3 rounded-xl bg-slate-50 p-4">
                 <div className="flex items-center justify-between">
                   <p className="flex items-center gap-2 text-sm font-bold text-slate-900"><KeyRound className="size-4 text-sky-500" /> Microsoft</p>
                   {oauth?.microsoftConfigured && <Badge tone="green">Configured</Badge>}
                 </div>
                 <CopyField label="Redirect URI (Web)" value={oauth?.microsoftRedirectUri ?? ''} />
-                <Field label="Application (client) ID" htmlFor="ms-id"><Input id="ms-id" value={oauthForm.microsoftClientId} onChange={(e) => setOauthForm({...oauthForm, microsoftClientId: e.target.value})} /></Field>
+                <Field label="Application (client) ID" htmlFor="ms-id" error={msForm.error('microsoftClientId')}><Input id="ms-id" value={oauthForm.microsoftClientId} onChange={(e) => setOauthForm({...oauthForm, microsoftClientId: e.target.value})} onBlur={msForm.blur('microsoftClientId')} /></Field>
                 <SecretLine name="MICROSOFT_CLIENT_SECRET" present={secrets.data?.MICROSOFT_CLIENT_SECRET} />
-                <Field label="Tenant" htmlFor="ms-tenant" hint="common, organizations, or your tenant ID"><Input id="ms-tenant" value={oauthForm.microsoftTenant} onChange={(e) => setOauthForm({...oauthForm, microsoftTenant: e.target.value})} /></Field>
-                <Button variant="secondary" onClick={() => saveSettings.mutate({microsoftClientId: oauthForm.microsoftClientId, microsoftTenant: oauthForm.microsoftTenant})}>Save Microsoft app</Button>
-              </div>
+                <Field label="Tenant" htmlFor="ms-tenant" hint="common, organizations, or your tenant ID" error={msForm.error('microsoftTenant')}><Input id="ms-tenant" value={oauthForm.microsoftTenant} onChange={(e) => setOauthForm({...oauthForm, microsoftTenant: e.target.value})} onBlur={msForm.blur('microsoftTenant')} /></Field>
+                <Button type="submit" variant="secondary" disabled={saveSettings.isPending} pending={saving('microsoftClientId')} pendingLabel="Saving…">Save Microsoft app</Button>
+              </form>
             </div>
           </SettingsSection>
         </>

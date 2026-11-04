@@ -80,7 +80,12 @@ export const recycleBin = new Hono<AppEnv>()
       try {
         restored.push(await restoreOne(c, entry));
       } catch (e) {
-        failed.push({id: entry.id, error: (e as Error).message});
+        // Our own words (a conflict says what is in the way); never a database error's text.
+        if (e instanceof HTTPException) failed.push({id: entry.id, error: e.message});
+        else {
+          console.error('[bin] restore', entry.entity, String((e as Error)?.message ?? e).slice(0, 200));
+          failed.push({id: entry.id, error: `${entry.label}: could not be restored. Try again, or ask an admin.`});
+        }
       }
     }
     return c.json({restored, failed});

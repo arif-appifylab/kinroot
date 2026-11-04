@@ -3,10 +3,10 @@ import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
 import {Prisma} from '../../../generated/prisma/client';
-import {currentUser, type AppContext, type AppEnv} from '../kit/guards';
+import {currentUser, requireRole, type AppContext, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
 import {findLikelyDuplicates, lastScans, scanDuplicates, type DupEntity} from '../lib/duplicates';
-import {notFound, ownerScope, valid} from '../lib/http';
+import {intParam, MAX_PAGE, notFound, ownerScope, valid} from '../lib/http';
 import {userSelect} from '../lib/users';
 
 const entity = z.enum(['contact', 'company']);
@@ -57,7 +57,7 @@ async function visiblePairs(c: AppContext, kind: DupEntity, status: 'open' | 'di
 
 /** Duplicate queue (Settings → Duplicates) and the "Possible duplicate" hint in the create dialogs. */
 export const duplicates = new Hono<AppEnv>()
-  .get('/', valid('query', z.object({entity: entity.default('contact'), status: z.enum(['open', 'dismissed']).default('open'), low: z.enum(['1']).optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(25)})), async (c) => {
+  .get('/', valid('query', z.object({entity: entity.default('contact'), status: z.enum(['open', 'dismissed']).default('open'), low: z.enum(['1']).optional(), page: intParam(1, MAX_PAGE).default(1), pageSize: intParam(1, 100).default(25)})), async (c) => {
     const db = c.var.db;
     const q = c.req.valid('query');
     const {ids, total} = await visiblePairs(c, q.entity, q.status, q.page, q.pageSize, q.low || q.status === 'dismissed' ? 0 : MIN_SCORE);
@@ -81,8 +81,8 @@ export const duplicates = new Hono<AppEnv>()
     return c.json({contact: contact.total, company: company.total, lowConfidence: {contact: low[0].total - contact.total, company: low[1].total - company.total}, lastScan: scans});
   })
 
-  /** Full scan now (also runs from the job runner every few hours). */
-  .post('/scan', valid('json', z.object({entity: entity.optional()})), async (c) => {
+  /** Full scan now (also runs from the job runner every few hours). Admins only: it compares every record. */
+  .post('/scan', requireRole('ADMIN'), valid('json', z.object({entity: entity.optional()})), async (c) => {
     const db = c.var.db;
     const which = c.req.valid('json').entity;
     const result: Partial<Record<DupEntity, Awaited<ReturnType<typeof scanDuplicates>>>> = {};

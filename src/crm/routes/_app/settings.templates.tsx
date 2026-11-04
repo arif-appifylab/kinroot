@@ -1,14 +1,16 @@
 import {createFileRoute} from '@tanstack/react-router';
-import {Copy, Eye, FileText, LayoutTemplate, Loader2, Pencil, Plus, Sparkles, Trash2} from 'lucide-react';
+import {Copy, Eye, FileText, LayoutTemplate, Pencil, Plus, Sparkles, Trash2} from 'lucide-react';
 import {useState} from 'react';
 
 import {EmailPreview, RichEditor, Segmented} from '@/components/email-editor';
+import {LoadError} from '@/components/data-table';
 import {SettingsSection} from '@/components/settings-section';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {confirm} from '@/components/ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Checkbox, Field, Input, Label} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {EmptyState} from '@/components/ui/misc';
 import {api} from '@/lib/api';
 import {GALLERY, GALLERY_CATEGORIES, type GalleryTemplate} from '@/lib/email-gallery';
@@ -60,12 +62,17 @@ function TemplateDialog({template, onClose}: {template: EmailTemplate | null; on
     },
     {invalidate: [keys.email], success: 'Template saved', onSuccess: onClose},
   );
-  const empty = isEmptyHtml(form.html);
+  const f = useFormState(form, {
+    name: [is.required('Give the template a name.'), is.maxLength(100)],
+    subject: [is.required('Write a subject line.'), is.maxLength(500)],
+    preheader: [is.maxLength(300)],
+    html: [(html) => (isEmptyHtml(html) ? 'Write the message.' : null)],
+  });
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !save.isPending && onClose()}>
       <DialogContent size="xl">
-        <form onSubmit={(e) => (e.preventDefault(), !empty && save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>{template ? 'Edit template' : 'New template'}</DialogTitle>
             <DialogDescription>Merge fields fill in per recipient; add a fallback for empty values. The preview uses sample data.</DialogDescription>
@@ -73,14 +80,14 @@ function TemplateDialog({template, onClose}: {template: EmailTemplate | null; on
           <DialogBody className="grid-cols-1 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <div className="grid content-start gap-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Field label="Template name" htmlFor="tp-name"><Input id="tp-name" required value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} /></Field>
+                <Field label="Template name" htmlFor="tp-name" error={f.error('name')}><Input id="tp-name" value={form.name} maxLength={100} onChange={(e) => setForm({...form, name: e.target.value})} onBlur={f.blur('name')} /></Field>
                 <Field label="Layout" hint={form.layout === 'branded' ? 'Header, footer and unsubscribe link' : 'Looks like a personal email'}>
                   <Segmented label="Layout" value={form.layout} onChange={(layout) => setForm({...form, layout})} options={LAYOUTS} />
                 </Field>
               </div>
-              <Field label="Subject" htmlFor="tp-subject"><Input id="tp-subject" required value={form.subject} onChange={(e) => setForm({...form, subject: e.target.value})} placeholder="e.g. Great speaking with you, {{contact.first_name|there}}" /></Field>
-              <Field label="Preview text" htmlFor="tp-pre" hint="Shown after the subject in most inboxes."><Input id="tp-pre" value={form.preheader} maxLength={300} onChange={(e) => setForm({...form, preheader: e.target.value})} /></Field>
-              <Field label="Message">
+              <Field label="Subject" htmlFor="tp-subject" error={f.error('subject')}><Input id="tp-subject" value={form.subject} onChange={(e) => setForm({...form, subject: e.target.value})} onBlur={f.blur('subject')} placeholder="e.g. Great speaking with you, {{contact.first_name|there}}" /></Field>
+              <Field label="Preview text" htmlFor="tp-pre" hint="Shown after the subject in most inboxes." error={f.error('preheader')}><Input id="tp-pre" value={form.preheader} maxLength={300} onChange={(e) => setForm({...form, preheader: e.target.value})} /></Field>
+              <Field label="Message" error={f.error('html')}>
                 <RichEditor value={form.html} onChange={(html) => setForm((f) => ({...f, html}))} minHeight={320} />
               </Field>
               <div className="flex items-center gap-2">
@@ -94,8 +101,8 @@ function TemplateDialog({template, onClose}: {template: EmailTemplate | null; on
             </div>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending || empty}>{save.isPending && <Loader2 className="animate-spin" />} Save template</Button>
+            <Button type="button" variant="secondary" disabled={save.isPending} onClick={onClose}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel="Saving…">Save template</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -115,8 +122,8 @@ function GalleryPreview({template, onClose, onUse, busy}: {template: GalleryTemp
           <EmailPreview html={template.html} subject={template.subject} preheader={template.preheader} layout={template.layout} height={480} />
         </DialogBody>
         <DialogFooter>
-          <Button type="button" variant="secondary" onClick={onClose}>Close</Button>
-          <Button onClick={onUse} disabled={busy}>{busy ? <Loader2 className="animate-spin" /> : <Copy />} Use this template</Button>
+          <Button type="button" variant="secondary" disabled={busy} onClick={onClose}>Close</Button>
+          <Button type="button" onClick={onUse} pending={busy} pendingLabel="Copying…"><Copy /> Use this template</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -153,7 +160,7 @@ function Gallery({onCreated}: {onCreated: (t: EmailTemplate) => void}) {
             <p className="mt-2 truncate text-xs font-medium text-slate-600"><MergeText text={g.subject} /></p>
             <div className="mt-3 flex gap-1">
               <Button variant="ghost" size="sm" onClick={() => setPreviewing(g)}><Eye /> Preview</Button>
-              <Button variant="soft" size="sm" onClick={() => use.mutate(g.id)} disabled={use.isPending}><Copy /> Use</Button>
+              <Button variant="soft" size="sm" onClick={() => use.mutate(g.id)} disabled={use.isPending} pending={use.isPending && use.variables === g.id} pendingLabel="Copying…"><Copy /> Use</Button>
             </div>
           </div>
         ))}
@@ -172,6 +179,7 @@ function TemplateSettings() {
   return (
     <div>
       <SettingsSection title="Email templates" description="Reusable emails with merge fields, available in every composer." actions={<Button size="sm" onClick={() => setEditing('new')}><Plus /> New template</Button>}>
+        {templates.isError && <LoadError error={templates.error} onRetry={() => templates.refetch()} />}
         {templates.data?.length === 0 && <EmptyState icon={<FileText />} title="No templates yet" description="Start from the gallery below or write your own." />}
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {templates.data?.map((t) => (
@@ -187,8 +195,8 @@ function TemplateSettings() {
               <p className="mt-2 line-clamp-3 text-xs whitespace-pre-wrap text-muted-foreground"><MergeText text={t.body} /></p>
               {(t.ownerId === me.id || isAdmin) && (
                 <div className="mt-3 flex gap-1">
-                  <Button variant="ghost" size="sm" onClick={() => setEditing(t)}><Pencil /> Edit</Button>
-                  <Button variant="ghost" size="sm" className="text-destructive hover:bg-rose-50 hover:text-destructive" onClick={async () => (await confirm({title: `Delete "${t.name}"?`, confirmLabel: 'Delete', destructive: true})) && remove.mutate(t.id)}><Trash2 /> Delete</Button>
+                  <Button variant="ghost" size="sm" disabled={remove.isPending && remove.variables === t.id} onClick={() => setEditing(t)}><Pencil /> Edit</Button>
+                  <Button variant="ghost" size="sm" className="text-destructive hover:bg-rose-50 hover:text-destructive" pending={remove.isPending && remove.variables === t.id} pendingLabel="Deleting…" disabled={remove.isPending} onClick={async () => (await confirm({title: `Delete "${t.name}"?`, confirmLabel: 'Delete', destructive: true})) && remove.mutate(t.id)}><Trash2 /> Delete</Button>
                 </div>
               )}
             </div>

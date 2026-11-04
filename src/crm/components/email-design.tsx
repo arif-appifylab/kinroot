@@ -2,7 +2,7 @@
  * Settings → Email: the branded layout ("Email design") and per-account
  * HTML signatures with images.
  */
-import {ImagePlus, Loader2, Palette} from 'lucide-react';
+import {ImagePlus, Palette} from 'lucide-react';
 import {useEffect, useRef, useState} from 'react';
 import {toast} from 'sonner';
 
@@ -18,6 +18,7 @@ import {SettingsSection} from './settings-section';
 import {Button} from './ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from './ui/dialog';
 import {Field, Input, Switch, Textarea} from './ui/form';
+import {LoadError} from './data-table';
 
 const SAMPLE = GALLERY.find((g) => g.id === 'welcome-onboarding')!;
 
@@ -64,8 +65,9 @@ export function EmailDesignSection() {
     <SettingsSection
       title="Email design"
       description="The branded layout: a fixed header and footer wrapped around branded templates, the form autoresponder and any email sent with the Branded layout."
-      actions={<Button size="sm" onClick={() => save.mutate(undefined)} disabled={save.isPending || !q.data}>{save.isPending ? <Loader2 className="animate-spin" /> : <Palette />} Save design</Button>}
+      actions={<Button size="sm" onClick={() => save.mutate(undefined)} disabled={!q.data} pending={save.isPending} pendingLabel="Saving…"><Palette /> Save design</Button>}
     >
+      {q.isError && !q.data && <LoadError error={q.error} onRetry={() => q.refetch()} />}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="grid content-start gap-4">
           <p className="text-xs font-bold tracking-wide text-slate-400 uppercase">Header</p>
@@ -87,8 +89,8 @@ export function EmailDesignSection() {
           {design.logo === 'upload' && (
             <div className="flex flex-wrap items-center gap-3">
               {design.logoUrl && <img src={design.logoUrl} alt="" className="h-10 max-w-40 rounded border border-slate-100 bg-white object-contain p-1" />}
-              <Button type="button" variant="secondary" size="sm" disabled={uploading} onClick={() => fileRef.current?.click()}>
-                {uploading ? <Loader2 className="animate-spin" /> : <ImagePlus />} {design.logoUrl ? 'Replace image' : 'Upload image'}
+              <Button type="button" variant="secondary" size="sm" pending={uploading} pendingLabel="Uploading…" onClick={() => fileRef.current?.click()}>
+                <ImagePlus /> {design.logoUrl ? 'Replace image' : 'Upload image'}
               </Button>
               <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={(e) => onFile(e.target.files?.[0])} />
             </div>
@@ -133,7 +135,7 @@ export function SignatureDialog({account, onClose}: {account: EmailAccount; onCl
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent size="xl">
-        <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form noValidate onSubmit={(e) => (e.preventDefault(), !save.isPending && save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>Signature for {account.fromEmail}</DialogTitle>
             <DialogDescription>Added below every email sent from this account. Insert a logo or headshot with the image button, then pick a size.</DialogDescription>
@@ -149,8 +151,8 @@ export function SignatureDialog({account, onClose}: {account: EmailAccount; onCl
           </DialogBody>
           <DialogFooter>
             {account.signatureHtml && <Button type="button" variant="ghost" className="mr-auto text-destructive hover:text-destructive" onClick={() => setHtml('')}>Remove signature</Button>}
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending}>{save.isPending && <Loader2 className="animate-spin" />} Save signature</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel="Saving…">Save signature</Button>
           </DialogFooter>
         </form>
       </DialogContent>

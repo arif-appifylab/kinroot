@@ -1,4 +1,4 @@
-import {CheckCircle2, LifeBuoy, Loader2} from 'lucide-react';
+import {CheckCircle2, LifeBuoy} from 'lucide-react';
 import {useEffect, useRef, useState} from 'react';
 
 import {RichEditor} from '@/components/email-editor';
@@ -6,6 +6,7 @@ import {PublicCard} from '@/components/public-layout';
 import {PortalNav, SignInPrompt, type PortalSession} from '@/components/tickets/portal';
 import {Button} from '@/components/ui/button';
 import {Field, Input, NativeSelect} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {IconBadge} from '@/components/ui/misc';
 import {api} from '@/lib/api';
 import type {Brand} from '@/lib/brand';
@@ -30,6 +31,11 @@ function SupportHome({config}: {config: PortalConfig}) {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const startedAt = useRef(Date.now());
+  const f = useFormState(form, {
+    name: [is.maxLength(120)],
+    email: session ? [] : [is.required('Enter your email so we can reply.'), is.email(), is.maxLength(200)],
+    subject: [is.required('Enter a short summary of your request.'), is.maxLength(300)],
+  });
 
   useEffect(() => {
     if (config.enabled) api.get<{session: PortalSession | null}>('/public/support/me').then((r) => setSession(r.session)).catch(() => {});
@@ -61,7 +67,7 @@ function SupportHome({config}: {config: PortalConfig}) {
       if (r.signedIn && r.number) window.location.assign(`/support/tickets/${r.number}`);
       else setDone(true);
     } catch (e) {
-      setError((e as Error).message);
+      if (!f.fail(e)) setError((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -91,14 +97,14 @@ function SupportHome({config}: {config: PortalConfig}) {
             {config.intro && <p className="mt-1 text-sm text-muted-foreground">{config.intro}</p>}
           </div>
         </div>
-        <form onSubmit={(e) => (e.preventDefault(), submit())} className="mt-6 grid gap-4">
+        <form {...f.form(() => !busy && void submit())} className="mt-6 grid gap-4">
           {!session && (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Your name" htmlFor="sp-name"><Input id="sp-name" autoComplete="name" value={form.name} onChange={(e) => set({name: e.target.value})} /></Field>
-              <Field label="Email" htmlFor="sp-email"><Input id="sp-email" type="email" required autoComplete="email" value={form.email} onChange={(e) => set({email: e.target.value})} /></Field>
+              <Field label="Your name" htmlFor="sp-name" error={f.error('name')}><Input id="sp-name" autoComplete="name" value={form.name} onChange={(e) => set({name: e.target.value})} onBlur={f.blur('name')} /></Field>
+              <Field label="Email" htmlFor="sp-email" error={f.error('email')}><Input id="sp-email" type="email" autoComplete="email" value={form.email} onChange={(e) => set({email: e.target.value})} onBlur={f.blur('email')} placeholder="you@example.com" /></Field>
             </div>
           )}
-          <Field label="Subject" htmlFor="sp-subject"><Input id="sp-subject" required maxLength={300} value={form.subject} onChange={(e) => set({subject: e.target.value})} placeholder="A short summary" /></Field>
+          <Field label="Subject" htmlFor="sp-subject" error={f.error('subject')}><Input id="sp-subject" maxLength={300} value={form.subject} onChange={(e) => set({subject: e.target.value})} onBlur={f.blur('subject')} placeholder="A short summary" /></Field>
           {config.categories.length > 0 && (
             <Field label="Topic" htmlFor="sp-cat">
               <NativeSelect id="sp-cat" value={form.category} onChange={(e) => set({category: e.target.value})}>
@@ -112,9 +118,9 @@ function SupportHome({config}: {config: PortalConfig}) {
           </Field>
           {/* Honeypot: people never see it, bots fill it in. */}
           <input type="text" tabIndex={-1} autoComplete="off" aria-hidden className="absolute -left-[9999px] h-0 w-0 opacity-0" value={form.hp} onChange={(e) => set({hp: e.target.value})} />
-          {error && <p className="text-sm font-medium text-destructive">{error}</p>}
+          {error && <p role="alert" className="text-sm font-medium text-destructive">{error}</p>}
           <div className="flex justify-end">
-            <Button type="submit" disabled={busy}>{busy && <Loader2 className="animate-spin" />} Send request</Button>
+            <Button type="submit" pending={busy} pendingLabel="Sending…">Send request</Button>
           </div>
         </form>
       </PublicCard>

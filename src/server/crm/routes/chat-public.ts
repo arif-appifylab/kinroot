@@ -22,8 +22,9 @@ import {
   publicChatConfig,
   startChat,
   touchVisitor,
+  visitorIdFromToken,
   visitorMessage,
-  visitorPresence,
+  visitorPoll,
   visitorToken,
   visitorView,
   type VisitorMeta,
@@ -84,9 +85,11 @@ async function requireChat(c: AppContext, m: {page?: string | null; ancestor?: s
   return s;
 }
 
+const expired = () => new HTTPException(401, {message: 'Your chat session expired. Reload the page to start again.'});
+
 async function requireVisitor(c: AppContext, token: string | null | undefined) {
   const identity = await identityFromToken(c.var.db, token);
-  if (!identity) throw new HTTPException(401, {message: 'Your chat session expired. Reload the page to start again.'});
+  if (!identity) throw expired();
   return identity;
 }
 
@@ -219,17 +222,28 @@ export const chatPublic = new Hono<AppEnv>()
     '/chat/poll',
     valid('json', z.object({token: z.string().max(200), conversationId: z.string().max(60).nullish(), after: z.iso.datetime({offset: true}).nullish(), typing: z.boolean().optional(), visible: z.boolean().optional(), meta})),
     async (c) => {
+      // Every few seconds per open widget: settings and "anyone online" come from the Site Cache,
+      // the conversation, the visitor and what is new from one query (inbox/chat.ts visitorPoll).
       const db = c.var.db;
       const body = c.req.valid('json');
       const s = await requireChat(c, body.meta);
-      const identity = await requireVisitor(c, body.token);
-      await touchVisitor(db, identity, visitorMeta(c, body.meta));
-      const {away} = await chatAvailability(db, s);
-      if (!body.conversationId) return c.json({conversation: null, away});
-      const thread = await visitorConversation(c, identity, body.conversationId);
-      await visitorPresence(db, thread, {typing: body.typing, visible: body.visible});
-      const fresh = (await db.emailThread.findUnique({where: {id: thread.id}}))!;
-      return c.json({conversation: await visitorView(db, fresh, publicOrigin(c.req.raw), body.after ? new Date(body.after) : null), away});
+      const identityId = await visitorIdFromToken(body.token);
+      if (!identityId) throw expired();
+      if (!body.conversationId) {
+        const [identity, {away}] = await Promise.all([requireVisitor(c, body.token), chatAvailability(db, s)]);
+        await touchVisitor(db, identity, visitorMeta(c, body.meta));
+        return c.json({conversation: null, away});
+      }
+      const [polled, {away}] = await Promise.all([
+        visitorPoll(db, {threadId: body.conversationId, identityId, origin: publicOrigin(c.req.raw), after: body.after ? new Date(body.after) : null, typing: body.typing, visible: body.visible}),
+        chatAvailability(db, s),
+      ]);
+      if (!polled) {
+        await requireVisitor(c, body.token); // an expired visitor (401), else someone else's conversation (404)
+        throw notFound('Conversation');
+      }
+      await touchVisitor(db, polled.identity, visitorMeta(c, body.meta)); // writes at most every 15 s, or when the page changed
+      return c.json({conversation: polled.view, away});
     },
   )
 

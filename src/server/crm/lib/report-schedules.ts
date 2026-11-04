@@ -18,7 +18,7 @@ import {resultCsv} from '../routes/reports';
 import {audit} from './audit';
 import {emit} from './events';
 import {userScope} from './http';
-import {enqueue, kickJobs} from './jobs';
+import {deleteInChunks, enqueue} from './jobs';
 import {notify} from './notify';
 import {reportEmailContent, rangeText, type EmailSection} from './report-email';
 import {runReport} from './reports';
@@ -27,7 +27,7 @@ import {getSettings} from './settings';
 /**
  * Scheduled report emails. A schedule fires at wall-clock slots in its own
  * time zone (Intl maths from lib/scheduling, so DST moves the instant, not
- * the time of day). Each job-runner tick (`reportScheduleTick` in /jobs/run)
+ * the time of day). Each `crm-tick` run (`reportScheduleTick`)
  * takes the schedules whose `nextRunAt` has passed, claims the latest slot in
  * a `ReportScheduleSend` row (unique per schedule + slot, so overlapping
  * ticks fire once and missed slots are caught up once, not N times) and
@@ -384,21 +384,23 @@ export async function sendNow(db: Db, scheduleId: string, actor: User) {
 // ─── Tick ───
 
 /**
- * Runs from /jobs/run: claims the latest due slot of every schedule whose
+ * Runs from the `crm-tick` schedule: claims the latest due slot of every schedule whose
  * `nextRunAt` has passed (only the latest: a scheduler that was down for a
- * week sends one email, not seven) and moves `nextRunAt` past now.
+ * week sends one email, not seven) and moves `nextRunAt` past now. Stops at
+ * `until`; the schedules not reached are still due next minute.
  */
-export async function reportScheduleTick(db: Db, now = Date.now()) {
+export async function reportScheduleTick(db: Db, now = Date.now(), until = Infinity) {
   const due = await db.reportSchedule.findMany({where: {active: true, OR: [{nextRunAt: {lte: new Date(now)}}, {nextRunAt: null}]}, take: 200, orderBy: {nextRunAt: 'asc'}});
   let queued = 0;
   for (const s of due) {
+    if (Date.now() > until) break;
     const slot = latestSlot(s, now);
     const floor = Math.max(s.cursor.getTime(), s.lastSlotAt?.getTime() ?? 0);
     if (slot !== null && slot > floor && s.nextRunAt) {
       // The unique (schedule, slot) row is the exactly-once guard across overlapping ticks.
       const created = await db.reportScheduleSend.createManyAndReturn({data: [{scheduleId: s.id, slotAt: new Date(slot)}], skipDuplicates: true, select: {id: true}});
       if (created[0]) {
-        await enqueue(db, 'report.send', {sendId: created[0].id}, {maxAttempts: 4});
+        await enqueue(db, 'report.send', {sendId: created[0].id});
         queued++;
       }
     }
@@ -407,11 +409,11 @@ export async function reportScheduleTick(db: Db, now = Date.now()) {
       data: {nextRunAt: new Date(nextSlot(s, now)), ...(slot !== null && slot > floor && s.nextRunAt ? {lastSlotAt: new Date(slot)} : {})},
     });
   }
-  if (queued) kickJobs();
   return {due: due.length, queued};
 }
 
-/** Prunes the fire log after 90 days (pruneJobs). */
-export async function pruneScheduleSends(db: Db) {
-  await db.reportScheduleSend.deleteMany({where: {createdAt: {lt: new Date(Date.now() - 90 * DAY)}}});
+/** Prunes the fire log after 90 days (pruneJobs), in chunks until `until`. */
+export async function pruneScheduleSends(db: Db, until = Date.now() + 10_000) {
+  const cut = new Date(Date.now() - 90 * DAY);
+  return deleteInChunks(until, (n) => db.$executeRaw`DELETE FROM "ReportScheduleSend" WHERE id IN (SELECT id FROM "ReportScheduleSend" WHERE "createdAt" < ${cut} LIMIT ${n})`);
 }

@@ -1,16 +1,18 @@
 import {createFileRoute, Link} from '@tanstack/react-router';
-import {AlertTriangle, CalendarDays, Copy, Loader2, MoreHorizontal, RefreshCw, Trash2} from 'lucide-react';
+import {AlertTriangle, CalendarDays, Copy, MoreHorizontal, RefreshCw, Trash2} from 'lucide-react';
 import {useEffect, useState} from 'react';
 import {toast} from 'sonner';
 import {z} from 'zod';
 
 import {copyText, useCalendarState, useSchedulingProfile} from '@/components/booking/hooks';
 import {TimeZoneSelect} from '@/components/booking/slot-picker';
+import {LoadError} from '@/components/data-table';
 import {SettingsSection} from '@/components/settings-section';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {confirm} from '@/components/ui/confirm';
 import {Checkbox, Field, Input, Label, NativeSelect, Switch} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/menu';
 import {IconBadge} from '@/components/ui/misc';
 import {api} from '@/lib/api';
@@ -51,6 +53,7 @@ function CalendarSettings() {
         description={`${brand.name} hides busy times from booking pages, adds meetings you schedule here (with a Meet or Teams link for video calls) and logs calendar meetings with your contacts.`}
       >
         <div className="grid gap-4">
+          {cal.isError && !cal.data && <LoadError error={cal.error} onRetry={() => cal.refetch()} />}
           {conns.map((c) => <ConnectionCard key={c.id} conn={c} multiple={conns.length > 1} />)}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {(['google', 'microsoft'] as const).map((kind) => (
@@ -59,7 +62,7 @@ function CalendarSettings() {
                 type="button"
                 disabled={!providers?.[kind]}
                 onClick={() => (window.location.href = `/site-api/crm/calendar/oauth/${kind}/start`)}
-                className="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 p-4 text-left transition-all hover:border-primary/50 hover:shadow-soft disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-slate-200 disabled:hover:shadow-none"
+                className="flex cursor-pointer items-center gap-3 rounded-xl border border-slate-200 p-4 text-left transition-all outline-none hover:border-primary/50 hover:shadow-soft focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-slate-200 disabled:hover:shadow-none"
               >
                 <IconBadge className={PROVIDER[kind].cls}><CalendarDays /></IconBadge>
                 <span className="min-w-0">
@@ -111,24 +114,41 @@ function BookingProfile() {
     if (profile.data && !form) setForm({handle: profile.data.profile.handle, timezone: profile.data.profile.timezone});
   }, [profile.data, form]);
   const save = useApiMutation(() => api.patch('/scheduling/profile', form), {invalidate: [keys.scheduling], success: 'Saved'});
+  const f = useFormState(form ?? {handle: '', timezone: ''}, {
+    handle: [
+      is.required('Choose a handle, like your first name.'),
+      (v) => v.trim().length < 2 && 'Use at least 2 characters.',
+      is.maxLength(40),
+      is.pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Use lowercase letters, numbers and single dashes (no dash at the start or end).'),
+    ],
+  });
+  if (profile.isError && !profile.data) {
+    return (
+      <SettingsSection title="Your booking page">
+        <LoadError error={profile.error} onRetry={() => profile.refetch()} />
+      </SettingsSection>
+    );
+  }
   if (!form || !profile.data) return null;
   const base = profile.data.baseUrl.slice(0, profile.data.baseUrl.length - profile.data.profile.handle.length);
   const dirty = form.handle !== profile.data.profile.handle || form.timezone !== profile.data.profile.timezone;
   return (
+    <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))}>
     <SettingsSection
       title="Your booking page"
       description={<>Your booking links live under this address. Manage them in <Link to="/meetings" search={{tab: 'links'}} className="font-semibold text-primary hover:underline">Meetings</Link>.</>}
-      actions={<Button size="sm" onClick={() => save.mutate(undefined)} disabled={!dirty || save.isPending}>{save.isPending && <Loader2 className="animate-spin" />} Save</Button>}
+      actions={<Button type="submit" size="sm" disabled={!dirty} pending={save.isPending} pendingLabel="Saving…">Save</Button>}
     >
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Field label="Handle" htmlFor="sp-handle" hint={<span className="break-all">{base}<b>{form.handle}</b>/…</span>}>
-          <Input id="sp-handle" value={form.handle} onChange={(e) => setForm({...form, handle: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-')})} maxLength={40} />
+        <Field label="Handle" htmlFor="sp-handle" error={f.error('handle')} hint={<span className="break-all">{base}<b>{form.handle}</b>/…</span>}>
+          <Input id="sp-handle" value={form.handle} onChange={(e) => setForm({...form, handle: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-')})} onBlur={f.blur('handle')} maxLength={40} />
         </Field>
-        <Field label="Default timezone" hint="New booking links start in this timezone.">
+        <Field label="Default timezone" hint="New booking links start in this timezone." error={f.error('timezone')}>
           <TimeZoneSelect value={form.timezone} onChange={(timezone) => setForm({...form, timezone})} />
         </Field>
       </div>
     </SettingsSection>
+    </form>
   );
 }
 
@@ -159,7 +179,7 @@ function ConnectionCard({conn, multiple}: {conn: CalendarConnectionView; multipl
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm" aria-label={`Options for ${conn.email}`}><MoreHorizontal /></Button>
+            <Button variant="ghost" size="icon-sm" aria-label={`Options for ${conn.email}`} pending={sync.isPending || refresh.isPending || remove.isPending}><MoreHorizontal /></Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
             <DropdownMenuItem onSelect={() => sync.mutate(undefined)}><RefreshCw /> Sync meetings now</DropdownMenuItem>
@@ -178,6 +198,7 @@ function ConnectionCard({conn, multiple}: {conn: CalendarConnectionView; multipl
             conn.calendars.map((c) => (
               <label key={c.id} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">
                 <Checkbox
+                  disabled={update.isPending}
                   checked={conn.busyCalendarIds.includes(c.id)}
                   onCheckedChange={(v) => update.mutate({busyCalendarIds: v === true ? [...conn.busyCalendarIds, c.id] : conn.busyCalendarIds.filter((id) => id !== c.id)})}
                 />
@@ -191,7 +212,7 @@ function ConnectionCard({conn, multiple}: {conn: CalendarConnectionView; multipl
         </div>
         <div className="grid content-start gap-4">
           <Field label="Add new meetings to" htmlFor={`target-${conn.id}`}>
-            <NativeSelect id={`target-${conn.id}`} value={conn.targetCalendarId ?? ''} onChange={(e) => update.mutate({targetCalendarId: e.target.value || null})}>
+            <NativeSelect id={`target-${conn.id}`} disabled={update.isPending} value={conn.targetCalendarId ?? ''} onChange={(e) => update.mutate({targetCalendarId: e.target.value || null})}>
               <option value="">Primary calendar</option>
               {writable.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </NativeSelect>
@@ -201,7 +222,7 @@ function ConnectionCard({conn, multiple}: {conn: CalendarConnectionView; multipl
               <span className="block font-medium">Log meetings with contacts</span>
               <span className="block text-xs text-muted-foreground">Events that have a known contact as attendee are added to their timeline.</span>
             </span>
-            <Switch checked={conn.syncMeetings} onCheckedChange={(v) => update.mutate({syncMeetings: v})} />
+            <Switch checked={conn.syncMeetings} disabled={update.isPending} onCheckedChange={(v) => update.mutate({syncMeetings: v})} />
           </label>
         </div>
       </div>

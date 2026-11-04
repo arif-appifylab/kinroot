@@ -68,7 +68,7 @@ export function FieldControl({
       const v = (value as {first?: string; last?: string} | null) ?? {};
       return (
         <div className="grid grid-cols-1 gap-2 @md:grid-cols-2">
-          <Input id={id} autoFocus={autoFocus} className={inputCls} placeholder="First name" autoComplete="given-name" value={v.first ?? ''} onChange={(e) => onChange({...v, first: e.target.value} as AnswerValue)} onKeyDown={enter} aria-invalid={!!error} />
+          <Input id={id} autoFocus={autoFocus} className={inputCls} placeholder="First name" autoComplete="given-name" value={v.first ?? ''} onChange={(e) => onChange({...v, first: e.target.value} as AnswerValue)} onKeyDown={enter} aria-invalid={!!error} aria-describedby={error ? `${id}_error` : undefined} />
           <Input className={inputCls} placeholder="Last name" autoComplete="family-name" value={v.last ?? ''} onChange={(e) => onChange({...v, last: e.target.value} as AnswerValue)} onKeyDown={enter} aria-label="Last name" />
         </div>
       );
@@ -97,12 +97,12 @@ export function FieldControl({
           value={(value as string) ?? ''}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => (e.metaKey || e.ctrlKey) && e.key === 'Enter' && onEnter?.()}
-          aria-invalid={!!error}
+          aria-invalid={!!error} aria-describedby={error ? `${id}_error` : undefined}
         />
       );
     case 'dropdown':
       return (
-        <NativeSelect id={id} autoFocus={autoFocus} className={inputCls} value={(value as string) ?? ''} onChange={(e) => onChange(e.target.value || null)} aria-invalid={!!error}>
+        <NativeSelect id={id} autoFocus={autoFocus} className={inputCls} value={(value as string) ?? ''} onChange={(e) => onChange(e.target.value || null)} aria-invalid={!!error} aria-describedby={error ? `${id}_error` : undefined}>
           <option value="">{f.placeholder || 'Select…'}</option>
           {f.options?.map((o) => <option key={o} value={o}>{o}</option>)}
         </NativeSelect>
@@ -112,7 +112,7 @@ export function FieldControl({
       const multi = f.type === 'multiple_choice';
       const selected = multi ? ((value as string[]) ?? []) : value ? [value as string] : [];
       return (
-        <div role={multi ? 'group' : 'radiogroup'} aria-labelledby={`${id}_label`} className={cn('grid gap-2', !big && (f.options?.length ?? 0) > 4 && '@md:grid-cols-2')}>
+        <div id={id} tabIndex={-1} role={multi ? 'group' : 'radiogroup'} aria-labelledby={`${id}_label`} aria-describedby={error ? `${id}_error` : undefined} className={cn('grid gap-2 outline-none', !big && (f.options?.length ?? 0) > 4 && '@md:grid-cols-2')}>
           {f.options?.map((o, i) => {
             const on = selected.includes(o);
             return (
@@ -140,7 +140,7 @@ export function FieldControl({
     }
     case 'yes_no':
       return (
-        <div className="flex gap-2" role="radiogroup">
+        <div id={id} tabIndex={-1} className="flex gap-2 outline-none" role="radiogroup" aria-labelledby={`${id}_label`} aria-describedby={error ? `${id}_error` : undefined}>
           {(['yes', 'no'] as const).map((o) => (
             <button
               key={o}
@@ -162,7 +162,7 @@ export function FieldControl({
     case 'consent':
       return (
         <label htmlFor={id} className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-200 bg-card px-3 py-3 text-sm text-slate-700">
-          <Checkbox id={id} className="mt-0.5" checked={value === true} onCheckedChange={(v) => onChange(v === true)} aria-invalid={!!error} />
+          <Checkbox id={id} className="mt-0.5" checked={value === true} onCheckedChange={(v) => onChange(v === true)} aria-invalid={!!error} aria-describedby={error ? `${id}_error` : undefined} />
           <span className="leading-relaxed">
             {f.label}
             {f.required && <span className="text-destructive"> *</span>}
@@ -170,27 +170,27 @@ export function FieldControl({
         </label>
       );
     case 'rating':
-      return <Rating scale={f.scale ?? 5} value={(value as number) ?? 0} onChange={onChange} big={big} />;
+      return <Rating id={id} error={error} scale={f.scale ?? 5} value={(value as number) ?? 0} onChange={onChange} big={big} />;
     case 'file':
       return <FileField field={f} value={(value as Uploaded[]) ?? []} onChange={onChange} upload={upload} />;
     case 'booking':
       return <BookingSlotField field={f} value={value} onChange={onChange} />;
     case 'number':
-      return <Input id={id} autoFocus={autoFocus} className={inputCls} type="number" inputMode="decimal" min={f.min} max={f.max} placeholder={f.placeholder} value={value === null || value === undefined ? '' : String(value)} onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)} onKeyDown={enter} aria-invalid={!!error} />;
+      return <Input id={id} autoFocus={autoFocus} className={inputCls} type="number" inputMode="decimal" min={f.min} max={f.max} placeholder={f.placeholder} value={value === null || value === undefined ? '' : String(value)} onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)} onKeyDown={enter} aria-invalid={!!error} aria-describedby={error ? `${id}_error` : undefined} />;
     case 'date':
-      return <Input id={id} autoFocus={autoFocus} className={cn(inputCls, 'w-auto')} type="date" value={(value as string) ?? ''} onChange={(e) => onChange(e.target.value || null)} onKeyDown={enter} aria-invalid={!!error} />;
+      return <Input id={id} autoFocus={autoFocus} className={cn(inputCls, 'w-auto')} type="date" value={(value as string) ?? ''} onChange={(e) => onChange(e.target.value || null)} onKeyDown={enter} aria-invalid={!!error} aria-describedby={error ? `${id}_error` : undefined} />;
     default: {
       const type = f.type === 'email' ? 'email' : f.type === 'phone' ? 'tel' : f.type === 'website' ? 'url' : 'text';
       const auto = f.type === 'email' ? 'email' : f.type === 'phone' ? 'tel' : f.type === 'company' ? 'organization' : f.type === 'website' ? 'url' : undefined;
-      return <Input id={id} autoFocus={autoFocus} className={inputCls} type={type} autoComplete={auto} placeholder={f.placeholder} value={(value as string) ?? ''} onChange={(e) => onChange(e.target.value)} onKeyDown={enter} aria-invalid={!!error} />;
+      return <Input id={id} autoFocus={autoFocus} className={inputCls} type={type} autoComplete={auto} placeholder={f.placeholder} value={(value as string) ?? ''} onChange={(e) => onChange(e.target.value)} onKeyDown={enter} aria-invalid={!!error} aria-describedby={error ? `${id}_error` : undefined} />;
     }
   }
 }
 
-function Rating({scale, value, onChange, big}: {scale: number; value: number; onChange: (v: AnswerValue) => void; big?: boolean}) {
+function Rating({id, error, scale, value, onChange, big}: {id: string; error?: string; scale: number; value: number; onChange: (v: AnswerValue) => void; big?: boolean}) {
   const [hover, setHover] = useState(0);
   return (
-    <div className="flex flex-wrap gap-1" role="radiogroup" onMouseLeave={() => setHover(0)}>
+    <div id={id} tabIndex={-1} className="flex flex-wrap gap-1 outline-none" role="radiogroup" aria-labelledby={`${id}_label`} aria-describedby={error ? `${id}_error` : undefined} onMouseLeave={() => setHover(0)}>
       {Array.from({length: scale}, (_, i) => i + 1).map((n) => (
         <button
           key={n}
@@ -236,7 +236,9 @@ function FileField({field, value, onChange, upload}: {field: FormField; value: U
   return (
     <div className="grid gap-2">
       <button
+        id={`fld_${field.id}`}
         type="button"
+        aria-busy={busy || undefined}
         disabled={!upload || busy || value.length >= 5}
         onClick={() => ref.current?.click()}
         onDragOver={(e) => e.preventDefault()}
@@ -257,7 +259,7 @@ function FileField({field, value, onChange, upload}: {field: FormField; value: U
           </button>
         </div>
       ))}
-      {error && <p className="text-xs font-medium text-destructive">{error}</p>}
+      {error && <p role="alert" className="text-xs font-medium text-destructive">{error}</p>}
     </div>
   );
 }
@@ -547,11 +549,10 @@ export function FormRenderer({
               }}
             />
           </div>
-          {errors[f.id] && <p className="mt-2 text-sm font-medium text-destructive" role="alert">{errors[f.id]}</p>}
+          {errors[f.id] && <p id={`fld_${f.id}_error`} className="mt-2 text-sm font-medium text-destructive" role="alert">{errors[f.id]}</p>}
           {footer}
           <div className="mt-6 flex items-center gap-3">
-            <Button size="lg" onClick={next} disabled={status === 'submitting'}>
-              {status === 'submitting' && <Loader2 className="animate-spin" />}
+            <Button size="lg" onClick={next} pending={status === 'submitting'} pendingLabel="Sending…">
               {last ? s.submitLabel || 'Submit' : f.type === 'heading' ? 'Continue' : 'OK'} {!last && <Check />}
             </Button>
             {!last && f.type !== 'long_text' && <span className="hidden text-xs text-slate-400 sm:inline">press Enter ↵</span>}
@@ -603,19 +604,18 @@ export function FormRenderer({
           <div key={f.id} className={cn('min-w-0', (f.width !== 'half' || f.type === 'heading') && '@md:col-span-2')}>
             <FieldLabel field={f} />
             <FieldControl field={f} value={answers[f.id]} error={errors[f.id]} upload={live ? upload : undefined} onChange={(v) => set(f.id, v)} />
-            {errors[f.id] && <p className="mt-1.5 text-xs font-medium text-destructive" role="alert">{errors[f.id]}</p>}
+            {errors[f.id] && <p id={`fld_${f.id}_error`} className="mt-1.5 text-xs font-medium text-destructive" role="alert">{errors[f.id]}</p>}
           </div>
         ))}
         <div className="@md:col-span-2">
           {footer}
           <div className="mt-2 flex items-center gap-3">
             {current > 0 && (
-              <Button type="button" variant="secondary" onClick={back}>
+              <Button type="button" variant="secondary" onClick={back} disabled={status === 'submitting'}>
                 <ArrowLeft /> Back
               </Button>
             )}
-            <Button type="submit" className="min-w-32" disabled={status === 'submitting'}>
-              {status === 'submitting' && <Loader2 className="animate-spin" />}
+            <Button type="submit" className="min-w-32" pending={status === 'submitting'} pendingLabel="Sending…">
               {last ? s.submitLabel || 'Submit' : 'Next'} {!last && <ArrowRight />}
             </Button>
           </div>

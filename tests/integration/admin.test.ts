@@ -109,7 +109,7 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
     const created = await owner.post('/site-api/admin/roles', {
       slug: 'editor',
       name: 'Editor',
-      permissions: ['site:job:manage'],
+      permissions: ['site:audit:read'],
     });
     expect(created.status).toBe(201);
     expect((await owner.request('PATCH', '/site-api/admin/roles/owner', {name: 'Boss'})).status).toBe(403);
@@ -119,7 +119,7 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
     // An admin who could edit roles still cannot grant what they lack: give them role:update via a role.
     await owner.post('/site-api/admin/roles', {slug: 'role-editor', name: 'Role editor', permissions: ['site:role:update']});
     await owner.request('PUT', `/site-api/admin/users/${ids.admin}/roles`, {roles: ['member', 'admin', 'role-editor']});
-    expect((await admin.request('PATCH', '/site-api/admin/roles/editor', {permissions: ['site:job:manage', '*']})).status).toBe(403);
+    expect((await admin.request('PATCH', '/site-api/admin/roles/editor', {permissions: ['site:audit:read', '*']})).status).toBe(403);
     expect((await admin.request('PATCH', '/site-api/admin/roles/editor', {permissions: ['site:user:read']})).status).toBe(200);
     expect((await owner.request('DELETE', '/site-api/admin/roles/editor')).status).toBe(200);
   });

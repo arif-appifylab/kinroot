@@ -84,7 +84,7 @@ function ConfirmDrawer({r}: {r: Request}) {
   const value = text.trim();
   return (
     <DialogContent size="sm" role={r.kind === 'confirm' ? 'alertdialog' : 'dialog'} {...(!r.description && {'aria-describedby': undefined})}>
-      <form onSubmit={(e) => (e.preventDefault(), settle(r.kind === 'confirm' ? true : value || null))} className="flex min-h-0 flex-1 flex-col">
+      <form noValidate onSubmit={(e) => (e.preventDefault(), e.stopPropagation(), settle(r.kind === 'confirm' ? true : value || null))} className="flex min-h-0 flex-1 flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-start gap-2.5">
             {r.kind === 'confirm' && r.destructive && <AlertTriangle className="mt-1 size-4 shrink-0 text-destructive" />}

@@ -159,7 +159,7 @@ export function SlotPicker({
                 aria-pressed={on}
                 aria-label={`${d}${open ? `, ${byDay.get(d)!.length} times` : ', unavailable'}`}
                 className={cn(
-                  'relative mx-auto flex aspect-square w-full max-w-11 cursor-pointer items-center justify-center rounded-full text-sm font-semibold transition-all',
+                  'relative mx-auto flex aspect-square w-full max-w-11 cursor-pointer items-center justify-center rounded-full text-sm font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
                   on ? 'bg-brand text-white shadow-btn' : open ? 'bg-accent text-primary hover:ring-2 hover:ring-primary/30' : 'cursor-default text-slate-300',
                   d === today && !on && 'underline decoration-2 underline-offset-4',
                 )}
@@ -178,7 +178,10 @@ export function SlotPicker({
         {slots.isLoading ? (
           <div className="flex justify-center py-8 text-slate-400"><Loader2 className="size-5 animate-spin" /></div>
         ) : slots.isError ? (
-          <p className="text-sm text-destructive">{(slots.error as Error).message}</p>
+          <p role="alert" className="text-sm text-destructive">
+            {(slots.error as Error).message}{' '}
+            <button type="button" onClick={() => slots.refetch()} className="cursor-pointer rounded font-semibold text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/30">Retry</button>
+          </p>
         ) : !byDay.size ? (
           <p className="text-sm text-muted-foreground">No open times this month.{month < lastMonth && ' Try the next one.'}</p>
         ) : (
@@ -192,7 +195,7 @@ export function SlotPicker({
                   onClick={() => onChange(on ? null : t)}
                   aria-pressed={on}
                   className={cn(
-                    'cursor-pointer rounded-lg border px-3 py-2 text-sm font-semibold tabular-nums transition-all',
+                    'cursor-pointer rounded-lg border px-3 py-2 text-sm font-semibold tabular-nums transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
                     on ? 'border-primary bg-brand text-white shadow-btn' : 'border-primary/30 text-primary hover:border-primary hover:bg-accent',
                   )}
                 >

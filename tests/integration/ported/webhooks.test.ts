@@ -68,7 +68,8 @@ describe.skipIf(!DATABASE_URL)('Ported: outgoing webhook test events (integratio
     expect((JSON.parse(outbound.hooks.at(-1)!.body) as {data: {number?: number}}).data.number).toBe(1042);
     outbound.answer = () => 200;
 
-    expect((await browser.post(`/site-api/crm/webhooks/${hook.id}/test`, {type: 'nope.never'})).status).toBe(400);
+    // An unknown event type is a field error (422, the CRM's validator).
+    expect((await browser.post(`/site-api/crm/webhooks/${hook.id}/test`, {type: 'nope.never'})).status).toBe(422);
 
     const log = must<{rows: Delivery[]}>(await browser.get(`/site-api/crm/webhooks/${hook.id}/deliveries`), 'deliveries').rows;
     expect(log.filter((d) => d.event.entity === 'webhook')).toHaveLength(3);

@@ -7,9 +7,9 @@ import {currentUser, type AppEnv} from '../kit/guards';
 import {customDiff, diff, logActivity} from '../lib/activity';
 import {audit, auditMany} from '../lib/audit';
 import {cleanCustom} from '../lib/custom-fields';
-import {checkDuplicates, forgetPairs} from '../lib/duplicates';
-import {emit} from '../lib/events';
-import {custom, listQuery, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {forgetPairs, queueDuplicateCheck} from '../lib/duplicates';
+import {emit, emitMany} from '../lib/events';
+import {custom, httpUrl, listQuery, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
 import {adoptContactsForDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
 import {moveToBin} from '../lib/recycle-bin';
@@ -28,19 +28,23 @@ export const companyBody = z.object({
   employees: z.coerce.number().int().min(0).max(10_000_000).nullish(),
   annualRevenue: z.coerce.number().min(0).max(1e13).nullish(),
   timezone: optStr,
-  website: optStr,
+  website: httpUrl,
   phone: optStr,
   address: optStr,
   city: optStr,
   state: optStr,
   postalCode: optStr,
   country: optStr,
-  linkedin: optStr,
+  linkedin: httpUrl,
   description: optStr,
   tags: tags.optional(),
   ownerId: z.string().nullish(),
   custom: custom.optional(),
 });
+
+/** Contacts and deals shown on a company page, and where their totals stop counting ("1000+"). */
+const DETAIL_ROWS = 50;
+const COUNT_CAP = 1000;
 
 /** Properties a company merge lets you choose between. */
 export const COMPANY_MERGE_FIELDS = ['name', 'domain', 'industry', 'type', 'size', 'employees', 'annualRevenue', 'website', 'phone', 'address', 'city', 'state', 'postalCode', 'country', 'timezone', 'linkedin', 'description', 'ownerId'] as const;
@@ -100,26 +104,33 @@ export const companies = new Hono<AppEnv>()
     await rememberOption(c.var.db, 'industries', company.industry);
     await rememberOption(c.var.db, 'companyTypes', company.type);
     const linkedContacts = await adoptContactsForDomain(c.var.db, company.id, company.domain, me.id);
-    await checkDuplicates(c.var.db, 'company', company.id);
+    // Compared with every company: a job, not this request (P2-25).
+    await queueDuplicateCheck(c.var.db, 'company', company.id);
     return c.json({company, linkedContacts}, 201);
   })
 
   .get('/:id', async (c) => {
-    const company = await c.var.db.company.findFirst({
-      where: {id: c.req.param('id'), ...(await ownerScope(c))},
+    const db = c.var.db;
+    const scope = await ownerScope(c);
+    // The page shows the 50 most recent contacts and deals; the totals are counted (up to a cap).
+    const company = await db.company.findFirst({
+      where: {id: c.req.param('id'), ...scope},
       include: {
         owner: {select: userSelect},
-        contacts: {include: {contact: {include: {owner: {select: userSelect}}}}},
+        contacts: {where: {contact: scope}, include: {contact: {include: {owner: {select: userSelect}}}}, orderBy: [{isPrimary: 'desc'}, {contact: {lastActivityAt: {sort: 'desc', nulls: 'last'}}}], take: DETAIL_ROWS},
       },
     });
     if (!company) throw notFound('Company');
-    // Deals where this company is primary or one of several.
-    const deals = await c.var.db.deal.findMany({
-      where: {companies: {some: {companyId: company.id}}},
-      include: {stage: true, owner: {select: userSelect}},
-      orderBy: {createdAt: 'desc'},
-    });
-    return c.json({company: {...company, deals}});
+    // Deals where this company is primary or one of several (that the user may see).
+    const dealWhere: Prisma.DealWhereInput = {companies: {some: {companyId: company.id}}, ...scope};
+    const [deals, contactCount, dealCount, sums] = await Promise.all([
+      db.deal.findMany({where: dealWhere, include: {stage: true, owner: {select: userSelect}}, orderBy: {createdAt: 'desc'}, take: DETAIL_ROWS}),
+      db.contactCompany.count({where: {companyId: company.id, contact: scope}, take: COUNT_CAP}),
+      db.deal.count({where: dealWhere, take: COUNT_CAP}),
+      db.deal.groupBy({by: ['status'], where: {...dealWhere, status: {in: ['OPEN', 'WON']}}, _sum: {value: true}}),
+    ]);
+    const sum = (status: string) => sums.find((s) => s.status === status)?._sum.value ?? 0;
+    return c.json({company: {...company, deals, contactCount, dealCount, openValue: sum('OPEN'), wonValue: sum('WON')}});
   })
 
   .patch('/:id', valid('json', companyBody.partial()), async (c) => {
@@ -142,7 +153,7 @@ export const companies = new Hono<AppEnv>()
       await logActivity(c.var.db, {type: 'field_changed', title: 'Company updated', actorId: me.id, companyId: company.id, data: {changes} as Prisma.InputJsonValue});
       await emit(c.var.db, 'company.updated', {recordId: company.id, actorId: me.id, data: {...company, changes}});
       await audit(c.var.db, c, {action: 'company.updated', entity: 'company', recordId: company.id, label: company.name, meta: {changes}});
-      if (changes.some((ch) => ['name', 'domain', 'website'].includes(ch.field))) await checkDuplicates(c.var.db, 'company', company.id);
+      if (changes.some((ch) => ['name', 'domain', 'website'].includes(ch.field))) await queueDuplicateCheck(c.var.db, 'company', company.id);
     }
     if (company.ownerId !== before.ownerId) {
       await notify(c.var.db, [company.ownerId], {type: 'assigned', title: `${me.name} assigned you a company: ${company.name}`, link: recordLink.company(company.id), actorId: me.id});
@@ -168,7 +179,8 @@ export const companies = new Hono<AppEnv>()
     if (action === 'delete') {
       const gone = await db.company.findMany({where});
       await moveToBin(db, 'company', gone.map((r) => r.id), me);
-      for (const row of gone) await emit(db, 'company.deleted', {recordId: row.id, actorId: me.id, data: row});
+      // One batch of events and one of audit rows, not a few queries per record.
+      await emitMany(db, 'company.deleted', gone.map((row) => ({recordId: row.id, actorId: me.id, data: row})));
       await auditMany(db, c, gone.map((r) => ({action: 'company.deleted', entity: 'company', recordId: r.id, label: r.name, meta: {bulk: true}})));
     }
     if (action === 'assign') {
@@ -191,9 +203,11 @@ export const companies = new Hono<AppEnv>()
     const {otherId, keep, fields} = c.req.valid('json');
     const thisId = c.req.param('id');
     if (thisId === otherId) throw new HTTPException(400, {message: 'Pick a different company'});
+    // Both must be visible to the user: a merge takes the other's history and deletes it for good.
+    const scope = await ownerScope(c);
     const [a, b] = await Promise.all([
-      db.company.findUnique({where: {id: thisId}, include: {contacts: true}}),
-      db.company.findUnique({where: {id: otherId}, include: {contacts: true}}),
+      db.company.findFirst({where: {id: thisId, ...scope}, include: {contacts: true}}),
+      db.company.findFirst({where: {id: otherId, ...scope}, include: {contacts: true}}),
     ]);
     if (!a || !b) throw notFound('Company');
     const [survivor, dropped] = keep === 'this' ? [a, b] : [b, a];
@@ -231,7 +245,7 @@ export const companies = new Hono<AppEnv>()
     await emit(db, 'company.merged', {recordId: keepId, actorId: me.id, data: {keptId: keepId, droppedId: dropId, dropped}});
     await forgetPairs(db, [dropId]);
     await audit(db, c, {action: 'company.merged', entity: 'company', recordId: keepId, label: String(data.name ?? survivor.name), meta: {droppedId: dropId, dropped: dropped.name, droppedDomain: dropped.domain, fields, changes}});
-    await checkDuplicates(db, 'company', keepId);
+    await queueDuplicateCheck(db, 'company', keepId);
     return c.json({ok: true, keptId: keepId});
   })
 
@@ -251,9 +265,10 @@ export const companies = new Hono<AppEnv>()
   .get('/:id/export', async (c) => {
     const db = c.var.db;
     const id = c.req.param('id');
+    const scope = await ownerScope(c);
     const company = await db.company.findFirst({
-      where: {id, ...(await ownerScope(c))},
-      include: {owner: {select: userSelect}, contacts: {include: {contact: true}}, deals: {include: {stage: true}}},
+      where: {id, ...scope},
+      include: {owner: {select: userSelect}, contacts: {where: {contact: scope}, include: {contact: true}}, deals: {where: scope, include: {stage: true}}},
     });
     if (!company) throw notFound('Company');
     const [notes, tasks, interactions, activities] = await Promise.all([

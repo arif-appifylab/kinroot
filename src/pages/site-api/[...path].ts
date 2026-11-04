@@ -2,10 +2,9 @@ import type {APIRoute} from 'astro';
 import type {ExecutionContext} from 'hono';
 
 import {handleJobDelivery, isJobDelivery} from '../../platform/background';
-import {handlePaymentDelivery, isPaymentDelivery} from '../../platform/payments';
+import {definePaymentHooks, handlePaymentDelivery, isPaymentDelivery} from '../../platform/payments';
 import {app} from '../../server/app';
 import {background} from '../../server/background';
-import {paymentHooks} from '../../server/payments-hooks';
 
 /**
  * The ONE route that mounts the Site API: every method on `/site-api/*` goes
@@ -18,14 +17,17 @@ import {paymentHooks} from '../../server/payments-hooks';
  * Site API (its own authentication is a signature, not a cookie), by the managed
  * `src/platform/background.ts`, with the handlers in `src/server/background.ts`.
  * `POST /site-api/_platform/payments` is the platform telling the site that money moved, signed the
- * same way: answered next, by `src/platform/payments.ts`, with the hooks in
- * `src/server/payments-hooks.ts`.
+ * same way: answered next, by `src/platform/payments.ts`. Kinroot sells nothing (the template's checkout,
+ * orders and memberships were removed), so there are no hooks: a delivery is acknowledged, nothing recorded.
+ * To sell something, follow docs/agent/payments.md and pass its hooks here.
  */
+const NO_PAYMENT_HOOKS = definePaymentHooks({});
+
 export const prerender = false;
 
 export const ALL: APIRoute = ({request, locals}) =>
   isJobDelivery(request.url)
     ? handleJobDelivery(request, background)
     : isPaymentDelivery(request.url)
-      ? handlePaymentDelivery(request, paymentHooks)
+      ? handlePaymentDelivery(request, NO_PAYMENT_HOOKS)
       : app.fetch(request, {}, (locals as {cfContext?: ExecutionContext}).cfContext);

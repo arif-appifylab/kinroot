@@ -11,6 +11,7 @@ import {notify, notifyWatchers} from '../lib/notify';
 import {routeTicketEmail} from '../lib/ticket-mail';
 import {conversationLink} from '../inbox/conversations';
 import {onInbound, onOutbound} from '../inbox/routing';
+import {cleanReceivedHtml, MAX_RECEIVED_HTML} from '../inbox/sanitize';
 import {feedsTeamInbox, inboxContext} from '../inbox/settings';
 import {unsubscribeUrl} from '../lib/unsubscribe';
 import {composeEmail, systemEmailHtml} from './design';
@@ -189,7 +190,14 @@ const baseSubject = (s: string) => s.replace(/^\s*((re|fw|fwd|aw|sv)\s*:\s*)+/i,
  * account that feeds the team inbox (Settings → Inbox), where unknown senders
  * start conversations too. Returns null when it was skipped.
  */
-export async function ingestMessage(db: Db, account: EmailAccount | null, m: IncomingMessage) {
+export async function ingestMessage(db: Db, account: EmailAccount | null, incoming: IncomingMessage) {
+  // Received HTML is capped and cleaned once, here, for every path that stores it (ticket mail too),
+  // so reading it later costs nothing and a crafted message can't hold the CPU on every open.
+  const m: IncomingMessage = {
+    ...incoming,
+    html: await cleanReceivedHtml(incoming.html),
+    text: incoming.text && incoming.text.length > MAX_RECEIVED_HTML ? incoming.text.slice(0, MAX_RECEIVED_HTML) : incoming.text,
+  };
   const ticketMail = await routeTicketEmail(db, account, m); // support address / ticket replies (src/server/lib/ticket-mail.ts)
   if (ticketMail) return ticketMail;
   if (m.messageId && (await db.emailMessage.findFirst({where: {messageId: m.messageId}, select: {id: true}}))) return null;

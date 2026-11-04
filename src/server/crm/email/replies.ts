@@ -7,6 +7,7 @@ import {accountCredentials} from './oauth';
 import {fetchResendReceived} from './providers';
 import {enqueue, kickJobs} from '../lib/jobs';
 import {getSettings} from '../lib/settings';
+import {receivedHtmlReader} from '../inbox/sanitize';
 import {ingestMessage, sendSystemEmail, type IncomingMessage} from './service';
 
 /** The SMTP / API account whose Reply-To address received this email, if any. */
@@ -75,12 +76,13 @@ export async function forwardReply(db: Db, messageId: string, origin = '') {
   const from = m.fromName ? `${m.fromName} <${m.fromEmail}>` : m.fromEmail;
   const link = `${config.siteUrl() || origin}${CRM_APP}/inbox?thread=${m.threadId}`;
   const note = `Reply from ${from}, logged in the CRM: ${link}`;
+  const html = (await receivedHtmlReader())(m.html); // the cleaned copy, without the stored-clean marker
   await sendSystemEmail(db, {
     to: [to],
     subject: `Fwd: ${m.subject}`,
     text: `${note}\n\n---------- Forwarded message ----------\n${m.text ?? ''}`,
-    html: m.html
-      ? `<p style="font-family:Arial,sans-serif;font-size:13px;color:#475569">${escapeHtml(note)}</p><hr style="border:none;border-top:1px solid #e2e8f0">${m.html}`
+    html: html
+      ? `<p style="font-family:Arial,sans-serif;font-size:13px;color:#475569">${escapeHtml(note)}</p><hr style="border:none;border-top:1px solid #e2e8f0">${html}`
       : null,
     replyTo: m.fromEmail,
   });
@@ -101,7 +103,8 @@ export async function receiveInbound(db: Db, parsed: IncomingMessage, opts: {ori
   const account = opts.account ?? (await accountForReply(db, [...parsed.to, ...parsed.cc]));
   const message = await ingestMessage(db, account, parsed);
   if (message?.direction === 'INBOUND' && account?.forwardReplies && opts.forward !== false) {
-    await enqueue(db, 'email.forward_reply', {messageId: message.id, origin: opts.origin}, {maxAttempts: 3});
+    // One copy per received email: the key makes a repeat of this request (or a retry) queue nothing more.
+    await enqueue(db, 'email.forward_reply', {messageId: message.id, origin: opts.origin}, {key: `forward-${message.id}`});
     kickJobs();
   }
   return message;

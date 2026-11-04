@@ -3,6 +3,7 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/react-router';
 import {ArrowLeft, ArrowRight, Check, Copy, Download, LayoutGrid, MoreHorizontal, Pencil, Plus, Trash2, Users} from 'lucide-react';
 import {useEffect, useState} from 'react';
 
+import {LoadError} from '@/components/data-table';
 import {FilterBar} from '@/components/filter-bar';
 import {RangeFields} from '@/components/reports/builder';
 import {useSavedReports} from '@/components/reports/hooks';
@@ -14,9 +15,10 @@ import {Card, CardContent, CardDescription, CardHeader, CardTitle} from '@/compo
 import {confirm} from '@/components/ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Field, Input, NativeSelect} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/menu';
 import {EmptyState, PageHeader, Skeleton} from '@/components/ui/misc';
-import {api, qs} from '@/lib/api';
+import {ApiError, api, qs} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
 import {keys, useApiMutation, useMe, useSettings, useTeam} from '@/lib/queries';
 import type {ReportResult} from '@/lib/reports';
@@ -81,9 +83,18 @@ function DashboardView({dashboardId}: {dashboardId: string}) {
   }
 
   if (query.isLoading) return <Skeleton className="h-96 rounded-xl" />;
+  if (query.isError && !(query.error instanceof ApiError && (query.error.status === 404 || query.error.status === 403))) {
+    return (
+      <Card>
+        <h1 className="sr-only">Dashboard</h1>
+        <LoadError error={query.error} onRetry={() => query.refetch()} />
+      </Card>
+    );
+  }
   if (!d) {
     return (
       <Card>
+        <h1 className="sr-only">Dashboard not found</h1>
         <EmptyState icon={<LayoutGrid />} title="Dashboard not found" description="It was deleted, or it is private to someone else." action={<Button asChild><Link to="/reports">All dashboards</Link></Button>} />
       </Card>
     );
@@ -111,7 +122,7 @@ function DashboardView({dashboardId}: {dashboardId: string}) {
             {canEdit && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" aria-label="Dashboard actions"><MoreHorizontal /></Button>
+                  <Button variant="ghost" size="icon" aria-label="Dashboard actions" pending={duplicate.isPending || remove.isPending}><MoreHorizontal /></Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent>
                   {editable && <DropdownMenuItem onSelect={() => setRenaming(true)}><Pencil /> Rename</DropdownMenuItem>}
@@ -156,18 +167,18 @@ function DashboardView({dashboardId}: {dashboardId: string}) {
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
           {d.widgets.map((w, i) => (
-            <WidgetCard key={w.id} dashboardId={d.id} widget={w} filters={filters} editing={editing} first={i === 0} last={i === d.widgets.length - 1} onMove={(dir) => move(w, dir)} />
+            <WidgetCard key={w.id} dashboardId={d.id} widget={w} filters={filters} editing={editing} first={i === 0} last={i === d.widgets.length - 1} moving={reorder.isPending} onMove={(dir) => move(w, dir)} />
           ))}
         </div>
       )}
 
       {editable && <AddWidgetDialog open={adding} onOpenChange={setAdding} dashboard={d} />}
-      {editable && <RenameDialog open={renaming} onOpenChange={setRenaming} name={d.name} onSave={(name) => patch.mutate({name}, {onSuccess: () => setRenaming(false)})} />}
+      {editable && <RenameDialog open={renaming} onOpenChange={setRenaming} name={d.name} pending={patch.isPending} onSave={(name, fail) => patch.mutate({name}, {onSuccess: () => setRenaming(false), onError: fail})} />}
     </div>
   );
 }
 
-function WidgetCard({dashboardId, widget, filters, editing, first, last, onMove}: {dashboardId: string; widget: Widget; filters: DashboardFilters; editing: boolean; first: boolean; last: boolean; onMove: (dir: -1 | 1) => void}) {
+function WidgetCard({dashboardId, widget, filters, editing, first, last, moving, onMove}: {dashboardId: string; widget: Widget; filters: DashboardFilters; editing: boolean; first: boolean; last: boolean; moving: boolean; onMove: (dir: -1 | 1) => void}) {
   const settings = useSettings();
   const currency = settings.data?.settings.currency ?? 'USD';
   const params = runParams(filters);
@@ -191,14 +202,22 @@ function WidgetCard({dashboardId, widget, filters, editing, first, last, onMove}
         </div>
         {editing ? (
           <div className="flex shrink-0 items-center gap-1">
-            <Button variant="ghost" size="icon-sm" disabled={first} onClick={() => onMove(-1)} aria-label="Move earlier"><ArrowLeft /></Button>
-            <Button variant="ghost" size="icon-sm" disabled={last} onClick={() => onMove(1)} aria-label="Move later"><ArrowRight /></Button>
-            <NativeSelect aria-label="Size" className="h-8 w-auto pr-7 text-xs" value={widget.size} onChange={(e) => resize.mutate(e.target.value as DashboardWidgetSize)}>
+            <Button variant="ghost" size="icon-sm" disabled={first || moving} onClick={() => onMove(-1)} aria-label={`Move ${widget.report.name} earlier`}><ArrowLeft /></Button>
+            <Button variant="ghost" size="icon-sm" disabled={last || moving} onClick={() => onMove(1)} aria-label={`Move ${widget.report.name} later`}><ArrowRight /></Button>
+            <NativeSelect aria-label="Size" disabled={resize.isPending} className="h-8 w-auto pr-7 text-xs" value={widget.size} onChange={(e) => resize.mutate(e.target.value as DashboardWidgetSize)}>
               <option value="small">S</option>
               <option value="medium">M</option>
               <option value="large">L</option>
             </NativeSelect>
-            <Button variant="ghost" size="icon-sm" onClick={() => remove.mutate(undefined)} aria-label="Remove from dashboard"><Trash2 /></Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              pending={remove.isPending}
+              onClick={async () => (await confirm({title: `Remove "${widget.report.name}" from this dashboard?`, description: 'The saved report is kept; only this widget goes.', confirmLabel: 'Remove', destructive: true})) && remove.mutate(undefined)}
+              aria-label="Remove from dashboard"
+            >
+              <Trash2 />
+            </Button>
           </div>
         ) : (
           <Button variant="ghost" size="icon-sm" asChild>
@@ -226,7 +245,7 @@ function AddWidgetDialog({open, onOpenChange, dashboard}: {open: boolean; onOpen
     onSuccess: () => onOpenChange(false),
   });
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => !add.isPending && onOpenChange(o)}>
       <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>Add a report</DialogTitle>
@@ -255,38 +274,35 @@ function AddWidgetDialog({open, onOpenChange, dashboard}: {open: boolean; onOpen
           )}
         </DialogBody>
         <DialogFooter>
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={() => add.mutate(undefined)} disabled={!target || add.isPending}>Add report</Button>
+          <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={add.isPending}>Cancel</Button>
+          <Button onClick={() => add.mutate(undefined)} disabled={!target} pending={add.isPending} pendingLabel="Adding…">Add report</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function RenameDialog({open, onOpenChange, name, onSave}: {open: boolean; onOpenChange: (o: boolean) => void; name: string; onSave: (name: string) => void}) {
+function RenameDialog({open, onOpenChange, name, pending, onSave}: {open: boolean; onOpenChange: (o: boolean) => void; name: string; pending: boolean; onSave: (name: string, fail: (e: unknown) => void) => void}) {
   const [value, setValue] = useState(name);
-  useEffect(() => setValue(name), [name, open]);
+  const f = useFormState({name: value}, {name: [is.required('Give the dashboard a name.'), is.maxLength(80)]});
+  const {reset} = f;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => (setValue(name), reset()), [name, open]);
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => !pending && onOpenChange(o)}>
       <DialogContent size="sm">
         <DialogHeader>
           <DialogTitle>Rename dashboard</DialogTitle>
         </DialogHeader>
-        <form
-          className="contents"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (value.trim()) onSave(value.trim());
-          }}
-        >
+        <form className="contents" {...f.form(() => onSave(value.trim(), f.fail))}>
           <DialogBody>
-            <Field label="Name">
-              <Input autoFocus required maxLength={80} value={value} onChange={(e) => setValue(e.target.value)} />
+            <Field label="Name" error={f.error('name')}>
+              <Input autoFocus maxLength={80} value={value} onChange={(e) => setValue(e.target.value)} onBlur={f.blur('name')} />
             </Field>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={!value.trim()}>Save</Button>
+            <Button type="button" variant="secondary" onClick={() => onOpenChange(false)} disabled={pending}>Cancel</Button>
+            <Button type="submit" pending={pending} pendingLabel="Saving…">Save</Button>
           </DialogFooter>
         </form>
       </DialogContent>

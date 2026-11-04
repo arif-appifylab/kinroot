@@ -1,5 +1,5 @@
 import {useQueryClient} from '@tanstack/react-query';
-import {Building2, Handshake, Loader2, Repeat, User} from 'lucide-react';
+import {Building2, Handshake, Repeat, User} from 'lucide-react';
 import {useMemo, useState} from 'react';
 import {toast} from 'sonner';
 
@@ -14,6 +14,7 @@ import {CompanyPicker, ContactsPicker, CreatableSelect, DealPicker, UserSelect} 
 import {Button} from './ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from './ui/dialog';
 import {Checkbox, Field, Input, Label, NativeSelect, Textarea} from './ui/form';
+import {is, useFormState} from './ui/form-state';
 
 // ─── Date helpers ───
 
@@ -142,7 +143,12 @@ export function TaskDialog({defaults, task, onClose}: {defaults?: TaskDefaults; 
   );
   const [deal, setDeal] = useState<{id: string; title: string} | null>(task?.deal ?? (defaults?.dealId ? {id: defaults.dealId, title: defaults.dealTitle ?? 'Deal'} : null));
   const [busy, setBusy] = useState<false | 'close' | 'another'>(false);
-  const [titleError, setTitleError] = useState(false);
+  const f = useFormState(form, {
+    title: [is.required('Give the task a title.'), is.maxLength(300)],
+    date: [(v, all) => (all.preset === 'custom' && !v ? 'Choose a due date, or pick "No due date".' : null)],
+    reminderAt: [(v, all) => (all.reminder === 'custom' && !v ? 'Choose when to remind you, or pick "No reminder".' : null)],
+    description: [is.maxLength(5000)],
+  });
 
   const dueDate = form.preset === 'none' || !form.date ? null : new Date(`${form.date}T${form.time || '08:00'}`);
   const reminderDate =
@@ -164,7 +170,6 @@ export function TaskDialog({defaults, task, onClose}: {defaults?: TaskDefaults; 
   };
 
   async function save(another: boolean) {
-    if (!form.title.trim()) return setTitleError(true);
     setBusy(another ? 'another' : 'close');
     const body = {
       title: form.title.trim(),
@@ -188,9 +193,10 @@ export function TaskDialog({defaults, task, onClose}: {defaults?: TaskDefaults; 
       if (another) {
         // Keep the associations, start a fresh task.
         setForm({...blank(), assigneeId: form.assigneeId, queue: form.queue});
-        setTitleError(false);
+        f.reset();
       } else onClose();
     } catch (e) {
+      f.fail(e);
       toast.error((e as Error).message);
     } finally {
       setBusy(false);
@@ -198,16 +204,16 @@ export function TaskDialog({defaults, task, onClose}: {defaults?: TaskDefaults; 
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
       <DialogContent size="md">
-        <form onSubmit={(e) => (e.preventDefault(), save(false))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => save(false))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>{task ? 'Edit task' : 'Create task'}</DialogTitle>
             {defaults?.label && !task && <DialogDescription>For {defaults.label}</DialogDescription>}
           </DialogHeader>
           <DialogBody className="gap-5">
-            <Field label="Task title *" htmlFor="t-title" error={titleError ? 'Give the task a title' : null}>
-              <Input id="t-title" autoFocus value={form.title} aria-invalid={titleError} onChange={(e) => (setForm({...form, title: e.target.value}), setTitleError(false))} placeholder="e.g. Follow up on pricing" />
+            <Field label="Task title *" htmlFor="t-title" error={f.error('title')}>
+              <Input id="t-title" autoFocus value={form.title} onChange={(e) => setForm({...form, title: e.target.value})} onBlur={f.blur('title')} placeholder="e.g. Follow up on pricing" />
             </Field>
 
             <div className="grid gap-1.5">
@@ -220,7 +226,20 @@ export function TaskDialog({defaults, task, onClose}: {defaults?: TaskDefaults; 
                 </NativeSelect>
                 <Input aria-label="Due time" type="time" value={form.time} disabled={form.preset === 'none'} onChange={(e) => setForm({...form, time: e.target.value})} />
               </div>
-              {form.preset === 'custom' && <Input aria-label="Due date" type="date" value={form.date} onChange={(e) => setForm({...form, date: e.target.value})} />}
+              {form.preset === 'custom' && (
+                <>
+                  <Input
+                    aria-label="Due date"
+                    type="date"
+                    value={form.date}
+                    onChange={(e) => setForm({...form, date: e.target.value})}
+                    onBlur={f.blur('date')}
+                    aria-invalid={f.invalid('date') || undefined}
+                    aria-describedby={f.invalid('date') ? 't-date-error' : undefined}
+                  />
+                  {f.error('date') && <p id="t-date-error" role="alert" className="text-xs font-medium text-destructive">{f.error('date')}</p>}
+                </>
+              )}
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">{dueDate ? dueDate.toLocaleString('en-US', {dateStyle: 'medium', timeStyle: 'short'}) : 'No due date'}</span>
                 <button type="button" className="cursor-pointer font-semibold text-primary hover:underline" onClick={() => setForm({...form, preset: 'bd3', date: toDateInput(addBusinessDays(3).toISOString()), time: '08:00'})}>Reset</button>
@@ -255,6 +274,7 @@ export function TaskDialog({defaults, task, onClose}: {defaults?: TaskDefaults; 
                     <button
                       key={t}
                       type="button"
+                      aria-pressed={form.type === t}
                       onClick={() => setForm({...form, type: t})}
                       className={cn(
                         'inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all',
@@ -296,25 +316,38 @@ export function TaskDialog({defaults, task, onClose}: {defaults?: TaskDefaults; 
               <NativeSelect id="t-reminder" value={form.reminder} onChange={(e) => setForm({...form, reminder: e.target.value, reminderAt: e.target.value === 'custom' ? form.reminderAt || (dueDate ? localStamp(new Date(dueDate.getTime() - 3600_000)) : '') : ''})}>
                 {REMINDERS.map(([v, l]) => <option key={v} value={v} disabled={!dueDate && v !== 'none' && v !== 'custom'}>{l}</option>)}
               </NativeSelect>
-              {form.reminder === 'custom' && <Input aria-label="Reminder date and time" type="datetime-local" value={form.reminderAt} onChange={(e) => setForm({...form, reminderAt: e.target.value})} />}
+              {form.reminder === 'custom' && (
+                <>
+                  <Input
+                    aria-label="Reminder date and time"
+                    type="datetime-local"
+                    value={form.reminderAt}
+                    onChange={(e) => setForm({...form, reminderAt: e.target.value})}
+                    onBlur={f.blur('reminderAt')}
+                    aria-invalid={f.invalid('reminderAt') || undefined}
+                    aria-describedby={f.invalid('reminderAt') ? 't-reminder-error' : undefined}
+                  />
+                  {f.error('reminderAt') && <p id="t-reminder-error" role="alert" className="text-xs font-medium text-destructive">{f.error('reminderAt')}</p>}
+                </>
+              )}
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted-foreground">{reminderDate ? `You'll get a reminder in the app ${reminderDate.toLocaleString('en-US', {dateStyle: 'medium', timeStyle: 'short'})}` : 'No reminder set'}</span>
                 {form.reminder !== 'none' && <button type="button" className="cursor-pointer font-semibold text-slate-500 hover:text-slate-800" onClick={() => setForm({...form, reminder: 'none', reminderAt: ''})}>Clear</button>}
               </div>
             </div>
 
-            <Field label="Task notes" htmlFor="t-notes">
+            <Field label="Task notes" htmlFor="t-notes" error={f.error('description')}>
               <Textarea id="t-notes" rows={6} value={form.description} onChange={(e) => setForm({...form, description: e.target.value})} placeholder="Context, talking points, links…" />
             </Field>
           </DialogBody>
           <DialogFooter className="@sm:justify-start">
-            <Button type="submit" disabled={!!busy}>{busy === 'close' && <Loader2 className="animate-spin" />} {task ? 'Save task' : 'Create task'}</Button>
+            <Button type="submit" disabled={!!busy} pending={busy === 'close'} pendingLabel={task ? 'Saving…' : 'Creating…'}>{task ? 'Save task' : 'Create task'}</Button>
             {!task && (
-              <Button type="button" variant="secondary" disabled={!!busy} onClick={() => save(true)}>
-                {busy === 'another' && <Loader2 className="animate-spin" />} Create and add another
+              <Button type="button" variant="secondary" disabled={!!busy} pending={busy === 'another'} pendingLabel="Creating…" onClick={() => f.submit(() => save(true))()}>
+                Create and add another
               </Button>
             )}
-            <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+            <Button type="button" variant="ghost" onClick={onClose} disabled={!!busy}>Cancel</Button>
           </DialogFooter>
         </form>
       </DialogContent>

@@ -1,6 +1,7 @@
 import {HTTPException} from 'hono/http-exception';
 
 import type {EmailAccount, Prisma, Ticket, TicketPriority, TicketSource, TicketStatus} from '../../../generated/prisma/client';
+import {cache} from '../../../platform/cache';
 import type {User} from '../kit/guards';
 import {defaultTicketSettings, isOpenStatus, STATUS, subjectToken, ticketRef, type TicketSettings} from '@/lib/tickets';
 import {config} from '../kit/config';
@@ -25,9 +26,11 @@ import {userSelect} from './users';
 // ─── Settings ───────────────────────────────────────────────────────────────
 
 const KEY = 'tickets';
+/** Site Cache key (docs/agent/cache.md): read by the support pages and every ticket action, cleared on save. */
+const CACHE_KEY = 'crm:ticket-settings';
 
-export async function getTicketSettings(db: Db): Promise<TicketSettings> {
-  const row = await db.setting.findUnique({where: {key: KEY}});
+async function readTicketSettings(db: Db): Promise<TicketSettings> {
+  const row = await db.setting.findUnique({where: {key: KEY}, select: {value: true}});
   const stored = (row?.value ?? {}) as Partial<TicketSettings>;
   const d = defaultTicketSettings();
   return {
@@ -37,9 +40,16 @@ export async function getTicketSettings(db: Db): Promise<TicketSettings> {
   };
 }
 
+/** Ticket settings, from the Site Cache (a day; `saveTicketSettings` clears it right after writing). */
+export function getTicketSettings(db: Db): Promise<TicketSettings> {
+  return cache.getOrSet(CACHE_KEY, 86_400, () => readTicketSettings(db));
+}
+
 export async function saveTicketSettings(db: Db, patch: Partial<TicketSettings>) {
-  const value = {...(await getTicketSettings(db)), ...patch} as unknown as Prisma.InputJsonValue;
+  // Merged onto the stored row, never onto a cached copy.
+  const value = {...(await readTicketSettings(db)), ...patch} as unknown as Prisma.InputJsonValue;
   await db.setting.upsert({where: {key: KEY}, create: {key: KEY, value}, update: {value}});
+  await cache.del(CACHE_KEY);
 }
 
 // ─── Shared shapes ──────────────────────────────────────────────────────────
@@ -258,10 +268,30 @@ export async function replyAccount(db: Db, me: User, settings: TicketSettings): 
   );
 }
 
-export const csatToken = async (ticketId: string) => `${ticketId}.${await sign(`csat:${ticketId}`)}`;
-export async function ticketFromCsatToken(token: string) {
-  const [ticketId, sig] = token.split('.');
-  return ticketId && sig && (await verifySignature(`csat:${ticketId}`, sig)) ? ticketId : null;
+/** A "How did we do?" link works for this long after it was sent (when the ticket was resolved). */
+export const CSAT_DAYS = 30;
+
+/** `<ticket id>.<issued at, unix seconds in base 36>.<signature of both>`: the time is signed, so it can't be moved. */
+export async function csatToken(ticketId: string, issuedAt = Date.now()) {
+  const t = Math.floor(issuedAt / 1000).toString(36);
+  return `${ticketId}.${t}.${await sign(`csat:${ticketId}:${t}`)}`;
+}
+
+/**
+ * The ticket a CSAT link is for, or null (not ours, or expired). Links sent before the time was in
+ * the token (`<id>.<sig>`) expire 30 days after the ticket's CSAT email went out.
+ */
+export async function ticketFromCsatToken(db: Db, token: string, now = Date.now()): Promise<string | null> {
+  const parts = token.split('.');
+  if (parts.length === 3) {
+    const [ticketId, t, sig] = parts as [string, string, string];
+    if (!ticketId || !/^[0-9a-z]{1,9}$/.test(t) || !(await verifySignature(`csat:${ticketId}:${t}`, sig))) return null;
+    return parseInt(t, 36) * 1000 + CSAT_DAYS * 86_400_000 > now ? ticketId : null;
+  }
+  const [ticketId, sig] = parts;
+  if (parts.length !== 2 || !ticketId || !sig || !(await verifySignature(`csat:${ticketId}`, sig))) return null;
+  const sent = await db.ticket.findUnique({where: {id: ticketId}, select: {csatSentAt: true}});
+  return sent?.csatSentAt && sent.csatSentAt.getTime() + CSAT_DAYS * 86_400_000 > now ? ticketId : null;
 }
 
 const originOf = (origin?: string | null) => config.siteUrl() || origin || '';

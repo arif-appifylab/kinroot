@@ -18,10 +18,14 @@ import {hostsFor, linkSlots, pickHost} from './links';
 
 export const manageToken = async (bookingId: string) => `${bookingId}.${await sign(`booking|${bookingId}`)}`;
 
-export async function bookingFromToken(db: Db, token: string) {
+/** A manage link works until a week after the meeting ends (its current end, after any reschedule). */
+export const MANAGE_DAYS_AFTER = 7;
+
+export async function bookingFromToken(db: Db, token: string, now = Date.now()) {
   const [id, sig] = token.split('.');
   if (!id || !sig || !(await verifySignature(`booking|${id}`, sig))) return null;
-  return db.booking.findUnique({where: {id}, include: {link: true, host: true}});
+  const booking = await db.booking.findUnique({where: {id}, include: {link: true, host: true}});
+  return booking && booking.endAt.getTime() + MANAGE_DAYS_AFTER * 86_400_000 > now ? booking : null;
 }
 
 export const manageUrl = async (origin: string, bookingId: string) => `${origin}/book/manage/${await manageToken(bookingId)}`;
@@ -224,7 +228,7 @@ async function afterChange(db: Db, booking: Booking, change: 'booked' | 'resched
       const runAt = new Date(booking.startAt.getTime() - before * 60_000);
       // Too late for this reminder: the confirmation is still fresh in their inbox.
       if (runAt.getTime() - Date.now() < 15 * 60_000) continue;
-      await enqueue(db, 'booking.reminder', {bookingId: booking.id, kind, startAt: booking.startAt.toISOString()}, {runAt, maxAttempts: 3});
+      await enqueue(db, 'booking.reminder', {bookingId: booking.id, kind, startAt: booking.startAt.toISOString()}, {runAt});
     }
   }
   kickJobs();

@@ -101,7 +101,7 @@ function CompaniesPage() {
       </div>
       <Card className="overflow-hidden">
         <FilterBar className="border-b border-slate-100 p-3" active={!!(s.q || s.ownerId || s.tag)} onClear={() => (setQDraft(''), set({q: undefined, ownerId: undefined, tag: undefined}))}>
-          <form onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
+          <form noValidate onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
             <SearchInput size="sm" value={qDraft} onChange={(v) => (setQDraft(v), !v && set({q: undefined}))} placeholder="Search name, domain, industry…" />
           </form>
           <NativeSelect size="sm" aria-label="Owner" value={s.ownerId ?? ''} onChange={(e) => set({ownerId: e.target.value || undefined})}>
@@ -109,12 +109,18 @@ function CompaniesPage() {
             <option value="none">Unassigned</option>
             {team.data?.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </NativeSelect>
-          {s.tag && <Badge tone="teal" className="h-7 cursor-pointer" onClick={() => set({tag: undefined})}>tag: {s.tag} ✕</Badge>}
+          {s.tag && (
+            <button type="button" aria-label={`Remove the tag filter ${s.tag}`} onClick={() => set({tag: undefined})} className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
+              <Badge tone="teal" className="h-7">tag: {s.tag} ✕</Badge>
+            </button>
+          )}
         </FilterBar>
         <DataTable
           rows={list.data?.rows}
           columns={columns}
           loading={list.isLoading}
+          error={list.error}
+          onRetry={() => list.refetch()}
           sort={s.sort ?? 'createdAt'}
           dir={s.dir ?? 'desc'}
           onSort={(key) => set({sort: key, dir: s.sort === key && s.dir === 'asc' ? 'desc' : 'asc'})}
@@ -127,13 +133,13 @@ function CompaniesPage() {
       </Card>
       <BulkBar count={selected.size} onClear={() => setSelected(new Set())}>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white"><UserCheck /> Assign</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-white hover:bg-white/10 hover:text-white" disabled={bulk.isPending} aria-busy={(bulk.isPending && bulk.variables?.action === 'assign') || undefined}><UserCheck /> Assign</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             {team.data?.map((u) => <DropdownMenuItem key={u.id} onSelect={() => bulk.mutate({action: 'assign', value: u.id})}>{u.name}</DropdownMenuItem>)}
           </DropdownMenuContent>
         </DropdownMenu>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200"><Trash2 /> Delete</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" disabled={bulk.isPending} aria-busy={(bulk.isPending && bulk.variables?.action === 'delete') || undefined}><Trash2 /> Delete</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center">
             <DropdownMenuLabel>Delete {selected.size} companies?</DropdownMenuLabel>
             <DropdownMenuItem destructive onSelect={() => bulk.mutate({action: 'delete'})}>Yes, move to the recycle bin</DropdownMenuItem>

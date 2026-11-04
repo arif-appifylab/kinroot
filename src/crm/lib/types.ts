@@ -184,6 +184,14 @@ export type JobsStatus = {
   failed: number;
   /** The numbers stop at this many. */
   capped: number;
+  /** Jobs the platform refused for good (set aside, kept 30 days). */
+  failedJobs: number;
+  /** Jobs waiting for the platform's job rate limit. */
+  rateLimited: number;
+  /** New jobs a minute this site sends (the platform's limit, raised in the dashboard's Jobs tab). */
+  perMinute: number;
+  /** What to tell the owner about waiting jobs, if anything. */
+  note: string | null;
   /** Local dev server: a ticker runs due jobs every 30 s, no scheduler needed. */
   devTicker: boolean;
 };

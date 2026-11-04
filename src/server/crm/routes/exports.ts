@@ -7,7 +7,6 @@ import {ACTIVE_EXPORT, IO_ENTITIES, type ExportRun} from '@/lib/import-export';
 import {publicOrigin} from '../kit/config';
 import {currentUser, isAdmin, requireRole, type AppEnv} from '../kit/guards';
 import {countExport, exportDownloadPath, startExport} from '../lib/exports';
-import {kickJobs} from '../lib/jobs';
 import {notFound, valid} from '../lib/http';
 
 export const exportJson = (exp: Export): ExportRun => ({
@@ -75,6 +74,5 @@ export const exports = new Hono<AppEnv>()
     const me = currentUser(c);
     const exp = await c.var.db.export.findUnique({where: {id: c.req.param('id')}});
     if (!exp || (exp.userId !== me.id && !isAdmin(me))) throw notFound('Export');
-    if (ACTIVE_EXPORT.has(exp.status)) kickJobs();
     return c.json({export: exportJson(exp)});
   });

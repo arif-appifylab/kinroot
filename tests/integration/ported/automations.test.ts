@@ -115,7 +115,7 @@ describe.skipIf(!DATABASE_URL)('Ported: automations (integration, real Postgres)
     expect((await member.post(api(`/automations/${empty.id}/enable`), {enabled: true})).status).toBe(403);
     expect((await member.delete(api(`/automations/${empty.id}`))).status).toBe(403);
     expect((await member.post(api(`/automations/${empty.id}/test`), {})).status).toBe(403);
-    expect((await owner.post(api('/automations'), {...draftBody, trigger: {kind: 'date', field: 'x', amount: -1, unit: 'days', direction: 'before'}})).status).toBe(400);
+    expect((await owner.post(api('/automations'), {...draftBody, trigger: {kind: 'date', field: 'x', amount: -1, unit: 'days', direction: 'before'}})).status).toBe(422);
   });
 
   it('contact.created: trigger conditions, if / else on segment rules, task, tag, custom field, timeline, audit', async () => {

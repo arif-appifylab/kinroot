@@ -8,7 +8,7 @@ import {keys, useApiMutation, useMe, useTeam} from '@/lib/queries';
 import type {ConversationRow} from '@/lib/types';
 import {cn} from '@/lib/utils';
 
-import {BulkBar} from '../data-table';
+import {BulkBar, LoadError} from '../data-table';
 import {FilterBar} from '../filter-bar';
 import {useBinToast} from '../recycle-bin-toast';
 import {Button} from '../ui/button';
@@ -27,6 +27,8 @@ export function ConversationList({
   rows,
   total,
   loading,
+  error,
+  onRetry,
   selectedId,
   filters,
   onFilters,
@@ -36,6 +38,9 @@ export function ConversationList({
   rows: ConversationRow[] | undefined;
   total: number;
   loading: boolean;
+  /** The list failed to load: an error state with Retry. */
+  error?: unknown;
+  onRetry?: () => void;
   selectedId: string | undefined;
   filters: ListFilters;
   onFilters: (f: Partial<ListFilters>) => void;
@@ -111,6 +116,7 @@ export function ConversationList({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin" role="list" aria-label="Conversations">
         {loading && <div className="space-y-2 p-3">{Array.from({length: 6}).map((_, i) => <Skeleton key={i} className="h-16" />)}</div>}
+        {!loading && !!error && !rows && <LoadError error={error} onRetry={onRetry} />}
         {!loading && rows?.length === 0 && (
           <EmptyState icon={<Inbox />} title={filters.q ? 'Nothing matches' : 'All clear'} description={filters.q ? 'Try other words or another view.' : 'New conversations from your mailboxes, forms and website chat show up here.'} />
         )}
@@ -150,7 +156,7 @@ export function ConversationList({
 
       <BulkBar count={ids.length} onClear={() => setPicked(new Set())}>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className={ghost}><UserCheck /> Assign</Button></DropdownMenuTrigger>
+          <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className={ghost} disabled={bulk.isPending}><UserCheck /> Assign</Button></DropdownMenuTrigger>
           <DropdownMenuContent align="center" className="max-h-72 overflow-y-auto">
             <DropdownMenuLabel>Assign to</DropdownMenuLabel>
             {team.data?.filter((u) => u.active).map((u) => <DropdownMenuItem key={u.id} onSelect={() => bulk.mutate({action: 'assign', assigneeId: u.id})}>{u.name}</DropdownMenuItem>)}
@@ -159,11 +165,14 @@ export function ConversationList({
         </DropdownMenu>
         {view === 'trash' ? (
           <>
-            <Button size="sm" variant="ghost" className={ghost} onClick={() => bulk.mutate({action: 'restore'})}><ArchiveRestore /> Restore</Button>
+            <Button size="sm" variant="ghost" className={ghost} pending={bulk.isPending && bulk.variables?.action === 'restore'} pendingLabel="Restoring…" disabled={bulk.isPending} onClick={() => bulk.mutate({action: 'restore'})}><ArchiveRestore /> Restore</Button>
             <Button
               size="sm"
               variant="ghost"
               className={ghost}
+              pending={bulk.isPending && bulk.variables?.action === 'delete'}
+              pendingLabel="Deleting…"
+              disabled={bulk.isPending}
               onClick={async () => {
                 if (!(await confirm({title: `Delete ${ids.length} conversation${ids.length === 1 ? '' : 's'} forever?`, description: isAdmin ? 'They leave the inbox for good. Admins can still restore them from Settings → Recycle bin for 30 days.' : 'Only conversations from your own mailbox can be deleted; team ones need an admin.', confirmLabel: 'Delete forever', destructive: true}))) return;
                 const r = await bulk.mutateAsync({action: 'delete'});
@@ -176,12 +185,12 @@ export function ConversationList({
         ) : (
           <>
             {view === 'closed' ? (
-              <Button size="sm" variant="ghost" className={ghost} onClick={() => bulk.mutate({action: 'reopen'})}><RotateCcw /> Reopen</Button>
+              <Button size="sm" variant="ghost" className={ghost} pending={bulk.isPending && bulk.variables?.action === 'reopen'} pendingLabel="Reopening…" disabled={bulk.isPending} onClick={() => bulk.mutate({action: 'reopen'})}><RotateCcw /> Reopen</Button>
             ) : (
-              <Button size="sm" variant="ghost" className={ghost} onClick={() => bulk.mutate({action: 'close'})}><CheckCircle2 /> Close</Button>
+              <Button size="sm" variant="ghost" className={ghost} pending={bulk.isPending && bulk.variables?.action === 'close'} pendingLabel="Closing…" disabled={bulk.isPending} onClick={() => bulk.mutate({action: 'close'})}><CheckCircle2 /> Close</Button>
             )}
             <DropdownMenu>
-              <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className={ghost}><MailOpen /> Mark</Button></DropdownMenuTrigger>
+              <DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className={ghost} disabled={bulk.isPending}><MailOpen /> Mark</Button></DropdownMenuTrigger>
               <DropdownMenuContent align="center">
                 <DropdownMenuItem onSelect={() => bulk.mutate({action: 'read'})}><MailOpen /> As read</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => bulk.mutate({action: 'unread'})}><Mail /> As unread</DropdownMenuItem>
@@ -189,11 +198,11 @@ export function ConversationList({
               </DropdownMenuContent>
             </DropdownMenu>
             {view === 'spam' ? (
-              <Button size="sm" variant="ghost" className={ghost} onClick={() => bulk.mutate({action: 'not_spam'})}><ShieldCheck /> Not spam</Button>
+              <Button size="sm" variant="ghost" className={ghost} pending={bulk.isPending && bulk.variables?.action === 'not_spam'} pendingLabel="Saving…" disabled={bulk.isPending} onClick={() => bulk.mutate({action: 'not_spam'})}><ShieldCheck /> Not spam</Button>
             ) : (
-              <Button size="sm" variant="ghost" className={ghost} onClick={() => bulk.mutate({action: 'spam'})}><ShieldAlert /> Spam</Button>
+              <Button size="sm" variant="ghost" className={ghost} pending={bulk.isPending && bulk.variables?.action === 'spam'} pendingLabel="Saving…" disabled={bulk.isPending} onClick={() => bulk.mutate({action: 'spam'})}><ShieldAlert /> Spam</Button>
             )}
-            <Button size="sm" variant="ghost" className={ghost} onClick={() => bulk.mutate({action: 'trash'})}><Trash2 /> Trash</Button>
+            <Button size="sm" variant="ghost" className={ghost} pending={bulk.isPending && bulk.variables?.action === 'trash'} pendingLabel="Moving…" disabled={bulk.isPending} onClick={() => bulk.mutate({action: 'trash'})}><Trash2 /> Trash</Button>
           </>
         )}
       </BulkBar>

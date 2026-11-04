@@ -4,7 +4,7 @@ import {z} from 'zod';
 
 import {CRM_APP, publicOrigin} from '../kit/config';
 import {randomToken, sha256Hex} from '../kit/crypto';
-import {currentUser, requireRole, type AppContext, type AppEnv} from '../kit/guards';
+import {currentUser, outranks, requireRole, type AppContext, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
 import {notFound, valid} from '../lib/http';
 import {publicUser, seesEmails} from '../lib/users';
@@ -64,9 +64,20 @@ export const team = new Hono<AppEnv>()
     const db = c.var.db;
     const target = await db.member.findUnique({where: {id: c.req.param('id')}});
     if (!target) throw notFound('User');
-    if (target.role === 'OWNER') throw new HTTPException(400, {message: 'The owner cannot be changed'});
     if (target.id === me.id) throw new HTTPException(400, {message: 'You cannot change your own access'});
+    // Only someone above a person changes them (an Admin changes Members and Viewers, only an Owner
+    // changes Admins); Owners also change other Owners. Anyone else sees no such user.
+    const ownerOnOwner = me.role === 'OWNER' && target.role === 'OWNER';
+    if (!outranks(me, target) && !ownerOnOwner) throw notFound('User');
     const body = c.req.valid('json');
+    // Nobody gives a role above their own (as inviting: an Admin may make an Admin).
+    if (body.role && outranks({role: body.role}, me)) throw notFound('User');
+    // The workspace always keeps an active Owner.
+    const demotes = !!body.role || body.active === false; // `role` here is never OWNER
+    if (target.role === 'OWNER' && target.active && demotes) {
+      const others = await db.member.count({where: {role: 'OWNER', active: true, id: {not: target.id}}});
+      if (!others) throw new HTTPException(409, {message: 'The workspace needs at least one active owner'});
+    }
     // Deactivating takes effect on the member's next request: every Kinroot route checks `active`.
     const {user: account, ...user} = await db.member.update({where: {id: target.id}, data: {role: body.role, active: body.active}, include: {user: {select: {email: true}}}});
     const label = user.name;

@@ -383,8 +383,8 @@ export function TestButton() {
   const description = (m: TestMode) => (m === 'record' && !noun ? 'Every step really happens.' : TEST_MODES[m].description);
   return (
     <div className="inline-flex">
-      <Button variant="secondary" className="rounded-r-none" onClick={() => void t.start('quick')} disabled={!!t.starting}>
-        {t.starting ? <Loader2 className="animate-spin" /> : <FlaskConical />} Test
+      <Button variant="secondary" className="rounded-r-none" onClick={() => void t.start('quick')} pending={!!t.starting} pendingLabel="Starting…">
+        <FlaskConical /> Test
       </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

@@ -1,18 +1,20 @@
 import {useQuery} from '@tanstack/react-query';
 import {createFileRoute, Link} from '@tanstack/react-router';
-import {ArrowLeft, Copy, ExternalLink, Loader2, Save} from 'lucide-react';
+import {ArrowLeft, Copy, ExternalLink, Save} from 'lucide-react';
 import {useEffect, useState} from 'react';
 
 import {MEETING_TYPES, type MeetingType} from '@/components/activity-log';
 import {Overrides, WeeklyHours} from '@/components/booking/availability-editor';
 import {TimeZoneSelect} from '@/components/booking/slot-picker';
 import {copyText, useCalendarState} from '@/components/booking/hooks';
+import {LoadError} from '@/components/data-table';
 import {SettingsSection} from '@/components/settings-section';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
 import {Checkbox, Field, Input, Label, NativeSelect, Switch, Textarea} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
 import {Avatar, PageHeader, Skeleton} from '@/components/ui/misc';
-import {api} from '@/lib/api';
+import {ApiError, api} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
 import {keys, useApiMutation, useTeam} from '@/lib/queries';
 import {availabilityError, durationLabel, type QuestionMode} from '@/lib/scheduling';
@@ -79,7 +81,21 @@ function LinkEditor() {
     success: 'Booking link saved',
     onSuccess: (r) => setDraft(toDraft(r.link)),
   });
+  const f = useFormState(draft ?? ({} as Draft), {
+    name: [is.required('Give the meeting a name, like Intro call.'), is.maxLength(120)],
+    slug: [is.required('Choose an address, like intro-call.'), is.maxLength(60), is.pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Use lowercase letters, numbers and single dashes, like intro-call (no dash at the start or end).')],
+    availability: [(v) => !!v && availabilityError(v)],
+  });
 
+  if (q.isError && !link) {
+    const missing = q.error instanceof ApiError && q.error.status === 404;
+    return (
+      <div className="mx-auto max-w-4xl">
+        <h1 className="sr-only">{missing ? 'Booking link not found' : 'Booking link'}</h1>
+        <LoadError title={missing ? 'Booking link not found' : undefined} error={q.error} onRetry={missing ? undefined : () => q.refetch()} />
+      </div>
+    );
+  }
   if (q.isLoading || !draft || !link) return <div className="grid gap-4"><Skeleton className="h-10 w-64" /><Skeleton className="h-64" /></div>;
   const set = (patch: Partial<Draft>) => setDraft({...draft, ...patch});
   const dirty = JSON.stringify(toDraft(link)) !== JSON.stringify(draft);
@@ -88,7 +104,7 @@ function LinkEditor() {
   const readOnly = !link.canEdit;
 
   return (
-    <div className="mx-auto max-w-4xl">
+    <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="mx-auto max-w-4xl">
       <Link to="/meetings" search={{tab: 'links'}} className="mb-3 inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-slate-900">
         <ArrowLeft className="size-4" /> Booking links
       </Link>
@@ -99,8 +115,8 @@ function LinkEditor() {
           <>
             <Button variant="secondary" asChild><a href={link.url} target="_blank" rel="noopener noreferrer"><ExternalLink /> Open page</a></Button>
             {!readOnly && (
-              <Button onClick={() => save.mutate(undefined)} disabled={!dirty || !!problem || save.isPending}>
-                {save.isPending ? <Loader2 className="animate-spin" /> : <Save />} Save
+              <Button type="submit" disabled={!dirty} pending={save.isPending} pendingLabel="Saving…">
+                <Save /> Save
               </Button>
             )}
           </>
@@ -114,10 +130,10 @@ function LinkEditor() {
         <SettingsSection title="Basics">
           <div className="grid gap-4">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Meeting name" htmlFor="ln-name"><Input id="ln-name" value={draft.name} onChange={(e) => set({name: e.target.value})} maxLength={120} /></Field>
-              <Field label="Address" htmlFor="ln-slug" hint={<span className="break-all">{prefix}<b>{draft.slug}</b></span>}>
+              <Field label="Meeting name" htmlFor="ln-name" error={f.error('name')}><Input id="ln-name" value={draft.name} onChange={(e) => set({name: e.target.value})} onBlur={f.blur('name')} maxLength={120} /></Field>
+              <Field label="Address" htmlFor="ln-slug" error={f.error('slug')} hint={<span className="break-all">{prefix}<b>{draft.slug}</b></span>}>
                 <div className="flex gap-2">
-                  <Input id="ln-slug" value={draft.slug} onChange={(e) => set({slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-')})} maxLength={60} />
+                  <Input id="ln-slug" value={draft.slug} onChange={(e) => set({slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-')})} onBlur={f.blur('slug')} maxLength={60} />
                   <Button type="button" variant="secondary" size="icon" onClick={() => copyText(link.url, 'Link copied')} aria-label="Copy link"><Copy /></Button>
                 </div>
               </Field>
@@ -139,7 +155,7 @@ function LinkEditor() {
                         const next = on ? draft.durations.filter((x) => x !== d) : [...draft.durations, d].sort((a, b) => a - b);
                         if (next.length) set({durations: next});
                       }}
-                      className={cn('cursor-pointer rounded-full border px-3 py-1 text-xs font-semibold transition-all', on ? 'border-primary bg-accent text-primary' : 'border-border text-slate-600 hover:border-slate-300')}
+                      className={cn('cursor-pointer rounded-full border px-3 py-1 text-xs font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30', on ? 'border-primary bg-accent text-primary' : 'border-border text-slate-600 hover:border-slate-300')}
                     >
                       {durationLabel(d)}
                     </button>
@@ -160,7 +176,7 @@ function LinkEditor() {
             <Field label="Timezone" className="max-w-sm"><TimeZoneSelect value={draft.timezone} onChange={(timezone) => set({timezone})} /></Field>
             <WeeklyHours value={draft.availability} onChange={(availability) => set({availability})} />
             <Overrides value={draft.availability} onChange={(availability) => set({availability})} />
-            {problem && <p className="text-sm font-medium text-destructive">{problem}</p>}
+            {problem && <p role="alert" className="text-sm font-medium text-destructive">{problem}</p>}
           </div>
         </SettingsSection>
 
@@ -183,7 +199,7 @@ function LinkEditor() {
               </NativeSelect>
             </Field>
             <Field label="Book up to (days ahead)" htmlFor="ln-ahead">
-              <Input id="ln-ahead" type="number" min={1} max={365} value={draft.maxDaysAhead} onChange={(e) => set({maxDaysAhead: Math.max(1, Math.min(365, Number(e.target.value) || 1))})} />
+              <Input id="ln-ahead" type="number" inputMode="numeric" min={1} max={365} value={draft.maxDaysAhead} onChange={(e) => set({maxDaysAhead: Math.max(1, Math.min(365, Number(e.target.value) || 1))})} />
             </Field>
             <Field label="Max bookings per day" htmlFor="ln-daily" hint="Per host. Empty = no limit.">
               <Input id="ln-daily" type="number" min={1} max={50} value={draft.dailyLimit ?? ''} onChange={(e) => set({dailyLimit: e.target.value ? Math.max(1, Math.min(50, Number(e.target.value))) : null})} />
@@ -205,7 +221,7 @@ function LinkEditor() {
             {(['phone', 'company', 'notes'] as const).map((k) => (
               <div key={k} className="flex items-center justify-between gap-3">
                 <span className="text-sm font-medium text-slate-700">{k === 'phone' ? 'Phone number' : k === 'company' ? 'Company' : 'Notes ("Anything we should know?")'}</span>
-                <NativeSelect aria-label={k} className="h-9 w-36" value={draft.questions[k]} onChange={(e) => set({questions: {...draft.questions, [k]: e.target.value as QuestionMode}})}>
+                <NativeSelect aria-label={k === 'phone' ? 'Ask for a phone number' : k === 'company' ? 'Ask for the company' : 'Ask for notes'} className="h-9 w-36" value={draft.questions[k]} onChange={(e) => set({questions: {...draft.questions, [k]: e.target.value as QuestionMode}})}>
                   <option value="off">Don't ask</option>
                   <option value="optional">Optional</option>
                   <option value="required">Required</option>
@@ -221,7 +237,7 @@ function LinkEditor() {
           </SettingsSection>
         )}
       </fieldset>
-    </div>
+    </form>
   );
 }
 
@@ -255,7 +271,7 @@ function LocationEditor({draft, set}: {draft: Draft; set: (p: Partial<Draft>) =>
               aria-checked={on}
               onClick={() => set({locationType: t, location: null, ...(t === 'PHONE' ? {questions: {...draft.questions, phone: 'required'}} : {})})}
               className={cn(
-                'flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold transition-all [&_svg]:size-3.5',
+                'flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-primary/30 [&_svg]:size-3.5',
                 on ? 'border-primary bg-accent text-primary ring-2 ring-primary/15' : 'border-border text-slate-600 hover:border-slate-300',
               )}
             >

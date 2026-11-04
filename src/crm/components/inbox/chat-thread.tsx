@@ -1,4 +1,4 @@
-import {Bot, Check, CheckCheck, ChevronDown, Loader2, Lock, Mail, MessageCircle, Paperclip, Send, StickyNote, X} from 'lucide-react';
+import {Bot, Check, CheckCheck, ChevronDown, Lock, Mail, MessageCircle, Paperclip, Send, StickyNote, X} from 'lucide-react';
 import {useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {toast} from 'sonner';
 
@@ -311,21 +311,21 @@ export function ChatComposer({detail, mode, onMode, focusKey}: {detail: Conversa
               </DropdownMenu>
               <input ref={input} type="file" multiple className="sr-only" tabIndex={-1} aria-hidden onChange={(e) => attach(e.target.files)} />
               <Tooltip content="Attach a file (up to 5 MB)">
-                <Button type="button" variant="ghost" size="icon-sm" aria-label="Attach a file" disabled={uploading || files.length >= 5} onClick={() => input.current?.click()}>
-                  {uploading ? <Loader2 className="animate-spin" /> : <Paperclip />}
+                <Button type="button" variant="ghost" size="icon-sm" aria-label={uploading ? 'Uploading…' : 'Attach a file'} pending={uploading} disabled={files.length >= 5} onClick={() => input.current?.click()}>
+                  <Paperclip />
                 </Button>
               </Tooltip>
             </>
           )}
           <div className="ml-auto flex flex-wrap items-center gap-2">
             {mode === 'comment' ? (
-              <Button type="button" size="sm" onClick={submitComment} disabled={!comment.trim() || addComment.isPending}>
-                {addComment.isPending ? <Loader2 className="animate-spin" /> : <StickyNote />} Add comment
+              <Button type="button" size="sm" onClick={submitComment} disabled={!comment.trim()} pending={addComment.isPending} pendingLabel="Adding…">
+                <StickyNote /> Add comment
               </Button>
             ) : (
               <>
-                {t.status === 'OPEN' && <Button type="button" variant="secondary" size="sm" onClick={() => submit(true)} disabled={!ready}>Send & close</Button>}
-                <Button type="button" size="sm" onClick={() => submit(false)} disabled={!ready}>{send.isPending ? <Loader2 className="animate-spin" /> : <Send />} Send</Button>
+                {t.status === 'OPEN' && <Button type="button" variant="secondary" size="sm" onClick={() => submit(true)} disabled={!ready} pending={send.isPending && send.variables === true} pendingLabel="Sending…">Send & close</Button>}
+                <Button type="button" size="sm" onClick={() => submit(false)} disabled={!ready} pending={send.isPending && send.variables === false} pendingLabel="Sending…"><Send /> Send</Button>
               </>
             )}
           </div>

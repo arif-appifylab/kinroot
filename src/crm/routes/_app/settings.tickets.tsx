@@ -11,6 +11,8 @@ import {Button} from '@/components/ui/button';
 import {confirm} from '@/components/ui/confirm';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Checkbox, Field, Input, NativeSelect, Switch, Textarea} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
+import {LoadError} from '@/components/data-table';
 import {EmptyState} from '@/components/ui/misc';
 import {api} from '@/lib/api';
 import {isEmptyHtml, textToEditorHtml} from '@/lib/email-html';
@@ -47,7 +49,7 @@ function HoursInput({value, onChange, disabled, label}: {value: number | null; o
       <Input
         aria-label={label}
         type="number"
-        min={0}
+        inputMode="decimal"
         step="0.25"
         disabled={disabled}
         className="h-9 pr-10"
@@ -65,23 +67,24 @@ function CannedDialog({reply, onClose}: {reply: CannedReply | null; onClose: () 
   // Older replies were plain text: they open as paragraphs and are saved back as rich text.
   const [form, setForm] = useState({name: reply?.name ?? '', html: reply ? (reply.html ?? textToEditorHtml(reply.body)) : ''});
   const save = useApiMutation(() => (reply ? api.patch(`/tickets/canned/${reply.id}`, form) : api.post('/tickets/canned', form)), {invalidate: [keys.tickets], success: 'Canned reply saved', onSuccess: onClose});
+  const f = useFormState(form, {name: [is.required('Name the reply, like "Password reset steps".'), is.maxLength(100)], html: [(v) => (isEmptyHtml(v) ? 'Write the reply.' : null)]});
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !save.isPending && onClose()}>
       <DialogContent size="md">
-        <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="flex min-h-0 flex-1 flex-col">
+        <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>{reply ? 'Edit canned reply' : 'New canned reply'}</DialogTitle>
             <DialogDescription>Use Merge field for the contact’s name, the company and your own name; they are filled in when the reply is sent.</DialogDescription>
           </DialogHeader>
           <DialogBody>
-            <Field label="Name" htmlFor="cr-name"><Input id="cr-name" required value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} placeholder="e.g. Password reset steps" /></Field>
-            <Field label="Reply">
+            <Field label="Name" htmlFor="cr-name" error={f.error('name')}><Input id="cr-name" value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} onBlur={f.blur('name')} placeholder="e.g. Password reset steps" /></Field>
+            <Field label="Reply" error={f.error('html')}>
               <RichEditor variant="text" mergeFields minHeight={220} value={form.html} onChange={(html) => setForm({...form, html})} ariaLabel="Reply" placeholder="The answer you type most often…" />
             </Field>
           </DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={save.isPending || !form.name.trim() || isEmptyHtml(form.html)}>{save.isPending && <Loader2 className="animate-spin" />} Save</Button>
+            <Button type="button" variant="secondary" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel="Saving…">Save</Button>
           </DialogFooter>
         </form>
       </DialogContent>
@@ -103,7 +106,12 @@ function TicketSettingsPage() {
 
   const save = useApiMutation(() => api.patch('/tickets/settings', form), {invalidate: [keys.tickets], success: 'Ticket settings saved'});
   const remove = useApiMutation((id: string) => api.del(`/tickets/canned/${id}`), {invalidate: [keys.tickets], success: 'Canned reply deleted'});
+  const f = useFormState(
+    {supportEmail: form?.supportEmail ?? '', portalIntro: form?.portalIntro ?? ''},
+    {supportEmail: [is.email('Enter a valid address, like support@yourcompany.com.')], portalIntro: [is.maxLength(1000)]},
+  );
 
+  if (q.isError && !form) return <LoadError error={q.error} onRetry={() => q.refetch()} />;
   if (!form) return <Loader2 className="size-5 animate-spin text-primary" />;
   const disabled = !isAdmin;
   const sla = form.sla;
@@ -117,14 +125,14 @@ function TicketSettingsPage() {
   return (
     <div>
       {!isAdmin && <div className="mb-6"><AdminOnly /></div>}
-      <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))}>
+      <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))}>
         <SettingsSection
           title="Support email (optional)"
           description="Only needed if customers should be able to email you for help. Mail sent to this address becomes a ticket, and their replies thread into the same ticket. Without it, tickets still come from the support portal, forms, the inbox and your team."
         >
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Support email address" htmlFor="tk-email" hint="Leave empty if you don't take support requests by email.">
-              <Input id="tk-email" type="email" disabled={disabled} value={form.supportEmail} onChange={(e) => setForm({...form, supportEmail: e.target.value.trim()})} placeholder="support@yourcompany.com" />
+            <Field label="Support email address" htmlFor="tk-email" hint="Leave empty if you don't take support requests by email." error={f.error('supportEmail')}>
+              <Input id="tk-email" type="email" disabled={disabled} value={form.supportEmail} onChange={(e) => setForm({...form, supportEmail: e.target.value.trim()})} onBlur={f.blur('supportEmail')} placeholder="support@yourcompany.com" />
             </Field>
             <Field label="Send replies from" htmlFor="tk-account" hint="Customers' replies come back to the support address either way (Reply-To).">
               <NativeSelect id="tk-account" disabled={disabled} value={form.replyAccountId} onChange={(e) => setForm({...form, replyAccountId: e.target.value})}>
@@ -220,6 +228,7 @@ function TicketSettingsPage() {
                             key={d}
                             type="button"
                             disabled={disabled}
+                            aria-pressed={on}
                             onClick={() => setBh({days: on ? bh.days.filter((x) => x !== i) : [...bh.days, i].sort()})}
                             className={cn('cursor-pointer rounded-full border px-3 py-1.5 text-sm font-medium transition-colors', on ? 'border-primary bg-primary/10 text-primary' : 'border-slate-200 text-slate-600 hover:border-primary/50')}
                           >
@@ -242,8 +251,8 @@ function TicketSettingsPage() {
         >
           <div className="grid gap-4">
             <Toggle label="Portal on" hint={`${origin}/support`} checked={form.portalEnabled} disabled={disabled} onChange={(portalEnabled) => setForm({...form, portalEnabled})} />
-            <Field label="Welcome text" htmlFor="tk-intro">
-              <Textarea id="tk-intro" rows={2} disabled={disabled || !form.portalEnabled} value={form.portalIntro} onChange={(e) => setForm({...form, portalIntro: e.target.value})} />
+            <Field label="Welcome text" htmlFor="tk-intro" error={f.error('portalIntro')}>
+              <Textarea id="tk-intro" rows={2} disabled={disabled || !form.portalEnabled} value={form.portalIntro} onChange={(e) => setForm({...form, portalIntro: e.target.value})} onBlur={f.blur('portalIntro')} />
             </Field>
           </div>
         </SettingsSection>
@@ -254,12 +263,13 @@ function TicketSettingsPage() {
 
         {isAdmin && (
           <div className="mb-6 flex justify-end">
-            <Button type="submit" disabled={save.isPending}>{save.isPending && <Loader2 className="animate-spin" />} Save changes</Button>
+            <Button type="submit" pending={save.isPending} pendingLabel="Saving…">Save changes</Button>
           </div>
         )}
       </form>
 
       <SettingsSection title="Canned replies" description="Saved answers agents insert from the reply box." actions={isAdmin && <Button size="sm" onClick={() => setEditing('new')}><Plus /> New reply</Button>}>
+        {canned.isError && !canned.data && <LoadError error={canned.error} onRetry={() => canned.refetch()} />}
         {canned.data?.length === 0 && <EmptyState icon={<MessageSquareReply />} title="No canned replies yet" description="Save the answers you type most often." />}
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {canned.data?.map((r) => (
@@ -268,8 +278,8 @@ function TicketSettingsPage() {
               <p className="mt-2 line-clamp-3 text-xs whitespace-pre-wrap text-muted-foreground">{r.body}</p>
               {isAdmin && (
                 <div className="mt-3 flex gap-1">
-                  <Button variant="ghost" size="sm" onClick={() => setEditing(r)}><Pencil /> Edit</Button>
-                  <Button variant="ghost" size="sm" className="text-destructive hover:bg-rose-50 hover:text-destructive" onClick={async () => (await confirm({title: `Delete "${r.name}"?`, confirmLabel: 'Delete', destructive: true})) && remove.mutate(r.id)}><Trash2 /> Delete</Button>
+                  <Button variant="ghost" size="sm" disabled={remove.isPending && remove.variables === r.id} onClick={() => setEditing(r)}><Pencil /> Edit</Button>
+                  <Button variant="ghost" size="sm" className="text-destructive hover:bg-rose-50 hover:text-destructive" pending={remove.isPending && remove.variables === r.id} pendingLabel="Deleting…" disabled={remove.isPending} onClick={async () => (await confirm({title: `Delete "${r.name}"?`, confirmLabel: 'Delete', destructive: true})) && remove.mutate(r.id)}><Trash2 /> Delete</Button>
                 </div>
               )}
             </div>

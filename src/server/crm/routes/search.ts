@@ -2,7 +2,7 @@ import {Hono} from 'hono';
 import {z} from 'zod';
 
 import type {AppEnv} from '../kit/guards';
-import {ownerScope, valid} from '../lib/http';
+import {attachedWhere, ownerScope, valid} from '../lib/http';
 import {ticketScope} from '../lib/tickets';
 import {companyWhere} from './companies';
 import {contactWhere} from './contacts';
@@ -27,7 +27,8 @@ export const search = new Hono<AppEnv>().get('/', valid('query', z.object({q: z.
       take: 5,
     }),
     db.note.findMany({
-      where: {body: {contains: q, mode: 'insensitive'}},
+      // Only notes on records the user may see (owner-only visibility), like every other result type.
+      where: {body: {contains: q, mode: 'insensitive'}, AND: [attachedWhere(scope)]},
       select: {id: true, body: true, contactId: true, companyId: true, dealId: true},
       take: 4,
       orderBy: {createdAt: 'desc'},

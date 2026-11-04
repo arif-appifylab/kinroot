@@ -18,6 +18,7 @@ import {TicketsCard} from '@/components/tickets/tickets-card';
 import {FollowButton} from '@/components/notifications';
 import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
+import {LoadError} from '@/components/data-table';
 import {Card} from '@/components/ui/card';
 import {confirm} from '@/components/ui/confirm';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/menu';
@@ -58,7 +59,13 @@ function ContactPage() {
 
   const c = q.data;
   if (q.isLoading || !c) {
-    return q.error ? <p className="text-sm text-destructive">{(q.error as Error).message}</p> : <Skeleton className="h-64 rounded-2xl" />;
+    return q.error ? (
+      <Card className="overflow-hidden">
+        <LoadError error={q.error} onRetry={() => q.refetch()} title={(q.error as {status?: number}).status === 404 ? 'This contact was not found' : 'This contact could not be loaded'} />
+      </Card>
+    ) : (
+      <Skeleton className="h-64 rounded-2xl" />
+    );
   }
 
   const name = fullName(c);
@@ -98,7 +105,7 @@ function ContactPage() {
             <FollowButton entity="contact" id={contactId} />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="secondary" size="sm">Actions <ChevronDown /></Button>
+                <Button variant="secondary" size="sm" disabled={clone.isPending || remove.isPending} aria-busy={clone.isPending || remove.isPending || undefined}>Actions <ChevronDown /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-60">
                 <PropertyHistoryMenuItem />
@@ -170,7 +177,7 @@ function ContactPage() {
             title="Companies"
             action={canEdit && <Button variant="ghost" size="sm" onClick={() => setAddingCompany((a) => !a)}><Plus /> Link</Button>}
           >
-            {addingCompany && <div className="p-2"><CompanyPicker value={null} onChange={(co) => co && link.mutate(co)} /></div>}
+            {addingCompany && <div className="p-2"><CompanyPicker value={null} onChange={(co) => co && !link.isPending && link.mutate(co)} /></div>}
             {c.companies.length === 0 && !addingCompany && <p className="px-3 py-3 text-sm text-muted-foreground">Not linked to a company</p>}
             {c.companies.map((l) => (
               <div key={l.companyId} className="group flex items-center gap-2.5 px-3 py-2.5">
@@ -180,7 +187,14 @@ function ContactPage() {
                   <p className="text-xs text-muted-foreground">{l.isPrimary ? 'Primary' : l.role ?? l.company.domain}</p>
                 </Link>
                 {canEdit && (
-                  <button aria-label={`Unlink ${l.company.name}`} onClick={() => unlink.mutate(l.companyId)} className="cursor-pointer rounded p-1 text-slate-300 opacity-0 group-hover:opacity-100 hover:text-destructive">
+                  <button
+                    type="button"
+                    aria-label={`Unlink ${l.company.name}`}
+                    disabled={unlink.isPending}
+                    aria-busy={(unlink.isPending && unlink.variables === l.companyId) || undefined}
+                    onClick={() => unlink.mutate(l.companyId)}
+                    className="cursor-pointer rounded p-1 text-slate-300 opacity-0 outline-none group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed pointer-coarse:opacity-100"
+                  >
                     <X className="size-4" />
                   </button>
                 )}

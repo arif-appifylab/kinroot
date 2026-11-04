@@ -12,9 +12,9 @@ export function csvCell(v: unknown) {
 
 export const csvLine = (values: unknown[]) => values.map(csvCell).join(',');
 
-/** Rows → CSV text with `columns` as the header (formula-safe). */
+/** Rows → CSV text with `columns` as the header. Header cells (report labels, form questions) are escaped like body cells. */
 export function csv(rows: Record<string, unknown>[], columns: string[]) {
-  return [columns.join(','), ...rows.map((r) => columns.map((c) => csvCell(r[c])).join(','))].join('\r\n');
+  return [csvLine(columns), ...rows.map((r) => columns.map((c) => csvCell(r[c])).join(','))].join('\r\n');
 }
 
 /**

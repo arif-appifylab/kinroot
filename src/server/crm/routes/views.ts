@@ -1,5 +1,4 @@
 import {Hono} from 'hono';
-import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
 import {currentUser, isAdmin, type AppEnv} from '../kit/guards';
@@ -17,7 +16,7 @@ export const views = new Hono<AppEnv>()
     return c.json({rows});
   })
 
-  .post('/', valid('json', z.object({entity, name: z.string().trim().min(1).max(60), filters: z.record(z.string(), z.string()), shared: z.boolean().default(false)})), async (c) => {
+  .post('/', valid('json', z.object({entity, name: z.string().trim().min(1).max(60), filters: z.record(z.string().max(60), z.string().max(2000)), shared: z.boolean().default(false)})), async (c) => {
     const me = currentUser(c);
     const view = await c.var.db.savedView.create({data: {...c.req.valid('json'), ownerId: me.id}});
     return c.json({view}, 201);
@@ -25,9 +24,9 @@ export const views = new Hono<AppEnv>()
 
   .delete('/:id', async (c) => {
     const me = currentUser(c);
-    const view = await c.var.db.savedView.findUnique({where: {id: c.req.param('id')}});
+    // Only its creator or an admin; anyone else gets 404 (the owner condition is in the query).
+    const view = await c.var.db.savedView.findFirst({where: {id: c.req.param('id'), ...(isAdmin(me) ? {} : {ownerId: me.id})}, select: {id: true}});
     if (!view) throw notFound('View');
-    if (view.ownerId !== me.id && !isAdmin(me)) throw new HTTPException(403, {message: 'Only the creator can delete this view'});
     await c.var.db.savedView.delete({where: {id: view.id}});
     return c.json({ok: true});
   });

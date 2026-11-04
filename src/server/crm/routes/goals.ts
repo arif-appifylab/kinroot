@@ -5,7 +5,7 @@ import type {Goal, Prisma} from '../../../generated/prisma/client';
 import type {Db} from '../kit/db';
 import {currentUser, requireRole, type AppEnv} from '../kit/guards';
 import {ACTIVITY_KINDS, GOAL_METRICS, type GoalMetric} from '@/lib/reports';
-import {isoDate, notFound, ownerScope, valid} from '../lib/http';
+import {intParam, isoDate, notFound, ownerScope, valid} from '../lib/http';
 import {periodSpan, safeTz} from '../lib/periods';
 import {userSelect} from '../lib/users';
 
@@ -88,7 +88,7 @@ async function progress(db: Db, goals: (Goal & {user: unknown})[], tz: string, o
 
 export const goals = new Hono<AppEnv>()
   /** Goals in effect for the period, with progress. Members with owner-only visibility see just their own. */
-  .get('/', valid('query', z.object({tz: z.string().max(64).optional(), offset: z.coerce.number().int().min(-12).max(1).default(0), userId: z.string().optional(), mine: z.string().optional()})), async (c) => {
+  .get('/', valid('query', z.object({tz: z.string().max(64).optional(), offset: intParam(-12, 1).default(0), userId: z.string().optional(), mine: z.string().optional()})), async (c) => {
     const me = currentUser(c);
     const db = c.var.db;
     const q = c.req.valid('query');

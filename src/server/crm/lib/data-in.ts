@@ -239,7 +239,9 @@ const apiSource = (ctx: Ctx) => `API: ${ctx.key.name}`.slice(0, 100);
 
 async function ownerFromEmail(ctx: Ctx, email: string | undefined, field: string) {
   if (!email) return undefined;
-  const u = await ctx.db.member.findFirst({where: {user: {email: email.trim().toLowerCase()}, active: true}, select: {id: true}});
+  const address = email.trim().toLowerCase();
+  // A teammate who joined (their account's address) or one invited who has not joined yet.
+  const u = await ctx.db.member.findFirst({where: {OR: [{user: {email: address}}, {inviteEmail: address}], active: true}, select: {id: true}});
   if (!u) throw notFoundError(field, `${field}: no active team member has the email ${email}`);
   return u.id;
 }
@@ -665,20 +667,22 @@ export async function handleDataIn(db: Db, input: DataInInput): Promise<DataInOu
   };
   const fail = (code: DataInErrorCode, message: string, field?: string) => finish(DATA_IN_ERRORS[code].status, errorBody(code, message, field), code);
 
-  if (match.wrongMethod) return fail('E_NOT_FOUND', `${action.path} only accepts ${action.method} requests`);
+  // Answered without a log row: nobody can be told apart before a valid key (anyone could fill the log).
+  const refuse = (code: DataInErrorCode, message: string): DataInOutput => ({status: DATA_IN_ERRORS[code].status, body: errorBody(code, message)});
+  // Refused before anything is written: a wrong method, no key or an unknown key counts against the
+  // connection (`datain:bad:<ip>`, 30 per 10 minutes) and leaves no request log row.
+  const badKey = `datain:bad:${await ipKey(input.ip)}`;
+  const blocked = () => refuse('E_RATE_LIMITED', 'Too many requests with unknown API keys from this address. Try again later.');
+  const strike = async (code: DataInErrorCode, message: string) => ((await hit(db, badKey, BAD_KEY_LIMIT, 600)) ? refuse(code, message) : blocked());
+  // Over the limit: not even a key lookup until the window has passed.
+  if ((await db.rateHit.count({where: {key: badKey, at: {gte: new Date(Date.now() - 600_000)}}})) >= BAD_KEY_LIMIT) return blocked();
+  if (match.wrongMethod) return strike('E_NOT_FOUND', `${action.path} only accepts ${action.method} requests`);
 
   // ─── API key ───
-  const badKey = `datain:bad:${await ipKey(input.ip)}`;
-  if ((await db.rateHit.count({where: {key: badKey, at: {gte: new Date(Date.now() - 600_000)}}})) >= BAD_KEY_LIMIT) {
-    return fail('E_RATE_LIMITED', 'Too many requests with unknown API keys from this address. Try again later.');
-  }
   const bearer = /^Bearer\s+(\S{10,200})$/i.exec((input.headers.get('authorization') ?? '').trim())?.[1];
-  if (!bearer) return fail('E_UNAUTHORIZED', 'Send your API key as "Authorization: Bearer <key>".');
+  if (!bearer) return strike('E_UNAUTHORIZED', 'Send your API key as "Authorization: Bearer <key>".');
   const key = await db.apiKey.findUnique({where: {keyHash: await apiKeyHash(bearer)}, include: {createdBy: {include: withEmail}}});
-  if (!key) {
-    await db.rateHit.create({data: {key: badKey}});
-    return fail('E_UNAUTHORIZED', 'Unknown API key. Copy it again, or create a new one in Settings → Webhooks → Incoming.');
-  }
+  if (!key) return strike('E_UNAUTHORIZED', 'Unknown API key. Copy it again, or create a new one in Settings → Webhooks → Incoming.');
   const {createdBy, ...keyRow} = key;
   const user = createdBy ? asUser(createdBy) : null;
   state.key = keyRow;

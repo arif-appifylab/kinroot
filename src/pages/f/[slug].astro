@@ -21,7 +21,8 @@ Astro.response.headers.set('Cache-Control', 'private, max-age=60');
 const title = form?.settings.title || form?.name || (failed ? 'Form not available' : 'Form not found');
 ---
 
-<CrmPublic brand={brand} title={title} description={form?.settings.intro?.slice(0, 160)} noindex={!form}>
+{/* A form is a link people are sent, not a page for search results: always noindex (the sitemap lists none). */}
+<CrmPublic brand={brand} title={title} description={form?.settings.intro?.slice(0, 160)} noindex>
   {
     failed ? (
       <main class="grid min-h-dvh place-items-center p-6 text-center">

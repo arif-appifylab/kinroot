@@ -6,11 +6,13 @@ import {toast} from 'sonner';
 
 import {api} from '@/lib/api';
 import {ago} from '@/lib/format';
-import {keys, useApiMutation} from '@/lib/queries';
+import {badgesQuery, keys, useApiMutation} from '@/lib/queries';
 import type {AppNotification} from '@/lib/types';
 import {cn} from '@/lib/utils';
 
+import {LoadError} from './data-table';
 import {Button} from './ui/button';
+import {confirm} from './ui/confirm';
 import {Popover, PopoverContent, PopoverTrigger} from './ui/menu';
 import {Avatar, EmptyState} from './ui/misc';
 
@@ -47,11 +49,8 @@ export function NotificationBell() {
   const navigate = useNavigate();
   const qc = useQueryClient();
 
-  const count = useQuery({
-    queryKey: [...keys.notifications, 'count'],
-    queryFn: () => api.get<Count>('/notifications/count'),
-    refetchInterval: 30_000,
-  });
+  // The unread number and the newest id come with the app's badges (one request for the whole shell).
+  const count = useQuery({...badgesQuery, select: (b): Count => ({unread: b.notifications, latestId: b.latestNotificationId})});
   const list = useQuery({
     queryKey: [...keys.notifications, 'list', unreadOnly],
     queryFn: () => api.get<{rows: AppNotification[]; unread: number}>('/notifications', {unread: unreadOnly ? '1' : undefined}),
@@ -107,19 +106,22 @@ export function NotificationBell() {
           <p className="text-sm font-bold text-slate-900">Notifications</p>
           <div className="flex items-center gap-1">
             <button
+              type="button"
+              aria-pressed={unreadOnly}
               onClick={() => setUnreadOnly((v) => !v)}
               className={cn('cursor-pointer rounded-md px-2 py-1 text-xs font-semibold transition-colors', unreadOnly ? 'bg-primary/10 text-primary' : 'text-slate-500 hover:bg-slate-100')}
             >
               Unread
             </button>
-            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={!unread} onClick={() => markRead.mutate(undefined)}>
+            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" disabled={!unread} pending={markRead.isPending} pendingLabel="Marking…" onClick={() => markRead.mutate(undefined)}>
               <CheckCheck /> Mark all read
             </Button>
           </div>
         </div>
         <div className="max-h-[min(28rem,70vh)] overflow-y-auto scrollbar-thin">
           {list.isLoading && <p className="px-4 py-6 text-center text-sm text-muted-foreground">Loading…</p>}
-          {!list.isLoading && rows.length === 0 && (
+          {list.isError && !list.data && <LoadError error={list.error} onRetry={() => list.refetch()} className="py-2" />}
+          {!list.isLoading && !list.isError && rows.length === 0 && (
             <EmptyState icon={<BellOff />} title={unreadOnly ? 'All caught up' : 'No notifications yet'} description="Mentions, assignments and updates on records you own or follow land here." className="py-10" />
           )}
           {rows.map((n) => {
@@ -146,8 +148,14 @@ export function NotificationBell() {
         </div>
         {rows.some((r) => r.readAt) && !unreadOnly && (
           <div className="border-t border-slate-100 px-4 py-2 text-right">
-            <button onClick={() => clearRead.mutate(undefined)} className="cursor-pointer text-xs font-semibold text-slate-500 hover:text-slate-900">
-              Clear read
+            <button
+              type="button"
+              disabled={clearRead.isPending}
+              aria-busy={clearRead.isPending || undefined}
+              onClick={async () => (await confirm({title: 'Clear read notifications?', description: 'Notifications you have read are removed for good. Unread ones stay.', confirmLabel: 'Clear read', destructive: true})) && clearRead.mutate(undefined)}
+              className="cursor-pointer rounded text-xs font-semibold text-slate-500 outline-none hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {clearRead.isPending ? 'Clearing…' : 'Clear read'}
             </button>
           </div>
         )}
@@ -169,7 +177,7 @@ export function FollowButton({entity, id, size = 'sm'}: {entity: 'contact' | 'co
   const following = q.data?.following ?? false;
   const others = (q.data?.followers ?? []).length - (following ? 1 : 0);
   return (
-    <Button variant="secondary" size={size} disabled={q.isLoading || toggle.isPending} onClick={() => toggle.mutate(!following)} title={others > 0 ? `${others} other follower${others === 1 ? '' : 's'}` : undefined}>
+    <Button variant="secondary" size={size} disabled={q.isLoading} pending={toggle.isPending} pendingLabel={following ? 'Unfollowing…' : 'Following…'} onClick={() => toggle.mutate(!following)} title={others > 0 ? `${others} other follower${others === 1 ? '' : 's'}` : undefined}>
       {following ? <BellOff /> : <Bell />} {following ? 'Unfollow' : 'Follow'}
     </Button>
   );

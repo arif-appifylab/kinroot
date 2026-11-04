@@ -17,7 +17,7 @@ const slug = seg(Astro.params.slug);
 const path = `${handle}/${slug}`;
 const [brand, res] = await Promise.all([
   crmBrand(Astro.request),
-  handle && slug ? crmGet<{link: PublicBookingLink}>(Astro.request, `/public/booking/links/${handle}/${slug}`) : Promise.resolve({status: 404, data: null}),
+  handle && slug ? crmGet<{link: PublicBookingLink}>(Astro.request, `/public/booking/links/${encodeURIComponent(handle)}/${encodeURIComponent(slug)}`) : Promise.resolve({status: 404, data: null}),
 ]);
 const link = res.data?.link ?? null;
 const failed = !link && res.status !== 404;
@@ -27,7 +27,8 @@ const host = link?.kind === 'personal' ? link.hosts[0]?.name : undefined;
 const title = link ? `${link.name}${host ? ` with ${host}` : ''}` : failed ? 'Booking not available' : 'Book a meeting';
 ---
 
-<CrmPublic brand={brand} title={title} description={link?.description?.slice(0, 160)} noindex={!link}>
+{/* A booking page is a link people are sent, not a page for search results: always noindex (the sitemap lists none). */}
+<CrmPublic brand={brand} title={title} description={link?.description?.slice(0, 160)} noindex>
   {
     failed ? (
       <main class="grid min-h-dvh place-items-center p-6 text-center">

@@ -5,6 +5,7 @@ import Papa from 'papaparse';
 import {useEffect, useMemo, useState} from 'react';
 import {toast} from 'sonner';
 
+import {LoadError} from '@/components/data-table';
 import {useLists} from '@/components/lists/list-picker';
 import {TagSelect} from '@/components/pickers';
 import {Badge} from '@/components/ui/badge';
@@ -195,7 +196,11 @@ export function ImportDrawer({entity, open, onOpenChange, importId, listId}: {en
         {step === 'options' && <OptionsStep entity={entity} mapping={mapping} options={options} setOptions={setOptions} busy={busy} onBack={() => setStep('map')} onNext={() => validate(finalValueMap(mapping, valueChoice))} />}
         {step === 'review' && detail.data && <ReviewStep detail={detail.data} busy={busy} onBack={() => setStep('options')} onStart={start} />}
         {step === 'run' && detail.data && <RunStep entity={entity} detail={detail.data} onAnother={reset} onClose={() => onOpenChange(false)} />}
-        {(step !== 'upload' && !detail.data) && <DialogBody><Loader2 className="mx-auto size-6 animate-spin text-primary" /></DialogBody>}
+        {(step !== 'upload' && !detail.data) && (
+          <DialogBody>
+            {detail.isError ? <LoadError error={detail.error} onRetry={() => detail.refetch()} title="This import could not be loaded" /> : <Loader2 className="mx-auto size-6 animate-spin text-primary" />}
+          </DialogBody>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -217,7 +222,8 @@ function UploadStep({entity, busy, onFile, onOpen}: {entity: IoEntity; busy: boo
           const f = e.dataTransfer.files[0];
           if (f) onFile(f);
         }}
-        className={cn('flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-12 text-center transition-colors', drag ? 'border-primary bg-accent/60' : 'border-slate-200 bg-slate-50/60 hover:border-primary hover:bg-accent/40')}
+        aria-busy={busy || undefined}
+        className={cn('flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-12 text-center transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary/30', busy && 'cursor-wait', drag ? 'border-primary bg-accent/60' : 'border-slate-200 bg-slate-50/60 hover:border-primary hover:bg-accent/40')}
       >
         {busy ? <Loader2 className="size-8 animate-spin text-primary" /> : <FileUp className="size-8 text-primary" />}
         <p className="mt-3 text-sm font-semibold text-slate-800">{busy ? 'Reading the file…' : 'Choose or drop a CSV file'}</p>
@@ -513,8 +519,8 @@ function OptionsStep({entity, mapping, options, setOptions, busy, onBack, onNext
         </label>
       </DialogBody>
       <DialogFooter>
-        <Button variant="secondary" onClick={onBack}><ArrowLeft /> Back</Button>
-        <Button onClick={onNext} disabled={busy}>{busy ? <Loader2 className="animate-spin" /> : null} Check the file <ArrowRight /></Button>
+        <Button variant="secondary" onClick={onBack} disabled={busy}><ArrowLeft /> Back</Button>
+        <Button onClick={onNext} pending={busy} pendingLabel="Checking…">Check the file <ArrowRight /></Button>
       </DialogFooter>
     </>
   );
@@ -588,8 +594,8 @@ function ReviewStep({detail, busy, onBack, onStart}: {detail: ImportDetail; busy
         <Issues detail={detail} phase="validate" />
       </DialogBody>
       <DialogFooter>
-        <Button variant="secondary" onClick={onBack} disabled={checking}><ArrowLeft /> Back</Button>
-        <Button onClick={onStart} disabled={busy || checking || !n}>{busy ? <Loader2 className="animate-spin" /> : <Upload />} Import {n.toLocaleString()} row{n === 1 ? '' : 's'}</Button>
+        <Button variant="secondary" onClick={onBack} disabled={checking || busy}><ArrowLeft /> Back</Button>
+        <Button onClick={onStart} disabled={checking || !n} pending={busy} pendingLabel="Starting…"><Upload /> Import {n.toLocaleString()} row{n === 1 ? '' : 's'}</Button>
       </DialogFooter>
     </>
   );
@@ -610,9 +616,12 @@ function RunStep({entity, detail, onAnother, onClose}: {entity: IoEntity; detail
   const imp = detail.import;
   const noun = IO_ENTITIES[entity];
   const running = imp.status === 'queued' || imp.status === 'running';
+  const [stopping, setStopping] = useState(false);
   async function cancel() {
     if (!(await confirm({title: 'Stop this import?', description: 'Rows imported so far stay. The rest of the file is left out.', confirmLabel: 'Stop import', destructive: true}))) return;
+    setStopping(true);
     await api.post(`/imports/${imp.id}/cancel`).catch((e: Error) => toast.error(e.message));
+    setStopping(false);
   }
   return (
     <>
@@ -640,7 +649,7 @@ function RunStep({entity, detail, onAnother, onClose}: {entity: IoEntity; detail
       <DialogFooter>
         {running ? (
           <>
-            <Button variant="secondary" onClick={cancel}>Stop import</Button>
+            <Button variant="secondary" onClick={cancel} pending={stopping} pendingLabel="Stopping…">Stop import</Button>
             <Button onClick={onClose}>Close</Button>
           </>
         ) : (

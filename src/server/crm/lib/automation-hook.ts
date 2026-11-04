@@ -29,7 +29,7 @@ async function load(db: Db) {
  * Queues matching for the events an enabled automation listens to. Events
  * written by an automation step carry that run's chain (depth, chain id) so
  * the runs they start can be stopped at the chain limit. Returns true when a
- * job was queued (the caller kicks the runner). Never throws.
+ * job was queued. Never throws.
  */
 export async function queueAutomations(db: Db, events: {id: string; type: string}[]) {
   try {

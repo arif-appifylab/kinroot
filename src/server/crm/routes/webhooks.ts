@@ -11,7 +11,7 @@ import {decryptJson, encryptJson, randomToken} from '../kit/crypto';
 import {requireRole, type AppEnv} from '../kit/guards';
 import {audit, fingerprint} from '../lib/audit';
 import {notFound, valid} from '../lib/http';
-import {enqueue, kickJobs} from '../lib/jobs';
+import {backlogStatus, enqueue, MAX_JOBS_PER_MINUTE, setJobsPerMinute} from '../lib/jobs';
 import {deliverWebhook, TEST_ENTITY} from '../lib/webhooks';
 import {JOBS_LAST_RUN_KEY} from '../lib/ticks';
 
@@ -48,19 +48,42 @@ export const webhooks = new Hono<AppEnv>()
   .get('/', async (c) => {
     const db = c.var.db;
     const since = new Date(Date.now() - 7 * 86_400_000);
-    const [rows, lastRun, waiting] = await Promise.all([
+    const [rows, lastRun, backlog] = await Promise.all([
       db.webhook.findMany({orderBy: {createdAt: 'asc'}, select: hookSelect, take: 100}),
       db.setting.findUnique({where: {key: JOBS_LAST_RUN_KEY}}),
-      // Jobs run on the platform (its Jobs tab has the history); here: what waits to be sent again. Capped, never count().
-      db.jobBacklog.findMany({select: {id: true}, take: CAP}),
+      // Jobs run on the platform (its Jobs tab has the history); here: what waits to be sent, and what it refused. Capped, never count().
+      backlogStatus(db, CAP),
     ]);
     const failed = rows.length
       ? await db.webhookDelivery.findMany({where: {webhookId: {in: rows.map((r) => r.id)}, createdAt: {gte: since}, status: 'FAILED'}, select: {id: true}, take: CAP})
       : [];
+    const note = backlog.rateLimited
+      ? `${backlog.rateLimited >= CAP ? `${CAP - 1}+` : backlog.rateLimited} job${backlog.rateLimited === 1 ? ' is' : 's are'} waiting for the job rate limit (${backlog.perMinute} new jobs a minute). They go out as the minutes turn; nothing is lost.${backlog.perMinute < 50 ? ' To send them faster, raise the limit to 50 in the Jobs tab of this app in your dashboard, then set the same number here.' : ''}`
+      : null;
     return c.json({
       rows,
-      jobs: {cronConfigured: true, lastRunAt: (lastRun?.value as string | undefined) ?? null, pending: waiting.length, failed: failed.length, capped: CAP, devTicker: runsJobsLocally()},
+      jobs: {
+        cronConfigured: true,
+        lastRunAt: (lastRun?.value as string | undefined) ?? null,
+        pending: backlog.waiting,
+        failed: failed.length,
+        // Jobs the platform refused for good (too large, a bad list…): set aside, kept 30 days.
+        failedJobs: backlog.failed,
+        rateLimited: backlog.rateLimited,
+        perMinute: backlog.perMinute,
+        note,
+        capped: CAP,
+        devTicker: runsJobsLocally(),
+      },
     });
+  })
+
+  /** The job rate the owner set in the platform's Jobs tab (10 by default, up to 50 there): Kinroot sends no more than this. */
+  .put('/jobs-rate', valid('json', z.object({perMinute: z.number().int().min(1).max(MAX_JOBS_PER_MINUTE)})), async (c) => {
+    const {perMinute} = c.req.valid('json');
+    await setJobsPerMinute(c.var.db, perMinute);
+    await audit(c.var.db, c, {action: 'settings.jobs_rate', label: 'Background job rate', meta: {perMinute}});
+    return c.json({perMinute});
   })
 
   .post('/', valid('json', hookBody), async (c) => {
@@ -147,7 +170,6 @@ export const webhooks = new Hono<AppEnv>()
     const delivery = await db.webhookDelivery.findUnique({where: {id: c.req.param('id')}});
     if (!delivery) throw notFound('Delivery');
     await db.webhookDelivery.update({where: {id: delivery.id}, data: {status: 'PENDING', error: null}});
-    await enqueue(db, 'webhook.deliver', {deliveryId: delivery.id});
-    kickJobs();
+    await enqueue(db, 'webhook.deliver', {deliveryId: delivery.id}, {key: `redeliver-${delivery.id}-${Math.floor(Date.now() / 60_000)}`});
     return c.json({ok: true});
   });

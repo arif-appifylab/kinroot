@@ -1,5 +1,5 @@
 import {useNavigate} from '@tanstack/react-router';
-import {Calendar, CheckSquare, Flag, Loader2, Mail, Phone, Users} from 'lucide-react';
+import {Calendar, CheckSquare, Flag, Mail, Phone, Users} from 'lucide-react';
 import {createContext, useContext, useEffect, useMemo, useState, type ReactNode} from 'react';
 
 import {api} from '@/lib/api';
@@ -16,6 +16,7 @@ import {CompanyPicker, ContactsPicker, CreatableSelect, TagInput, UserSelect} fr
 import {Button} from './ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from './ui/dialog';
 import {Field, Input, NativeSelect, Textarea} from './ui/form';
+import {is, useFormState} from './ui/form-state';
 
 // ─── Global "create" controller so any screen (or ⌘K) can open a form ───
 
@@ -73,20 +74,19 @@ function CustomFieldsSection({entity, value, onChange}: {entity: EntityType; val
   );
 }
 
-function FormDialog({title, description, onClose, onSubmit, busy, submitLabel, children}: {title: string; description?: string; onClose: () => void; onSubmit: () => void; busy: boolean; submitLabel: string; children: ReactNode}) {
+function FormDialog({title, description, onClose, form, busy, submitLabel, pendingLabel, children}: {title: string; description?: string; onClose: () => void; form: React.ComponentProps<'form'>; busy: boolean; submitLabel: string; pendingLabel: string; children: ReactNode}) {
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
       <DialogContent size="md">
-        <form onSubmit={(e) => (e.preventDefault(), onSubmit())} className="flex min-h-0 flex-1 flex-col">
+        <form {...form} className="flex min-h-0 flex-1 flex-col">
           <DialogHeader>
             <DialogTitle>{title}</DialogTitle>
             {description && <DialogDescription>{description}</DialogDescription>}
           </DialogHeader>
           <DialogBody>{children}</DialogBody>
           <DialogFooter>
-            <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button type="submit" disabled={busy}>
-              {busy && <Loader2 className="animate-spin" />}
+            <Button type="button" variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+            <Button type="submit" pending={busy} pendingLabel={pendingLabel}>
               {submitLabel}
             </Button>
           </DialogFooter>
@@ -137,14 +137,19 @@ function DealDialog({defaults, onClose}: {defaults?: DealDefaults; onClose: () =
     {invalidate: recordKeys, success: 'Deal created', onSuccess: ({deal}) => (onClose(), navigate({to: '/deals/$dealId', params: {dealId: deal.id}}))},
   );
 
+  const f = useFormState(form, {
+    title: [is.required('Give the deal a name.'), is.maxLength(200)],
+    value: [is.number({min: 0, max: 1e12, message: 'Enter an amount of 0 or more, like 2500.'})],
+  });
+
   return (
-    <FormDialog title="New deal" description="Track an opportunity through your pipeline." onClose={onClose} onSubmit={() => create.mutate(undefined)} busy={create.isPending} submitLabel="Create deal">
-      <Field label="Deal name" htmlFor="d-title">
-        <Input id="d-title" autoFocus required value={form.title} onChange={(e) => setForm({...form, title: e.target.value})} placeholder="e.g. Northwind: annual plan" />
+    <FormDialog title="New deal" description="Track an opportunity through your pipeline." onClose={onClose} form={f.form(() => create.mutate(undefined, {onError: f.fail}))} busy={create.isPending} submitLabel="Create deal" pendingLabel="Creating…">
+      <Field label="Deal name" htmlFor="d-title" error={f.error('title')}>
+        <Input id="d-title" autoFocus value={form.title} onChange={(e) => setForm({...form, title: e.target.value})} onBlur={f.blur('title')} placeholder="e.g. Northwind: annual plan" />
       </Field>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label={`Value (${settings.data?.settings.currency ?? 'USD'})`} htmlFor="d-value">
-          <Input id="d-value" type="number" min={0} step="any" value={form.value} onChange={(e) => setForm({...form, value: e.target.value})} placeholder="0" />
+        <Field label={`Value (${settings.data?.settings.currency ?? 'USD'})`} htmlFor="d-value" error={f.error('value')}>
+          <Input id="d-value" type="number" inputMode="decimal" step="any" value={form.value} onChange={(e) => setForm({...form, value: e.target.value})} onBlur={f.blur('value')} placeholder="0" />
         </Field>
         <Field label="Expected close" htmlFor="d-close">
           <Input id="d-close" type="date" value={form.expectedCloseDate} onChange={(e) => setForm({...form, expectedCloseDate: e.target.value})} />
@@ -209,17 +214,22 @@ function ContactDialog({defaults, onClose}: {defaults?: ContactDefaults; onClose
     {invalidate: [...recordKeys, keys.settings], success: (r) => (r.linkedCompany ? `Contact created · linked to ${r.linkedCompany.name} by email domain` : 'Contact created'), onSuccess: ({contact}) => (onClose(), navigate({to: '/contacts/$contactId', params: {contactId: contact.id}}))},
   );
 
+  const f = useFormState(form, {
+    firstName: [is.required('Enter a first name.'), is.maxLength(100)],
+    email: [is.email()],
+  });
+
   return (
-    <FormDialog title="New contact" onClose={onClose} onSubmit={() => create.mutate(undefined)} busy={create.isPending} submitLabel="Create contact">
+    <FormDialog title="New contact" onClose={onClose} form={f.form(() => create.mutate(undefined, {onError: f.fail}))} busy={create.isPending} submitLabel="Create contact" pendingLabel="Creating…">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="First name" htmlFor="c-first">
-          <Input id="c-first" autoFocus required value={form.firstName} onChange={set('firstName')} />
+        <Field label="First name" htmlFor="c-first" error={f.error('firstName')}>
+          <Input id="c-first" autoFocus value={form.firstName} onChange={set('firstName')} onBlur={f.blur('firstName')} />
         </Field>
-        <Field label="Last name" htmlFor="c-last">
+        <Field label="Last name" htmlFor="c-last" error={f.error('lastName')}>
           <Input id="c-last" value={form.lastName} onChange={set('lastName')} />
         </Field>
-        <Field label="Email" htmlFor="c-email">
-          <Input id="c-email" type="email" value={form.email} onChange={set('email')} placeholder="name@company.com" />
+        <Field label="Email" htmlFor="c-email" error={f.error('email')}>
+          <Input id="c-email" type="email" value={form.email} onChange={set('email')} onBlur={f.blur('email')} placeholder="name@company.com" />
         </Field>
         <Field label="Phone" htmlFor="c-phone">
           <Input id="c-phone" type="tel" value={form.phone} onChange={set('phone')} />
@@ -302,14 +312,20 @@ function CompanyDialog({onClose}: {onClose: () => void}) {
       onSuccess: ({company}) => (onClose(), navigate({to: '/companies/$companyId', params: {companyId: company.id}})),
     },
   );
+  const f = useFormState(form, {
+    name: [is.required('Enter the company name.'), is.maxLength(200)],
+    employees: [is.number({min: 0, max: 10_000_000, integer: true, message: 'Use a whole number of 0 or more, like 50.'})],
+    annualRevenue: [is.number({min: 0, max: 1e13, message: 'Enter an amount of 0 or more, like 250000.'})],
+    linkedin: [is.url('Enter the full LinkedIn address, like https://linkedin.com/company/acme.')],
+  });
   return (
-    <FormDialog title="New company" description="Existing contacts with an email at this domain are linked automatically." onClose={onClose} onSubmit={() => create.mutate(undefined)} busy={create.isPending} submitLabel="Create company">
+    <FormDialog title="New company" description="Existing contacts with an email at this domain are linked automatically." onClose={onClose} form={f.form(() => create.mutate(undefined, {onError: f.fail}))} busy={create.isPending} submitLabel="Create company" pendingLabel="Creating…">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Company domain" htmlFor="co-domain">
+        <Field label="Company domain" htmlFor="co-domain" error={f.error('domain')}>
           <Input id="co-domain" autoFocus value={form.domain} onChange={onDomain} placeholder="acme.com" />
         </Field>
-        <Field label="Company name" htmlFor="co-name">
-          <Input id="co-name" required value={form.name} onChange={set('name')} />
+        <Field label="Company name" htmlFor="co-name" error={f.error('name')}>
+          <Input id="co-name" value={form.name} onChange={set('name')} onBlur={f.blur('name')} />
         </Field>
         <DuplicateHint className="sm:col-span-2" input={{entity: 'company', name: form.name, domain: form.domain}} onOpen={onClose} />
         <Field label="Company owner" htmlFor="co-owner">
@@ -328,12 +344,12 @@ function CompanyDialog({onClose}: {onClose: () => void}) {
         <Field label="State / region" htmlFor="co-state"><Input id="co-state" value={form.state} onChange={set('state')} /></Field>
         <Field label="Postal code" htmlFor="co-zip"><Input id="co-zip" value={form.postalCode} onChange={set('postalCode')} /></Field>
         <Field label="Country" htmlFor="co-country"><Input id="co-country" value={form.country} onChange={set('country')} /></Field>
-        <Field label="Number of employees" htmlFor="co-emp"><Input id="co-emp" type="number" min={0} value={form.employees} onChange={set('employees')} /></Field>
-        <Field label={`Annual revenue (${settings.data?.settings.currency ?? 'USD'})`} htmlFor="co-rev"><Input id="co-rev" type="number" min={0} step="any" value={form.annualRevenue} onChange={set('annualRevenue')} /></Field>
+        <Field label="Number of employees" htmlFor="co-emp" error={f.error('employees')}><Input id="co-emp" type="number" inputMode="numeric" value={form.employees} onChange={set('employees')} onBlur={f.blur('employees')} /></Field>
+        <Field label={`Annual revenue (${settings.data?.settings.currency ?? 'USD'})`} htmlFor="co-rev" error={f.error('annualRevenue')}><Input id="co-rev" type="number" inputMode="decimal" step="any" value={form.annualRevenue} onChange={set('annualRevenue')} onBlur={f.blur('annualRevenue')} /></Field>
         <Field label="Time zone" htmlFor="co-tz">
           <CreatableSelect id="co-tz" placeholder="Choose a time zone" value={form.timezone} options={zones} onChange={(v) => setForm({...form, timezone: v as string | null})} />
         </Field>
-        <Field label="LinkedIn company page" htmlFor="co-li"><Input id="co-li" type="url" value={form.linkedin} onChange={set('linkedin')} placeholder="https://linkedin.com/company/…" /></Field>
+        <Field label="LinkedIn company page" htmlFor="co-li" error={f.error('linkedin')}><Input id="co-li" type="url" value={form.linkedin} onChange={set('linkedin')} onBlur={f.blur('linkedin')} placeholder="https://linkedin.com/company/…" /></Field>
         <Field label="Description" htmlFor="co-desc" className="sm:col-span-2"><Textarea id="co-desc" rows={3} value={form.description} onChange={set('description')} /></Field>
         <Field label="Tags" htmlFor="co-tags" className="sm:col-span-2">
           <TagInput id="co-tags" entity="COMPANY" value={form.tags} onChange={(tags) => setForm({...form, tags})} />

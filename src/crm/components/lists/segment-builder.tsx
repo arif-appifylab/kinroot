@@ -8,8 +8,10 @@ import {BUYING_ROLES, COMPANY_SIZES, fullName, LEAD_STATUSES, LIFECYCLE} from '@
 import {keys, useFields, usePipelines, useSettings, useTeam} from '@/lib/queries';
 import {customSegmentFields, opsFor, ruleComplete, SEGMENT_FIELDS, valueShape, type SegmentField, type SegmentGroup, type SegmentRule, type SegmentRules} from '@/lib/segments';
 import type {ContactLite, EntityType, FormRow} from '@/lib/types';
+import {cn} from '@/lib/utils';
 
 import {TagInput} from '../pickers';
+
 import {Button} from '../ui/button';
 import {Input, NativeSelect} from '../ui/form';
 import {useLists} from './list-picker';
@@ -199,7 +201,7 @@ function RuleEditor({rule, fields, listId, onChange, onRemove}: {rule: SegmentRu
 
 function ValueEditor({rule, field, shape, listId, onChange}: {rule: SegmentRule; field: SegmentField; shape: ReturnType<typeof valueShape>; listId?: string; onChange: (r: SegmentRule) => void}) {
   const options = useOptionSources()(field);
-  const lists = useLists();
+  const lists = useLists(undefined, {counts: false});
   const pipelines = usePipelines();
   const tagEntity = useContext(TagEntity);
   const cls = 'h-8 min-w-0 flex-1 py-0 text-xs';
@@ -234,7 +236,7 @@ function ValueEditor({rule, field, shape, listId, onChange}: {rule: SegmentRule;
         <>
           {formPicker}
           <span className="inline-flex items-center gap-1.5 text-xs text-slate-600">
-            <Input className="h-8 w-20 text-xs" type="number" min={1} value={rule.days ?? ''} onChange={(e) => set({days: e.target.value ? Math.max(1, Math.round(Number(e.target.value))) : undefined})} aria-label="Days" />
+            <Input className="h-8 w-20 text-xs" type="number" inputMode="numeric" value={rule.days ?? ''} onChange={(e) => set({days: e.target.value ? Math.max(1, Math.round(Number(e.target.value))) : undefined})} aria-label="Days" />
             {rule.op === 'more_than' ? 'days ago' : 'days'}
           </span>
         </>
@@ -279,8 +281,9 @@ function ChoiceChips({options, value, onChange}: {options: Option[]; value: stri
           <button
             key={o.value}
             type="button"
+            aria-pressed={on}
             onClick={() => onChange(on ? value.filter((v) => v !== o.value) : [...value, o.value])}
-            className={on ? 'cursor-pointer rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary' : 'cursor-pointer rounded-full border border-slate-200 bg-card px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-primary/50'}
+            className={cn('outline-none focus-visible:ring-2 focus-visible:ring-primary/30', on ? 'cursor-pointer rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary' : 'cursor-pointer rounded-full border border-slate-200 bg-card px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-primary/50')}
           >
             {o.label}
           </button>
@@ -295,7 +298,7 @@ export function RulesSummary({rules}: {rules: SegmentRules}) {
   const customDefs = useFields('CONTACT');
   const fields = [...SEGMENT_FIELDS, ...customSegmentFields(customDefs.data ?? [])];
   const resolve = useOptionSources();
-  const lists = useLists();
+  const lists = useLists(undefined, {counts: false});
   const pipelines = usePipelines();
   const groups = rules.groups.filter((g) => g.rules.length);
   if (!groups.length) return <p className="text-sm text-muted-foreground">No rules yet, so nobody is in this segment.</p>;

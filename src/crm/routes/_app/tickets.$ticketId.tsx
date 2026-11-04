@@ -11,13 +11,13 @@ import {
   Flag,
   Globe,
   Handshake,
-  Loader2,
   Lock,
   Mail,
   MailWarning,
   MessageSquareReply,
   MoreHorizontal,
   Paperclip,
+  Pencil,
   Send,
   Smile,
   Star,
@@ -43,10 +43,12 @@ import {useBinToast} from '@/components/recycle-bin-toast';
 import {Button} from '@/components/ui/button';
 import {Card} from '@/components/ui/card';
 import {confirm} from '@/components/ui/confirm';
-import {Input, NativeSelect} from '@/components/ui/form';
+import {Field, Input, NativeSelect} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
+import {LoadError} from '@/components/data-table';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, Tooltip} from '@/components/ui/menu';
 import {Avatar, Skeleton} from '@/components/ui/misc';
-import {api} from '@/lib/api';
+import {api, ApiError} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
 import {ago, dateTime, fullName} from '@/lib/format';
 import {isEmptyHtml, textToEditorHtml} from '@/lib/email-html';
@@ -222,7 +224,7 @@ function Composer({ticket}: {ticket: TicketRow}) {
     <Card className={cn('overflow-hidden', mode === 'note' && 'ring-1 ring-amber-200')}>
       <div className="flex flex-wrap items-center gap-1 border-b border-slate-100 px-3 py-2">
         {([['reply', MessageSquareReply, 'Reply'], ['note', StickyNote, 'Internal note']] as const).map(([m, Icon, label]) => (
-          <button key={m} type="button" onClick={() => switchMode(m)} className={cn('inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-semibold transition-colors', mode === m ? (m === 'note' ? 'bg-amber-50 text-amber-700' : 'bg-accent text-primary') : 'text-slate-500 hover:text-slate-800')}>
+          <button key={m} type="button" aria-pressed={mode === m} onClick={() => switchMode(m)} className={cn('inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-1.5 text-[13px] font-semibold transition-colors', mode === m ? (m === 'note' ? 'bg-amber-50 text-amber-700' : 'bg-accent text-primary') : 'text-slate-500 hover:text-slate-800')}>
             <Icon className="size-3.5" /> {label}
           </button>
         ))}
@@ -268,8 +270,8 @@ function Composer({ticket}: {ticket: TicketRow}) {
             </DropdownMenuContent>
           </DropdownMenu>
           <input ref={input} type="file" multiple className="hidden" onChange={(e) => upload(e.target.files)} />
-          <Button type="button" variant="ghost" size="sm" onClick={() => input.current?.click()} disabled={uploading > 0}>
-            {uploading > 0 ? <Loader2 className="animate-spin" /> : <Paperclip />} Attach
+          <Button type="button" variant="ghost" size="sm" onClick={() => input.current?.click()} pending={uploading > 0} pendingLabel="Uploading…">
+            <Paperclip /> Attach
           </Button>
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -279,8 +281,8 @@ function Composer({ticket}: {ticket: TicketRow}) {
                 {TICKET_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
               </NativeSelect>
             </label>
-            <Button type="button" size="sm" onClick={submit} disabled={(empty && !files.length) || send.isPending || uploading > 0}>
-              {send.isPending ? <Loader2 className="animate-spin" /> : mode === 'note' ? <StickyNote /> : <Send />} {mode === 'note' ? 'Add note' : 'Send reply'}
+            <Button type="button" size="sm" onClick={submit} disabled={(empty && !files.length) || uploading > 0} pending={send.isPending} pendingLabel={mode === 'note' ? 'Adding…' : 'Sending…'}>
+              {mode === 'note' ? <StickyNote /> : <Send />} {mode === 'note' ? 'Add note' : 'Send reply'}
             </Button>
           </div>
         </div>
@@ -303,8 +305,19 @@ function TicketPage() {
   const save = useApiMutation((patch: Record<string, unknown>) => api.patch(`/tickets/${t!.id}`, patch), {invalidate: [keys.tickets, ...recordKeys]});
   const binToast = useBinToast();
   const remove = useApiMutation(() => api.del<{binId: string | null}>(`/tickets/${t!.id}`), {invalidate: [keys.tickets, ...recordKeys], onSuccess: (r) => (binToast('Ticket', r.binId), navigate({to: '/tickets'}))});
+  const subjectForm = useFormState({subject: editingSubject ?? ''}, {subject: [is.required('Enter a subject.'), is.maxLength(300)]});
+  const saveSubject = () =>
+    save.mutate({subject: (editingSubject ?? '').trim()}, {onSuccess: () => (setEditingSubject(null), subjectForm.reset()), onError: subjectForm.fail});
 
-  if (q.isLoading || !t) return q.error ? <p className="text-sm text-destructive">{(q.error as Error).message}</p> : <Skeleton className="h-64 rounded-2xl" />;
+  if (q.isLoading || !t) {
+    if (!q.error) return <Skeleton className="h-64 rounded-2xl" />;
+    const missing = q.error instanceof ApiError && q.error.status === 404;
+    return (
+      <Card>
+        <LoadError error={q.error} title={missing ? 'Ticket not found' : undefined} onRetry={missing ? undefined : () => q.refetch()} />
+      </Card>
+    );
+  }
 
   const names = new Map((team.data ?? []).map((u) => [u.id, u.name]));
   const s = settings.data?.settings;
@@ -325,12 +338,36 @@ function TicketPage() {
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold text-slate-400">#{t.number} · {SOURCE_LABELS[t.source]} · opened {ago(t.createdAt)}</p>
             {editingSubject !== null ? (
-              <form onSubmit={(e) => (e.preventDefault(), editingSubject.trim() && save.mutate({subject: editingSubject}), setEditingSubject(null))} className="mt-1 flex gap-2">
-                <Input autoFocus value={editingSubject} onChange={(e) => setEditingSubject(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setEditingSubject(null)} className="text-lg font-bold" />
-                <Button type="submit" size="sm" className="h-10">Save</Button>
+              <form {...subjectForm.form(saveSubject)} className="mt-1 flex items-start gap-2">
+                <h1 className="sr-only">{t.subject}</h1>
+                <Field className="min-w-0 flex-1" error={subjectForm.error('subject')}>
+                  <Input
+                    autoFocus
+                    aria-label="Subject"
+                    value={editingSubject}
+                    onChange={(e) => setEditingSubject(e.target.value)}
+                    onBlur={subjectForm.blur('subject')}
+                    onKeyDown={(e) => e.key === 'Escape' && !save.isPending && (setEditingSubject(null), subjectForm.reset())}
+                    className="text-lg font-bold"
+                  />
+                </Field>
+                <Button type="submit" size="sm" className="h-10" pending={save.isPending} pendingLabel="Saving…">Save</Button>
+                <Button type="button" variant="ghost" size="sm" className="h-10" disabled={save.isPending} onClick={() => (setEditingSubject(null), subjectForm.reset())}>Cancel</Button>
               </form>
             ) : (
-              <h1 className={cn('mt-1 text-2xl font-extrabold tracking-tight text-slate-900', canEdit && 'cursor-text')} onClick={() => canEdit && setEditingSubject(t.subject)}>{t.subject}</h1>
+              <div className="group mt-1 flex items-start gap-2">
+                <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">{t.subject}</h1>
+                {canEdit && (
+                  <button
+                    type="button"
+                    aria-label="Edit subject"
+                    onClick={() => setEditingSubject(t.subject)}
+                    className="mt-1.5 cursor-pointer rounded-md p-1 text-slate-400 opacity-0 transition-opacity outline-none group-hover:opacity-100 hover:text-slate-700 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-primary/30"
+                  >
+                    <Pencil className="size-4" />
+                  </button>
+                )}
+              </div>
             )}
             <div className="mt-2.5 flex flex-wrap items-center gap-2">
               <StatusBadge status={t.status} />
@@ -344,9 +381,9 @@ function TicketPage() {
           {canEdit && (
             <div className="flex flex-wrap gap-2">
               {resolved ? (
-                <Button variant="secondary" size="sm" onClick={() => save.mutate({status: 'WAITING_ON_US'})}>Reopen</Button>
+                <Button variant="secondary" size="sm" pending={save.isPending && save.variables?.status === 'WAITING_ON_US'} pendingLabel="Reopening…" disabled={save.isPending} onClick={() => save.mutate({status: 'WAITING_ON_US'})}>Reopen</Button>
               ) : (
-                <Button variant="success" size="sm" onClick={() => save.mutate({status: 'RESOLVED'})}><CheckCircle2 /> Resolve</Button>
+                <Button variant="success" size="sm" pending={save.isPending && save.variables?.status === 'RESOLVED'} pendingLabel="Resolving…" disabled={save.isPending} onClick={() => save.mutate({status: 'RESOLVED'})}><CheckCircle2 /> Resolve</Button>
               )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

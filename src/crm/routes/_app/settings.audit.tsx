@@ -3,7 +3,7 @@ import {createFileRoute, Link} from '@tanstack/react-router';
 import {ChevronDown, Download, History, LogIn, ScrollText, Settings2, ShieldAlert, ShieldCheck, Users} from 'lucide-react';
 import {useState} from 'react';
 
-import {Pagination, SearchInput} from '@/components/data-table';
+import {LoadError, Pagination, SearchInput} from '@/components/data-table';
 import {FilterBar, FilterDateRange} from '@/components/filter-bar';
 import {AdminOnly, SettingsSection} from '@/components/settings-section';
 import {SecurityEvents} from '@/components/site-admin/security-events';
@@ -203,7 +203,7 @@ function CrmAuditLog() {
       description={`Who did what, when and from where: record changes, sign-ins, team and settings changes, imports and exports (with their files for 7 days) and secrets. Entries are kept for ${retentionLabel(data?.settings.retentionDays ?? 365)}.`}
       actions={
         <>
-          <NativeSelect size="sm" aria-label="Keep entries for" value={data?.settings.retentionDays ?? 365} onChange={(e) => retention.mutate(Number(e.target.value))}>
+          <NativeSelect size="sm" aria-label="Keep entries for" disabled={retention.isPending} value={data?.settings.retentionDays ?? 365} onChange={(e) => retention.mutate(Number(e.target.value))}>
             {AUDIT_RETENTION_DAYS.map((d) => <option key={d} value={d}>Keep {retentionLabel(d)}</option>)}
           </NativeSelect>
           <Button variant="secondary" size="sm" asChild><a href={`/site-api/crm/audit/export.csv${qs(f)}`}><Download /> Export CSV</a></Button>
@@ -211,7 +211,7 @@ function CrmAuditLog() {
       }
     >
       <FilterBar className="mb-4" active={filtered} onClear={() => (setF({}), setQDraft(''), setPage(1))}>
-        <form onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
+        <form role="search" noValidate onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
           <SearchInput size="sm" value={qDraft} onChange={(v) => (setQDraft(v), !v && set({q: undefined}))} placeholder="Search record, person, IP…" />
         </form>
         <NativeSelect size="sm" aria-label="User" value={f.actorId ?? ''} onChange={(e) => set({actorId: e.target.value || undefined})}>
@@ -233,6 +233,7 @@ function CrmAuditLog() {
         <FilterDateRange from={f.from} to={f.to} onChange={set} />
       </FilterBar>
 
+      {list.isError && !data && <LoadError error={list.error} onRetry={() => list.refetch()} />}
       {list.isLoading && <div className="grid gap-3">{Array.from({length: 5}, (_, i) => <Skeleton key={i} className="h-12" />)}</div>}
       {data && data.rows.length === 0 && (
         <EmptyState icon={<ScrollText />} title={filtered ? 'Nothing matches these filters' : 'No entries yet'} description="Changes, sign-ins and exports show up here as they happen." />

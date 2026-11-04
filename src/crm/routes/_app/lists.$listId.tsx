@@ -1,10 +1,10 @@
 import {keepPreviousData, useQuery, useQueryClient} from '@tanstack/react-query';
 import {createFileRoute, Link, useNavigate} from '@tanstack/react-router';
-import {ArrowLeft, ChevronDown, ClipboardList, Copy, Filter, List, Loader2, Mail, Pencil, Plus, RefreshCw, Trash2, UserMinus, Users} from 'lucide-react';
+import {ArrowLeft, ChevronDown, ClipboardList, Copy, Filter, List, Mail, Pencil, Plus, RefreshCw, Trash2, UserMinus, Users} from 'lucide-react';
 import {useState} from 'react';
 import {z} from 'zod';
 
-import {BulkBar, DataTable, Pagination, SearchInput, type Column} from '@/components/data-table';
+import {BulkBar, DataTable, LoadError, Pagination, SearchInput, type Column} from '@/components/data-table';
 import {FilterBar} from '@/components/filter-bar';
 import {ImportExportActions} from '@/components/import-export/actions';
 import {BroadcastDialog, BroadcastHistory} from '@/components/lists/broadcasts';
@@ -72,7 +72,7 @@ function ListPage() {
 
   const list = detail.data?.list;
   if (detail.isLoading || !list) {
-    return detail.error ? <p className="text-sm text-destructive">{(detail.error as Error).message}</p> : <Skeleton className="h-64 rounded-2xl" />;
+    return detail.error ? <LoadError error={detail.error} onRetry={() => detail.refetch()} title="This list could not be loaded" /> : <Skeleton className="h-64 rounded-2xl" />;
   }
   const usedBy = detail.data!.usedBy;
   const isSegment = list.kind === 'DYNAMIC';
@@ -141,7 +141,7 @@ function ListPage() {
             <ImportExportActions entity="contact" filters={{}} listId={listId} canImport={!isSegment} scopeLabel={`members of ${list.name}`} />
             {mayEdit && (
               <DropdownMenu>
-                <DropdownMenuTrigger asChild><Button variant="secondary" size="sm">Actions <ChevronDown /></Button></DropdownMenuTrigger>
+                <DropdownMenuTrigger asChild><Button variant="secondary" size="sm" pending={snapshot.isPending || del.isPending}>Actions <ChevronDown /></Button></DropdownMenuTrigger>
                 <DropdownMenuContent className="w-56">
                   <DropdownMenuItem onSelect={() => setRenaming(true)}><Pencil /> Rename</DropdownMenuItem>
                   {isSegment && <DropdownMenuItem onSelect={() => set({edit: true})}><Filter /> Edit rules</DropdownMenuItem>}
@@ -170,8 +170,8 @@ function ListPage() {
               <div className="grid content-start gap-3 lg:sticky lg:top-20">
                 <SegmentPreview rules={rules} listId={listId} />
                 <div className="flex gap-2">
-                  <Button variant="secondary" className="flex-1" onClick={() => (setDraft(null), set({edit: undefined}))}>Cancel</Button>
-                  <Button className="flex-1" onClick={() => saveRules.mutate(rules)} disabled={saveRules.isPending}>{saveRules.isPending && <Loader2 className="animate-spin" />} Save</Button>
+                  <Button variant="secondary" className="flex-1" onClick={() => (setDraft(null), set({edit: undefined}))} disabled={saveRules.isPending}>Cancel</Button>
+                  <Button className="flex-1" onClick={() => saveRules.mutate(rules)} pending={saveRules.isPending} pendingLabel="Saving…">Save</Button>
                 </div>
               </div>
             </div>
@@ -183,7 +183,7 @@ function ListPage() {
 
       <Card className="overflow-hidden">
         <FilterBar className="border-b border-slate-100 p-3">
-          <form onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
+          <form noValidate role="search" onSubmit={(e) => (e.preventDefault(), set({q: qDraft || undefined}))} className="contents">
             <SearchInput size="sm" value={qDraft} onChange={(v) => (setQDraft(v), !v && set({q: undefined}))} placeholder="Search members…" />
           </form>
         </FilterBar>
@@ -191,6 +191,8 @@ function ListPage() {
           rows={members.data?.rows}
           columns={columns}
           loading={members.isLoading}
+          error={members.error}
+          onRetry={() => members.refetch()}
           sort={s.sort ?? 'createdAt'}
           dir={s.dir ?? 'desc'}
           onSort={(key) => set({sort: key, dir: s.sort === key && s.dir === 'asc' ? 'desc' : 'asc'})}
@@ -212,7 +214,19 @@ function ListPage() {
       <div className="mt-6"><BroadcastHistory listId={listId} /></div>
 
       <BulkBar count={selected.size} onClear={() => setSelected(new Set())}>
-        <Button size="sm" variant="ghost" className="text-rose-300 hover:bg-white/10 hover:text-rose-200" onClick={() => remove.mutate([...selected])}><UserMinus /> Remove from list</Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-rose-300 hover:bg-white/10 hover:text-rose-200"
+          pending={remove.isPending}
+          pendingLabel="Removing…"
+          onClick={async () => {
+            const n = selected.size;
+            if (await confirm({title: `Remove ${n} ${n === 1 ? 'contact' : 'contacts'} from "${list.name}"?`, description: 'They stay in your contacts; only their place in this list goes.', confirmLabel: 'Remove', destructive: true})) remove.mutate([...selected]);
+          }}
+        >
+          <UserMinus /> Remove from list
+        </Button>
       </BulkBar>
 
       {renaming && <ListDialog list={list} onClose={() => setRenaming(false)} />}
@@ -230,7 +244,7 @@ function AddMembersDialog({listId, name, onClose}: {listId: string; name: string
     onSuccess: onClose,
   });
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !add.isPending && onClose()}>
       <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>Add contacts</DialogTitle>
@@ -238,8 +252,8 @@ function AddMembersDialog({listId, name, onClose}: {listId: string; name: string
         </DialogHeader>
         <DialogBody><ContactsPicker value={picked} onChange={setPicked} /></DialogBody>
         <DialogFooter>
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => add.mutate(undefined)} disabled={!picked.length || add.isPending}>{add.isPending && <Loader2 className="animate-spin" />} Add {picked.length || ''}</Button>
+          <Button variant="secondary" onClick={onClose} disabled={add.isPending}>Cancel</Button>
+          <Button onClick={() => add.mutate(undefined)} disabled={!picked.length} pending={add.isPending} pendingLabel="Adding…">Add {picked.length || ''}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

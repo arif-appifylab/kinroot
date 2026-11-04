@@ -12,6 +12,8 @@ import {TagInput} from '@/components/pickers';
 import {AdminOnly, SettingsSection} from '@/components/settings-section';
 import {Button} from '@/components/ui/button';
 import {Checkbox, Field, Input, NativeSelect, Switch, Textarea} from '@/components/ui/form';
+import {is, useFormState} from '@/components/ui/form-state';
+import {LoadError} from '@/components/data-table';
 import {api} from '@/lib/api';
 import {BRAND, pageTitle} from '@/lib/brand';
 import {REPLY_TIMES, type ChatSettings, type PublicChatConfig, type ReplyTime, type VisitorConversation} from '@/lib/chat';
@@ -147,8 +149,18 @@ function ChatSettingsPage() {
   }, [q.data, form]);
   const save = useApiMutation(() => api.put<{settings: ChatSettings}>('/inbox/chat/settings', form), {invalidate: [keys.inbox], success: 'Chat settings saved', onSuccess: (r) => setForm(r.settings)});
   const problem = useMemo(() => (form?.hours.enabled ? availabilityError(form.hours.availability) : null), [form]);
+  const f = useFormState(
+    {teamName: form?.teamName ?? '', greeting: form?.greeting ?? '', preChatIntro: form?.preChatIntro ?? '', offlineMessage: form?.offlineMessage ?? ''},
+    {
+      teamName: [is.maxLength(60)],
+      greeting: [is.maxLength(300)],
+      preChatIntro: [is.maxLength(300)],
+      offlineMessage: [is.required('Write the away message visitors see.'), is.maxLength(500)],
+    },
+  );
 
   if (!isAdmin) return <AdminOnly />;
+  if (q.isError && !q.data) return <LoadError error={q.error} onRetry={() => q.refetch()} />;
   if (!form || !q.data) return <Loader2 className="size-5 animate-spin text-primary" />;
   const set = (patch: Partial<ChatSettings>) => setForm({...form, ...patch});
   const setHours = (patch: Partial<ChatSettings['hours']>) => set({hours: {...form.hours, ...patch}});
@@ -156,7 +168,7 @@ function ChatSettingsPage() {
   const shared = q.data.sharedAccounts;
 
   return (
-    <form onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+    <form {...f.form(() => !problem && save.mutate(undefined, {onError: f.fail}))} className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
       <div className="min-w-0">
         <SettingsSection title="Website chat" description="A chat bubble on your website. Chats land in the team inbox under Chat, follow its assignment rules and work like any other conversation.">
           <div className="grid gap-4">
@@ -176,13 +188,13 @@ function ChatSettingsPage() {
 
         <SettingsSection title="Appearance">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <Field label="Team name" htmlFor="ch-name" hint={`Empty: ${brand.name}`}><Input id="ch-name" maxLength={60} value={form.teamName} placeholder={brand.name} onChange={(e) => set({teamName: e.target.value})} /></Field>
+            <Field label="Team name" htmlFor="ch-name" hint={`Empty: ${brand.name}`} error={f.error('teamName')}><Input id="ch-name" maxLength={60} value={form.teamName} placeholder={brand.name} onChange={(e) => set({teamName: e.target.value})} onBlur={f.blur('teamName')} /></Field>
             <Field label="Reply time" htmlFor="ch-reply">
               <NativeSelect id="ch-reply" value={form.replyTime} onChange={(e) => set({replyTime: e.target.value as ReplyTime})}>
                 {(Object.keys(REPLY_TIMES) as ReplyTime[]).map((k) => <option key={k} value={k}>{REPLY_TIMES[k]}</option>)}
               </NativeSelect>
             </Field>
-            <Field label="Greeting" htmlFor="ch-greeting" className="sm:col-span-2"><Textarea id="ch-greeting" rows={2} maxLength={300} value={form.greeting} onChange={(e) => set({greeting: e.target.value})} /></Field>
+            <Field label="Greeting" htmlFor="ch-greeting" className="sm:col-span-2" error={f.error('greeting')}><Textarea id="ch-greeting" rows={2} maxLength={300} value={form.greeting} onChange={(e) => set({greeting: e.target.value})} onBlur={f.blur('greeting')} /></Field>
             <Field label="Colour" htmlFor="ch-color" hint="The brand colour from Settings → Branding unless you pick one.">
               <div className="flex items-center gap-3">
                 <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -226,7 +238,7 @@ function ChatSettingsPage() {
             {form.preChat !== 'off' && (
               <>
                 <div className="flex items-end pb-2"><Toggle label="Also ask for a name" checked={form.askName} onChange={(askName) => set({askName})} /></div>
-                <Field label="Intro" htmlFor="ch-intro" className="sm:col-span-2"><Input id="ch-intro" maxLength={300} value={form.preChatIntro} onChange={(e) => set({preChatIntro: e.target.value})} /></Field>
+                <Field label="Intro" htmlFor="ch-intro" className="sm:col-span-2" error={f.error('preChatIntro')}><Input id="ch-intro" maxLength={300} value={form.preChatIntro} onChange={(e) => set({preChatIntro: e.target.value})} onBlur={f.blur('preChatIntro')} /></Field>
               </>
             )}
           </div>
@@ -240,12 +252,12 @@ function ChatSettingsPage() {
                 <Field label="Time zone" className="max-w-sm"><TimeZoneSelect value={form.hours.timezone} onChange={(timezone) => setHours({timezone})} /></Field>
                 <WeeklyHours value={form.hours.availability} onChange={(availability) => setHours({availability})} />
                 <Overrides value={form.hours.availability} onChange={(availability) => setHours({availability})} />
-                {problem && <p className="text-sm font-medium text-destructive">{problem}</p>}
+                {problem && <p role="alert" className="text-sm font-medium text-destructive">{problem}</p>}
               </>
             )}
-            <Field label="Away message" htmlFor="ch-offline"><Textarea id="ch-offline" rows={2} maxLength={500} required value={form.offlineMessage} onChange={(e) => set({offlineMessage: e.target.value})} /></Field>
+            <Field label="Away message" htmlFor="ch-offline" error={f.error('offlineMessage')}><Textarea id="ch-offline" rows={2} maxLength={500} value={form.offlineMessage} onChange={(e) => set({offlineMessage: e.target.value})} onBlur={f.blur('offlineMessage')} /></Field>
             <Field label="Email replies after the visitor has been gone for (minutes)" htmlFor="ch-away" className="max-w-sm" hint="Replies they haven't read by then are emailed to them, with a link back to the chat.">
-              <Input id="ch-away" type="number" min={1} max={1440} value={form.awayAfterMin} onChange={(e) => set({awayAfterMin: Math.max(1, Math.min(1440, Number(e.target.value) || 1))})} />
+              <Input id="ch-away" type="number" inputMode="numeric" value={form.awayAfterMin} onChange={(e) => set({awayAfterMin: Math.max(1, Math.min(1440, Number(e.target.value) || 1))})} />
             </Field>
           </div>
         </SettingsSection>
@@ -264,7 +276,7 @@ function ChatSettingsPage() {
         </SettingsSection>
 
         <div className="mb-6 flex justify-end">
-          <Button type="submit" disabled={save.isPending || !!problem}>{save.isPending && <Loader2 className="animate-spin" />} Save changes</Button>
+          <Button type="submit" disabled={!!problem} pending={save.isPending} pendingLabel="Saving…">Save changes</Button>
         </div>
       </div>
       <aside aria-label="Preview"><Preview form={form} /></aside>

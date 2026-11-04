@@ -1,6 +1,7 @@
 import {createFileRoute, Link, useNavigate} from '@tanstack/react-router';
 import {BarChart3, Copy, MoreHorizontal, Plus, Trash2, Users} from 'lucide-react';
 
+import {LoadError} from '@/components/data-table';
 import {CHART_ICONS} from '@/components/reports/builder';
 import {useSavedReports} from '@/components/reports/hooks';
 import {useCatalogue} from '@/components/reports/option-picker';
@@ -40,7 +41,12 @@ function SavedReportsPage() {
         }
       />
       {list.isLoading && <Card className="p-6 text-sm text-muted-foreground">Loading…</Card>}
-      {!list.isLoading && !rows.length && (
+      {list.isError && (
+        <Card>
+          <LoadError error={list.error} onRetry={() => list.refetch()} />
+        </Card>
+      )}
+      {!list.isLoading && !list.isError && !rows.length && (
         <Card>
           <EmptyState
             icon={<BarChart3 />}
@@ -111,7 +117,7 @@ function ReportRow({report, objectLabel, canEdit}: {report: SavedReport; objectL
         {canEdit && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="Report actions"><MoreHorizontal /></Button>
+              <Button variant="ghost" size="icon-sm" aria-label="Report actions" pending={duplicate.isPending || remove.isPending}><MoreHorizontal /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
               <DropdownMenuItem onSelect={() => duplicate.mutate(undefined)}><Copy /> Duplicate</DropdownMenuItem>

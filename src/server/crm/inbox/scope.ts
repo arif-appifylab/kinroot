@@ -3,6 +3,7 @@ import type {User} from '../kit/guards';
 import {CHANNEL_KEYS, MESSAGE_CHANNELS, type ChannelFilter, type InboxView} from '@/lib/inbox';
 import type {Db} from '../kit/db';
 import {isAdmin} from '../kit/guards';
+import {userScope} from '../lib/http';
 import {hasTeamAccess, inboxContext, type InboxContext} from './settings';
 
 /**
@@ -20,11 +21,29 @@ import {hasTeamAccess, inboxContext, type InboxContext} from './settings';
  * `listable` is what the inbox lists. `readable` adds threads that are not
  * inbox conversations but open from a contact's timeline as before: ticket
  * threads and shared accounts that don't feed the team inbox.
+ *
+ * Ticket threads follow their ticket's visibility (`ticketScope()`: with
+ * "members see only their own", tickets assigned to them or to nobody). A
+ * thread has no relation to its ticket in the schema, so `tickets` holds that
+ * ticket filter (null: every ticket) and `findReadable()` / `readableIds()`
+ * apply it with one extra query, only for ticket threads of such members.
  */
-export type InboxScope = {ctx: InboxContext; team: boolean; listable: Prisma.EmailThreadWhereInput; readable: Prisma.EmailThreadWhereInput};
+export type InboxScope = {
+  ctx: InboxContext;
+  team: boolean;
+  listable: Prisma.EmailThreadWhereInput;
+  readable: Prisma.EmailThreadWhereInput;
+  tickets: Prisma.TicketWhereInput | null;
+  /** The user's record visibility (`ownerScope()`), for the contact / deal / company a thread links to. */
+  owner: {ownerId?: string};
+};
 
-export async function inboxScope(db: Db, user: Pick<User, 'id' | 'role'>, ctx?: InboxContext): Promise<InboxScope> {
-  const c = ctx ?? (await inboxContext(db));
+/** `ownerOnly`: the workspace's "members see only their own" setting, when the caller already read it (several users at once). */
+export async function inboxScope(db: Db, user: Pick<User, 'id' | 'role'>, ctx?: InboxContext, ownerOnly?: boolean): Promise<InboxScope> {
+  const [c, owner] = await Promise.all([
+    ctx ?? inboxContext(db),
+    ownerOnly === undefined ? userScope(db, user) : ownerOnly && !isAdmin(user) ? {ownerId: user.id} : {},
+  ]);
   const team = hasTeamAccess(user, c.settings);
   const narrow: Prisma.EmailThreadWhereInput = isAdmin(user) || c.settings.visibility === 'all' ? {} : {OR: [{assigneeId: user.id}, {assigneeId: null}]};
   const own: Prisma.EmailThreadWhereInput[] = [
@@ -36,11 +55,25 @@ export async function inboxScope(db: Db, user: Pick<User, 'id' | 'role'>, ctx?: 
   };
   const listable: Prisma.EmailThreadWhereInput = {OR: [...own, ...(team ? [teamWhere] : [])]};
   const other: Prisma.EmailThreadWhereInput = {OR: [{channel: 'ticket'}, {channel: 'email', account: {userId: null}, accountId: {notIn: c.teamAccountIds}}]};
-  return {ctx: c, team, listable, readable: {OR: [listable, other]}};
+  const tickets: Prisma.TicketWhereInput | null = owner.ownerId ? {OR: [{assigneeId: owner.ownerId}, {assigneeId: null}]} : null;
+  return {ctx: c, team, listable, readable: {OR: [listable, other]}, tickets, owner};
 }
 
-/** Legacy thread endpoints (contact pages): everything except other people's personal mailboxes. */
-export const notOthersPersonal = (user: User): Prisma.EmailThreadWhereInput => ({OR: [{accountId: null}, {account: {userId: null}}, {account: {userId: user.id}}]});
+/** One thread this user may read (a ticket thread only when they may see its ticket), else null. */
+export async function findReadable(db: Db, scope: InboxScope, id: string) {
+  const thread = await db.emailThread.findFirst({where: {AND: [{id}, scope.readable]}});
+  if (!thread || thread.channel !== 'ticket' || !scope.tickets) return thread;
+  return (await db.ticket.findFirst({where: {AND: [{emailThreadId: id}, scope.tickets]}, select: {id: true}})) ? thread : null;
+}
+
+/** Of these readable threads, the ones whose ticket (for ticket threads) this user may see: one query at most. */
+export async function withVisibleTickets<T extends {id: string; channel: string}>(db: Db, scope: InboxScope, threads: T[]): Promise<T[]> {
+  const ticketIds = scope.tickets ? threads.filter((t) => t.channel === 'ticket').map((t) => t.id) : [];
+  if (!ticketIds.length) return threads;
+  const visible = await db.ticket.findMany({where: {AND: [{emailThreadId: {in: ticketIds}}, scope.tickets!]}, select: {emailThreadId: true}});
+  const ok = new Set(visible.map((t) => t.emailThreadId));
+  return threads.filter((t) => t.channel !== 'ticket' || ok.has(t.id));
+}
 
 const notSnoozed: Prisma.EmailThreadWhereInput = {snoozedUntil: null};
 const live: Prisma.EmailThreadWhereInput = {spamAt: null, trashedAt: null};

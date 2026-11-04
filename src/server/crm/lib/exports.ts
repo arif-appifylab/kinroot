@@ -28,7 +28,7 @@ import {CRM_API} from '../kit/config';
 import {purgeFiles, storeStream} from '../kit/storage';
 import {memberWithEmail} from './users';
 import {userScope} from './http';
-import {enqueue, kickJobs} from './jobs';
+import {enqueue} from './jobs';
 import {notify} from './notify';
 import {scoreBandWhere} from './scoring';
 import {listContactWhere} from './segments';
@@ -151,8 +151,7 @@ export async function startExport(db: Db, c: AppContext, user: User, input: {ent
   }
   // Big exports always go to the inbox as well.
   exp = await db.export.update({where: {id: exp.id}, data: {status: 'queued', emailMe: true}});
-  await enqueue(db, 'export.run', {exportId: exp.id});
-  kickJobs();
+  await enqueue(db, 'export.run', {exportId: exp.id}, {key: `export-${exp.id}-start`});
   return exp;
 }
 
@@ -168,8 +167,8 @@ export async function exportJob(db: Db, p: {exportId: string}, job: JobRun) {
     if ((await chunkedSize(db, exp.id)) > MAX_EXPORT_BYTES) return void (await failExport(db, r.exp, 'The export is larger than 50 MB. Narrow the filters or pick fewer columns.'));
     if (r.done) await finishExport(db, null, r.exp, user);
     else {
-      await enqueue(db, 'export.run', {exportId: exp.id});
-      kickJobs();
+      // Keyed by this job: a retried try of it never queues a second next step.
+      await enqueue(db, 'export.run', {exportId: exp.id}, {key: `export-${exp.id}-after-${job.id}`});
     }
   } catch (e) {
     if (job.attempts < job.maxAttempts) throw e;

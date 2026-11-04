@@ -2,7 +2,7 @@ import {Hono} from 'hono';
 import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
-import type {Prisma} from '../../../generated/prisma/client';
+import {Prisma} from '../../../generated/prisma/client';
 import type {User} from '../kit/guards';
 import type {Db} from '../kit/db';
 import {currentUser, type AppEnv} from '../kit/guards';
@@ -112,10 +112,14 @@ export const dashboards = new Hono<AppEnv>()
   })
 
   /** New order of every widget id. */
-  .post('/:id/reorder', valid('json', z.object({ids: z.array(z.string()).max(MAX_WIDGETS)})), async (c) => {
+  .post('/:id/reorder', valid('json', z.object({ids: z.array(z.string().max(40)).max(MAX_WIDGETS)})), async (c) => {
     const found = await editable(c.var.db, currentUser(c), c.req.param('id'));
     const {ids} = c.req.valid('json');
-    await Promise.all(ids.map((id, position) => c.var.db.dashboardWidget.updateMany({where: {id, dashboardId: found.id}, data: {position}})));
+    // One statement for every widget (values bound; only this dashboard's widgets move).
+    if (ids.length) {
+      const order = Prisma.join(ids.map((id, position) => Prisma.sql`(${id}, ${position}::int)`));
+      await c.var.db.$executeRaw`UPDATE "DashboardWidget" AS w SET "position" = v.position FROM (VALUES ${order}) AS v(id, position) WHERE w."id" = v.id AND w."dashboardId" = ${found.id}`;
+    }
     return c.json({ok: true});
   })
 

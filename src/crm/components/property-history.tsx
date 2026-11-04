@@ -9,7 +9,7 @@ import type {HistoryActor, HistoryEntity, HistoryEntry, HistoryPage} from '@/lib
 import {keys} from '@/lib/queries';
 import {cn} from '@/lib/utils';
 
-import {SearchInput} from './data-table';
+import {LoadError, SearchInput} from './data-table';
 import {FilterBar} from './filter-bar';
 import {Button} from './ui/button';
 import {DropdownMenuItem, Tooltip} from './ui/menu';
@@ -171,8 +171,8 @@ export function PropertyHistoryDrawer({entity, id, name, initialField = '', onCl
         <DialogBody className="grid-cols-1 overflow-x-hidden">
           {feed.isLoading ? (
             <div className="flex justify-center py-10"><Loader2 className="size-5 animate-spin text-primary" /></div>
-          ) : feed.error ? (
-            <p className="text-sm text-destructive">{(feed.error as Error).message}</p>
+          ) : feed.error && rows.length === 0 ? (
+            <LoadError error={feed.error} onRetry={() => feed.refetch()} title="History could not be loaded" />
           ) : rows.length === 0 ? (
             <EmptyState icon={<History />} title={search ? 'No matching changes' : 'No changes yet'} description={search ? 'Try a different search.' : 'Edits to this property will show up here.'} />
           ) : (
@@ -188,8 +188,8 @@ export function PropertyHistoryDrawer({entity, id, name, initialField = '', onCl
               ))}
               {feed.hasNextPage && (
                 <div className="flex justify-center">
-                  <Button variant="secondary" size="sm" onClick={() => feed.fetchNextPage()} disabled={feed.isFetchingNextPage}>
-                    {feed.isFetchingNextPage && <Loader2 className="animate-spin" />} Load older changes
+                  <Button variant="secondary" size="sm" onClick={() => feed.fetchNextPage()} pending={feed.isFetchingNextPage} pendingLabel="Loading…">
+                    Load older changes
                   </Button>
                 </div>
               )}
