@@ -67,7 +67,7 @@ function GeneralSettings() {
   return (
     <form {...f.form(() => save.mutate(undefined, {onError: f.fail}))}>
       {!isAdmin && <div className="mb-6"><AdminOnly /></div>}
-      <BrandingSection form={form} setForm={setForm} disabled={disabled} nameError={f.error('brandName')} onNameBlur={f.blur('brandName')} />
+      <BrandingSection form={form} setForm={setForm} disabled={disabled} nameError={f.error('brandName')} onNameBlur={f.blur('brandName')} logoError={f.error('brandLogo')} />
 
       <SettingsSection title="Defaults">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -181,8 +181,10 @@ async function readLogo(file: File): Promise<string> {
 }
 
 /** Name, logo and colours: this is how a company makes the app its own. */
-function BrandingSection({form, setForm, disabled, nameError, onNameBlur}: {form: AppSettings; setForm: (f: AppSettings) => void; disabled: boolean; nameError?: string; onNameBlur?: () => void}) {
-  const [error, setError] = useState<string | null>(null);
+function BrandingSection({form, setForm, disabled, nameError, onNameBlur, logoError}: {form: AppSettings; setForm: (f: AppSettings) => void; disabled: boolean; nameError?: string; onNameBlur?: () => void; logoError?: string}) {
+  const [uploadError, setError] = useState<string | null>(null);
+  // The upload's own problem, else the server's (a logo it can't use lands here on save).
+  const error = uploadError ?? logoError ?? null;
   const primary = form.brandPrimary || BRAND.primary;
   const secondary = form.brandSecondary || BRAND.secondary;
 
@@ -211,11 +213,11 @@ function BrandingSection({form, setForm, disabled, nameError, onNameBlur}: {form
             <Input id="b-name" disabled={disabled} value={form.brandName} onChange={(e) => setForm({...form, brandName: e.target.value})} onBlur={onNameBlur} />
           </Field>
 
-          <Field label="Logo" error={error} hint="Square images work best. PNG, JPEG or WebP (resized to 256 px), or an SVG up to 60 KB. Saved with the settings.">
+          <Field label="Logo" htmlFor="b-logo" error={error} hint="Square images work best. PNG, JPEG or WebP (resized to 256 px), or an SVG up to 60 KB. Saved with the settings.">
             <div className="flex items-center gap-3">
               <label aria-busy={uploading || undefined} className={cn('inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-semibold text-slate-700 hover:border-slate-300', (disabled || uploading) && 'pointer-events-none opacity-60')}>
                 {uploading ? <Loader2 className="size-4 animate-spin" /> : <ImagePlus className="size-4" />} {uploading ? 'Uploading…' : form.brandLogo ? 'Replace logo' : 'Upload logo'}
-                <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="sr-only" disabled={disabled || uploading} onChange={(e) => onLogo(e.currentTarget)} />
+                <input id="b-logo" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" className="sr-only" disabled={disabled || uploading} aria-invalid={error ? true : undefined} aria-describedby={error ? 'b-logo-error' : 'b-logo-hint'} onChange={(e) => onLogo(e.currentTarget)} />
               </label>
               {form.brandLogo && (
                 <Button type="button" variant="ghost" size="sm" disabled={disabled || uploading} onClick={() => setForm({...form, brandLogo: ''})}><RotateCcw /> Use default mark</Button>
@@ -224,8 +226,8 @@ function BrandingSection({form, setForm, disabled, nameError, onNameBlur}: {form
           </Field>
 
           <div className="grid gap-2">
-            <span className="text-sm font-semibold text-slate-700">Colours</span>
-            <div className="flex flex-wrap gap-2">
+            <span id="b-colours" className="text-sm font-semibold text-slate-700">Colours</span>
+            <div role="group" aria-labelledby="b-colours" className="flex flex-wrap gap-2">
               {PALETTES.map((p) => {
                 const on = form.brandPrimary === p.primary && form.brandSecondary === p.secondary;
                 return (

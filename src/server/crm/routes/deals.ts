@@ -9,7 +9,7 @@ import {customDiff, diff, logActivity} from '../lib/activity';
 import {audit, auditMany} from '../lib/audit';
 import {cleanCustom} from '../lib/custom-fields';
 import {emit} from '../lib/events';
-import {assertVisible, custom, intParam, isoDate, MAX_PAGE, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {assertVisible, custom, fieldError, intParam, isoDate, MAX_PAGE, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
 import {notify, notifyWatchers, recordLink} from '../lib/notify';
 import {moveToBin} from '../lib/recycle-bin';
 import {rememberOption} from '../lib/settings';
@@ -334,7 +334,7 @@ export const deals = new Hono<AppEnv>()
     const scope = await ownerScope(c);
     const before = await db.deal.findFirst({where: {id: c.req.param('id'), ...scope}});
     if (!before) throw notFound('Deal');
-    if (status === 'LOST' && !lostReason) throw new HTTPException(400, {message: 'Pick a reason for losing this deal'});
+    if (status === 'LOST' && !lostReason) throw fieldError('lostReason', 'Pick a reason for losing this deal');
     if (status === 'LOST') await rememberOption(db, 'lostReasons', lostReason);
     const deal = scopedDeal(await db.deal.update({
       where: {id: before.id},

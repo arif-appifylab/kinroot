@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/react-query';
 import {Link} from '@tanstack/react-router';
 import {FlaskConical, Play, Workflow} from 'lucide-react';
-import {useState} from 'react';
+import {useId, useState} from 'react';
 
 import {OBJECTS, TEST_MODES, type AutoObject, type Target, type TestMode} from '@/lib/automations';
 import {api} from '@/lib/api';
@@ -24,10 +24,12 @@ import {RunDialog} from './runs';
 function TicketPicker({onChange}: {onChange: (id: string | null) => void}) {
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState('');
+  // Its own id: the surrounding Field's label names the ticket list, not the search box.
+  const searchId = useId();
   const list = useQuery({queryKey: [...keys.tickets, 'picker', q], queryFn: () => api.get<Paged<TicketRow>>('/tickets', {q, status: 'all', pageSize: 20})});
   return (
     <div className="grid gap-2">
-      <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tickets by subject or number…" aria-label="Search tickets" />
+      <Input id={searchId} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tickets by subject or number…" aria-label="Search tickets" />
       <NativeSelect value={picked} onChange={(e) => (setPicked(e.target.value), onChange(e.target.value || null))} aria-label="Ticket">
         <option value="">Pick a ticket…</option>
         {list.data?.rows.map((t) => <option key={t.id} value={t.id}>#{t.number} {t.subject}</option>)}

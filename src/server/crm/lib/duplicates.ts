@@ -304,6 +304,56 @@ export async function lastScans(db: Db) {
 
 const SCAN_EVERY_MS = 6 * 60 * 60_000;
 
+// ─── "Scan now" (Settings → Duplicates, admins) ───
+
+/** Settings row: the entities a manual scan still has queued or running (`{contact: iso, company: iso}`); `{}` = none. */
+const MANUAL_KEY = 'duplicates.manualScan';
+/** A manual scan whose job never ended (it failed for good) stops blocking the button after this. */
+const MANUAL_STALE_MS = 15 * 60_000;
+
+/**
+ * Queues a full scan of `entities` as background jobs, one manual scan at a time: the claim is one
+ * conditional statement on one row, so two clicks (or two admins) at once queue it once.
+ * Returns false when one is still queued or running.
+ */
+export async function queueManualScan(db: Db, entities: DupEntity[]): Promise<boolean> {
+  const now = new Date();
+  const value = JSON.stringify(Object.fromEntries(entities.map((e) => [e, now.toISOString()])));
+  const stale = new Date(now.getTime() - MANUAL_STALE_MS);
+  const claimed = await db.$queryRaw<{key: string}[]>`
+    INSERT INTO "Setting" (key, value, "updatedAt") VALUES (${MANUAL_KEY}, ${value}::jsonb, ${now})
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = EXCLUDED."updatedAt"
+    WHERE "Setting".value = '{}'::jsonb OR jsonb_typeof("Setting".value) <> 'object' OR "Setting"."updatedAt" < ${stale}
+    RETURNING key`;
+  if (!claimed.length) return false;
+  for (const entity of entities) await enqueue(db, 'duplicates.scan', {entity, manual: true}, {key: `dup-scan-${entity}-manual-${now.getTime()}`, label: 'Duplicate scan · Scan now'});
+  return true;
+}
+
+/** A manual scan of `entity` ended (done or failed for good): the button is free once every entity has. */
+export async function endManualScan(db: Db, entity: DupEntity) {
+  await db.$executeRaw`UPDATE "Setting" SET value = value - ${entity}::text WHERE key = ${MANUAL_KEY} AND jsonb_typeof(value) = 'object'`;
+}
+
+/** Whether a manual scan is queued or running (Settings → Duplicates shows it). */
+export async function manualScanRunning(db: Db) {
+  const row = await db.setting.findUnique({where: {key: MANUAL_KEY}, select: {value: true, updatedAt: true}});
+  const v = row?.value;
+  return !!row && !!v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length > 0 && row.updatedAt.getTime() > Date.now() - MANUAL_STALE_MS;
+}
+
+/** `duplicates.scan` job. A manual one frees "Scan now" when it ends, also when it fails on its last try. */
+export async function scanJob(db: Db, entity: DupEntity, manual: boolean, lastTry: boolean) {
+  if (!manual) return void (await scanDuplicates(db, entity));
+  let ok = false;
+  try {
+    await scanDuplicates(db, entity);
+    ok = true;
+  } finally {
+    if (ok || lastTry) await endManualScan(db, entity);
+  }
+}
+
 /** Called by the `crm-tick` schedule (every minute; one settings read): queues a full scan per entity every 6 hours. */
 export async function scheduleDuplicateScans(db: Db) {
   const scans = await lastScans(db);

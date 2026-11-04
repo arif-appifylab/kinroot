@@ -328,9 +328,9 @@ function EmbedDialog({link, onClose}: {link: BookingLinkRow; onClose: () => void
           <DialogDescription>Send the link, add a booking button to any website, or drop it into a page of this app.</DialogDescription>
         </DialogHeader>
         <DialogBody className="gap-5">
-          <Field label="Direct link"><Snippet code={link.url} label="Link" /></Field>
-          <Field label="Button on a website" hint="It opens the booking page. Other websites can't show this site inside their own page."><Snippet code={button} label="Button code" /></Field>
-          <Field label="In a page built in this app"><Snippet code={widget} label="Component" /></Field>
+          <Field label="Direct link" group><Snippet code={link.url} label="Link" /></Field>
+          <Field label="Button on a website" group hint="It opens the booking page. Other websites can't show this site inside their own page."><Snippet code={button} label="Button code" /></Field>
+          <Field label="In a page built in this app" group><Snippet code={widget} label="Component" /></Field>
         </DialogBody>
       </DialogContent>
     </Dialog>

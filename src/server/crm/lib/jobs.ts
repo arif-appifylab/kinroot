@@ -16,7 +16,7 @@ import {sendBroadcastBatch, startBroadcast} from './broadcasts';
 import {recalcJob, rescoreContacts, scoreEvents} from './scoring';
 import {pruneAudit} from './audit';
 import {deleteInChunks} from './chunked-delete';
-import {checkDuplicates, scanDuplicates} from './duplicates';
+import {checkDuplicates, scanJob} from './duplicates';
 import {purgeExpiredBin} from './recycle-bin';
 import {advanceRun, matchEvents, pruneAutomations, runBatch, type Origin} from './automations';
 import {importJob} from './imports';
@@ -66,7 +66,7 @@ const HANDLERS = {
   'ticket.csat': (db, p) => sendCsat(db, p),
   'email.forward_reply': (db, p) => forwardReply(db, String(p.messageId), String(p.origin ?? '')),
   'email.sync_account': (db, p) => syncAccountJob(db, String(p.accountId)),
-  'calendar.sync_connection': (db, p) => syncConnectionJob(db, String(p.connectionId)),
+  'calendar.sync_connection': (db, p) => syncConnectionJob(db, String(p.connectionId), p.force === true),
   'booking.email': (db, p) => bookingEmail(db, p as Parameters<typeof bookingEmail>[1]),
   'booking.reminder': (db, p) => bookingReminder(db, p as Parameters<typeof bookingReminder>[1]),
   'broadcast.start': (db, p) => startBroadcast(db, p),
@@ -74,7 +74,7 @@ const HANDLERS = {
   'scoring.events': (db, p) => scoreEvents(db, ids(p.eventIds)),
   'scoring.rescore': async (db, p) => void (await rescoreContacts(db, ids(p.contactIds))),
   'scoring.recalc': (db, p) => recalcJob(db, {runId: String(p.runId), after: typeof p.after === 'string' ? p.after : null}),
-  'duplicates.scan': async (db, p) => void (await scanDuplicates(db, p.entity === 'company' ? 'company' : 'contact')),
+  'duplicates.scan': (db, p, job) => scanJob(db, p.entity === 'company' ? 'company' : 'contact', p.manual === true, job.attempts >= job.maxAttempts),
   'duplicates.check': (db, p) => checkDuplicates(db, p.entity === 'company' ? 'company' : 'contact', String(p.id)),
   'automation.events': (db, p) => matchEvents(db, ids(p.eventIds), (p.origin ?? null) as Origin | null),
   'automation.run': (db, p, job) => advanceRun(db, String(p.runId), job),

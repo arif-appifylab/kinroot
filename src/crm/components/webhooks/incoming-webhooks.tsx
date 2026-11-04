@@ -237,7 +237,7 @@ function NewHookDialog({onClose, onCreated}: {onClose: () => void; onCreated: (h
               <Field label="Name" htmlFor={`${ids}-name`} hint="e.g. “Stripe checkouts” or “Website sign-ups (Zapier)”" error={f.error('name')}>
                 <Input id={`${ids}-name`} value={name} onChange={(e) => setName(e.target.value)} onBlur={f.blur('name')} maxLength={100} autoFocus />
               </Field>
-              <Field label="What it does">
+              <Field label="What it does" group>
                 <ActionPicker value={action} onChange={setAction} />
               </Field>
             </div>
@@ -549,7 +549,7 @@ function OptionsEditor({action, config, onChange}: {action: InAction; config: In
   return (
     <Section title="When data arrives" hint={action === 'deal' || action === 'ticket' ? `Each request creates a ${action}. The contact is matched by email, then phone.` : IN_ACTIONS[action].hint}>
       <div className="grid gap-4">
-        <Field label={action === 'deal' || action === 'ticket' ? 'Contacts' : 'Records'}>
+        <Field label={action === 'deal' || action === 'ticket' ? 'Contacts' : 'Records'} group>
           <Chips label="Create or update" value={config.mode} onChange={(mode: InMode) => onChange({mode})} options={Object.entries(IN_MODES) as [InMode, string][]} />
         </Field>
         <label className="flex cursor-pointer items-start justify-between gap-4">

@@ -136,6 +136,17 @@ describe.skipIf(!DATABASE_URL)('Ported: incoming webhooks (integration, real Pos
     expect(await db.auditLog.findFirst({where: {action: 'contact.created', recordId: contact!.id, meta: {path: ['webhookId'], equals: contactHook.id}}})).toBeTruthy();
   });
 
+  it('sets the owner by an invited (not yet joined) teammate’s address, as Data in and imports do (AUDIT P3-3)', async () => {
+    await setup();
+    must(await browser.post('/site-api/crm/team/invite', {name: 'Ivy', email: 'ivy.invited@example.com', role: 'MEMBER'}), 'invite');
+    const ivy = await db.member.findFirstOrThrow({where: {inviteEmail: 'ivy.invited@example.com'}, select: {id: true, userId: true}});
+    expect(ivy.userId, 'not joined yet').toBeNull();
+    const ownerHook = await hook({name: 'Owner by email', action: 'contact', config: {mapping: [{path: 'email', target: 'contact.email'}, {path: 'owner', target: 'contact.owner'}]}});
+    const r = await deliver(ownerHook.url, {json: {email: 'lead@owner-hook.example', owner: 'IVY.INVITED@example.com'}});
+    expect(r.row).toMatchObject({status: 'processed', result: {outcome: 'created'}});
+    expect((await contactRow(r.row?.result.recordId))?.ownerId).toBe(ivy.id);
+  });
+
   it('updates the same contact, keeps blanks out, matches by phone, and names the webhook in the history', async () => {
     const {contactHook, contactId} = await contactHookWithMaya();
     const c2 = await deliver(contactHook.url, {json: {id: 'evt_2', data: {customer: {email: email1, first_name: 'Maya-Lee', phone: '', last_name: null}}}});

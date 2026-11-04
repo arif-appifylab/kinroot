@@ -7,7 +7,7 @@ import {isEmptyHtml} from '@/lib/email-html';
 import {publicOrigin} from '../kit/config';
 import {currentUser, isAdmin, type AppContext, type AppEnv} from '../kit/guards';
 import {broadcastStats, cancelBroadcast, emptyStats, MAX_RECIPIENTS, resolveAudience} from '../lib/broadcasts';
-import {notFound, ownerScope, valid} from '../lib/http';
+import {fieldError, intParam, notFound, ownerScope, valid} from '../lib/http';
 import {enqueue} from '../lib/jobs';
 import {userSelect} from '../lib/users';
 import {usableAccounts} from '../email/service';
@@ -49,7 +49,7 @@ export const broadcasts = new Hono<AppEnv>()
     });
   })
 
-  .get('/', valid('query', z.object({listId: z.string().optional(), take: z.coerce.number().int().min(1).max(200).default(50)})), async (c) => {
+  .get('/', valid('query', z.object({listId: z.string().optional(), take: intParam(1, 200).default(50)})), async (c) => {
     const q = c.req.valid('query');
     const rows = await c.var.db.broadcast.findMany({
       where: {AND: [await broadcastScope(c), q.listId ? {listId: q.listId} : {}]},
@@ -88,10 +88,10 @@ export const broadcasts = new Hono<AppEnv>()
     const db = c.var.db;
     const me = currentUser(c);
     const input = c.req.valid('json');
-    if (isEmptyHtml(input.html)) throw new HTTPException(400, {message: 'Write the email first'});
+    if (isEmptyHtml(input.html)) throw fieldError('html', 'Write the email first');
     const list = await findList(c, input.listId);
     const account = (await usableAccounts(db, me)).find((a) => a.id === input.accountId);
-    if (!account) throw new HTTPException(400, {message: 'Pick one of your email accounts or a shared one'});
+    if (!account) throw fieldError('accountId', 'Pick one of your email accounts or a shared one');
 
     const at = input.scheduledAt ? new Date(input.scheduledAt) : new Date();
     if (at.getTime() < Date.now() - 5 * 60_000) throw new HTTPException(400, {message: 'Pick a time in the future'});

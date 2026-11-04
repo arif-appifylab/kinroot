@@ -7,7 +7,7 @@ import {problem} from '../../../platform/guards';
 import {publicOrigin} from '../kit/config';
 import type {Db} from '../kit/db';
 import type {AppContext, AppEnv} from '../kit/guards';
-import {notFound, valid} from '../lib/http';
+import {fieldError, notFound, valid} from '../lib/http';
 import {connectionLimits, rateLimit} from '../lib/rate-limit';
 import {notify} from '../lib/notify';
 import {richBody, richHtml} from '../lib/rich-text';
@@ -132,10 +132,10 @@ export const supportPublic = new Hono<AppEnv>()
       // It sends an email to the address typed in: bounded per connection (docs/agent/security.md A06).
       await rateLimit(db, await connectionLimits((n) => c.req.header(n), 'support:request', 5, 20), 'You have sent several requests in a short time. Please wait a while and try again.');
       const desc = richBody({html: body.descriptionHtml, text: body.description});
-      if (!desc.text) throw new HTTPException(400, {message: 'Tell us what you need help with'});
+      if (!desc.text) throw fieldError('description', 'Tell us what you need help with');
       const session = await portalSession(c);
       const email = session?.email ?? body.email;
-      if (!email) throw new HTTPException(400, {message: 'Enter your email address'});
+      if (!email) throw fieldError('email', 'Enter your email address');
       const settings = await getTicketSettings(db);
       const input = {
         subject: body.subject,

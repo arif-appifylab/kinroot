@@ -9,7 +9,7 @@ import {currentUser, isAdmin, requireRole, type AppEnv} from '../kit/guards';
 import {diff} from '../lib/activity';
 import {audit} from '../lib/audit';
 import {emit} from '../lib/events';
-import {notFound, optStr, tags, valid} from '../lib/http';
+import {fieldError, intParam, MAX_PAGE, notFound, optStr, tags, valid} from '../lib/http';
 import {moveToBin} from '../lib/recycle-bin';
 import {richBody, richHtml} from '../lib/rich-text';
 import {
@@ -58,8 +58,8 @@ const listQuery = z.object({
   dealId: z.string().optional(),
   sort: z.enum(['updated', 'created', 'priority', 'due', 'number']).default('updated'),
   dir: z.enum(['asc', 'desc']).optional(),
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(300).default(50),
+  page: intParam(1, MAX_PAGE).default(1),
+  pageSize: intParam(1, 300).default(50),
 });
 
 async function loadTicket(c: Parameters<typeof ticketScope>[0], ref: string) {
@@ -186,7 +186,7 @@ export const tickets = new Hono<AppEnv>()
   .post('/canned', requireRole('ADMIN'), valid('json', z.object({name: z.string().trim().min(1).max(100), body: z.string().trim().max(20_000).default(''), html: richHtml})), async (c) => {
     const input = c.req.valid('json');
     const rich = richBody({html: input.html, text: input.body});
-    if (!rich.text) throw new HTTPException(400, {message: 'Write the reply first'});
+    if (!rich.text) throw fieldError('html', 'Write the reply first');
     const count = await c.var.db.cannedReply.count();
     const reply = await c.var.db.cannedReply.create({data: {name: input.name, body: rich.text, html: rich.html, position: count}});
     await audit(c.var.db, c, {action: 'canned_reply.created', entity: 'canned_reply', recordId: reply.id, label: reply.name});
@@ -196,7 +196,7 @@ export const tickets = new Hono<AppEnv>()
   .patch('/canned/:id', requireRole('ADMIN'), valid('json', z.object({name: z.string().trim().min(1).max(100).optional(), body: z.string().trim().max(20_000).optional(), html: richHtml})), async (c) => {
     const {name, body, html} = c.req.valid('json');
     const rich = body !== undefined || html !== undefined ? richBody({html, text: body}) : null;
-    if (rich && !rich.text) throw new HTTPException(400, {message: 'Write the reply first'});
+    if (rich && !rich.text) throw fieldError('html', 'Write the reply first');
     const data = {...(name !== undefined ? {name} : {}), ...(rich ? {body: rich.text, html: rich.html} : {})};
     const reply = await c.var.db.cannedReply.update({where: {id: c.req.param('id')}, data}).catch(() => null);
     if (!reply) throw notFound('Canned reply');

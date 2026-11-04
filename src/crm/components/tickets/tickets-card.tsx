@@ -8,6 +8,7 @@ import {ago} from '@/lib/format';
 import {keys, useMe} from '@/lib/queries';
 import type {Paged, TicketRow} from '@/lib/types';
 
+import {LoadError} from '../data-table';
 import {PropertyCard} from '../properties';
 import {Button} from '../ui/button';
 import {NewTicketDialog, type TicketDefaults} from './new-ticket-dialog';
@@ -25,7 +26,10 @@ export function TicketsCard({record, defaults}: {record: {contactId?: string; co
 
   return (
     <>
-      <PropertyCard title={`Tickets · ${list.data?.total ?? 0}`} action={canEdit && <Button variant="ghost" size="sm" onClick={() => setCreating(true)}><Plus /> New</Button>}>
+      {/* The count only once it is known: a failed load is not "0 tickets". */}
+      <PropertyCard title={list.data ? `Tickets · ${list.data.total}` : 'Tickets'} action={canEdit && <Button variant="ghost" size="sm" onClick={() => setCreating(true)}><Plus /> New</Button>}>
+        {list.isPending && <p className="px-3 py-3 text-sm text-muted-foreground">Loading…</p>}
+        {list.isError && !list.data && <LoadError error={list.error} onRetry={() => list.refetch()} title="Tickets could not be loaded" className="py-2" />}
         {list.data && rows.length === 0 && <p className="px-3 py-3 text-sm text-muted-foreground">No support tickets</p>}
         {rows.map((t) => (
           <Link key={t.id} to="/tickets/$ticketId" params={{ticketId: String(t.number)}} className="flex items-start gap-2.5 rounded-lg px-3 py-2.5 hover:bg-slate-50">

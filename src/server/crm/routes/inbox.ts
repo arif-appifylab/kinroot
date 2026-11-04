@@ -12,7 +12,7 @@ import {audit} from '../lib/audit';
 import {associateByDomain} from '../lib/domains';
 import {checkDuplicates} from '../lib/duplicates';
 import {emit} from '../lib/events';
-import {notFound, ownerScope, valid} from '../lib/http';
+import {fieldError, intParam, MAX_PAGE, notFound, ownerScope, valid} from '../lib/http';
 import {mentionedUsers, notify, notifyMentions} from '../lib/notify';
 import {stripQuoted} from '../lib/ticket-mail';
 import {createTicket} from '../lib/tickets';
@@ -64,8 +64,8 @@ const listQuery = z.object({
   unread: z.enum(['1']).optional(),
   q: z.string().trim().max(200).optional(),
   sort: z.enum(Object.keys(INBOX_SORTS) as [keyof typeof INBOX_SORTS, ...(keyof typeof INBOX_SORTS)[]]).default('newest'),
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  page: intParam(1, MAX_PAGE).default(1),
+  pageSize: intParam(1, 100).default(50),
 });
 
 function searchWhere(q: string): Prisma.EmailThreadWhereInput {
@@ -642,8 +642,8 @@ export const inbox = new Hono<AppEnv>()
       blockedDomains: [...new Set(input.blockedDomains)],
     };
     const noAccess = users.filter((u) => next.roundRobinIds.includes(u.id) && !hasTeamAccess(u, next));
-    if (noAccess.length) throw new HTTPException(400, {message: 'Everyone in the round robin needs access to the team inbox'});
-    if (next.assignment === 'round_robin' && !next.roundRobinIds.length) throw new HTTPException(400, {message: 'Pick at least one person for the round robin'});
+    if (noAccess.length) throw fieldError('roundRobinIds', 'Everyone in the round robin needs access to the team inbox');
+    if (next.assignment === 'round_robin' && !next.roundRobinIds.length) throw fieldError('roundRobinIds', 'Pick at least one person for the round robin');
     const settings = await saveInboxSettings(db, next);
     await audit(db, c, {action: 'settings.inbox', meta: {changes: diff(before as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>)}});
     return c.json({settings});

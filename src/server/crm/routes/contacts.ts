@@ -9,7 +9,7 @@ import {audit, auditMany} from '../lib/audit';
 import {cleanCustom} from '../lib/custom-fields';
 import {forgetPairs, queueDuplicateCheck} from '../lib/duplicates';
 import {emit, emitMany} from '../lib/events';
-import {assertVisible, custom, httpUrl, intParam, listQuery, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {assertVisible, custom, fieldError, httpUrl, intParam, listQuery, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
 import {associateByDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
 import {moveScoreEvents, scoreBandWhere} from '../lib/scoring';
@@ -103,7 +103,7 @@ export const contacts = new Hono<AppEnv>()
     if (companyId) await assertVisible(c, {companyId});
     if (body.email) {
       const dupe = await c.var.db.contact.findFirst({where: {email: body.email}, select: {id: true}});
-      if (dupe) throw new HTTPException(409, {message: `A contact with ${body.email} already exists`});
+      if (dupe) throw fieldError('email', `A contact with ${body.email} already exists`, 409);
     }
     const contact = await c.var.db.contact.create({
       data: {

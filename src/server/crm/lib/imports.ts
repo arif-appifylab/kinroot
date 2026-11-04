@@ -49,7 +49,7 @@ import {notify} from './notify';
 import {queueRescore} from './scoring-hook';
 import {addToList} from './segments';
 import {getSettings, rememberOption, type AppSettings} from './settings';
-import {userScope} from './http';
+import {httpUrl, userScope} from './http';
 import {readBytes, storeBytes} from '../kit/storage';
 import {memberWithEmail} from './users';
 import {strings, withStrings} from './json-list';
@@ -219,6 +219,9 @@ type Prepared = {
   note?: string;
 };
 
+/** Columns that hold a link (contacts' and companies' LinkedIn, companies' website). */
+const URL_FIELDS = ['website', 'linkedin'] as const;
+
 function prepare(ctx: Ctx, cells: string[], index: number): Prepared {
   const p: Prepared = {index, row: index + 2, cells, issues: [], keys: matchKeys(ctx, cells), fields: {}, custom: {}, newOptions: new Map(), tags: [], contactEmails: []};
   const warn = (key: string, message: string) => p.issues.push({level: 'warning', column: ctx.columnOf.get(key) ?? null, message});
@@ -260,6 +263,17 @@ function prepare(ctx: Ctx, cells: string[], index: number): Prepared {
   });
   if (ctx.entity !== 'company') p.company = companyRef(ctx, cells);
   if (ctx.tagged) p.tags = [...new Set([...p.tags, ctx.tagged])];
+  // Links: the API's own check (http(s) only, a bare `acme.com` becomes https://acme.com); a bad one is left out with a warning, the row goes on.
+  for (const key of URL_FIELDS) {
+    const v = p.fields[key];
+    if (typeof v !== 'string') continue;
+    const r = httpUrl.safeParse(v);
+    if (r.success) p.fields[key] = r.data;
+    else {
+      warn(key, `"${v.slice(0, 80)}" is not a web address (http:// or https://); ${ctx.targets.get(key)?.label ?? key} left out`);
+      delete p.fields[key];
+    }
+  }
 
   if (ctx.entity === 'contact') {
     // "Lee, Ann" or "Ann Lee"

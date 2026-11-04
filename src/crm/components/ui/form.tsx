@@ -14,8 +14,16 @@ export type ControlSize = 'default' | 'sm';
 // A `Field` names its control: the control takes the Field's id (unless it has its own) and,
 // when it is that labelled control, `aria-invalid` and `aria-describedby` for the error / hint.
 
-type FieldWiring = {id: string; describedBy?: string; invalid: boolean};
+type FieldWiring = {id: string; labelId?: string; describedBy?: string; invalid: boolean};
 const FieldContext = React.createContext<FieldWiring | null>(null);
+
+/**
+ * The surrounding `Field`'s wiring for a control that can't take a `<label for>` (a rich editor's
+ * editable element): point `aria-labelledby` at `labelId` and copy `aria-invalid` / `aria-describedby`.
+ */
+export function useFieldWiring() {
+  return React.useContext(FieldContext);
+}
 
 /** The id and error wiring a control gets from its `Field` (pass your own `id` to opt out). */
 export function useFieldControl<P extends {id?: string; 'aria-invalid'?: unknown; 'aria-describedby'?: string}>(props: P): P {
@@ -151,17 +159,31 @@ export function Label({className, ...props}: React.ComponentProps<typeof LabelPr
  * Label + control + optional hint/error, stacked. The label points at the control (`htmlFor`, else
  * the child's own `id`, else a generated one the kit's controls pick up), and the control gets
  * `aria-invalid` + `aria-describedby` pointing at the error (`<id>-error`) or the hint.
+ *
+ * `group`: the label names a set of controls (radio cards, chips, checkboxes, a picker made of
+ * buttons) rather than one input: the children are wrapped in `role="group"` labelled by it.
+ * A rich editor inside a Field takes its name from the label (`useFieldWiring`).
  */
-export function Field({label, hint, error, children, className, htmlFor}: {label?: React.ReactNode; hint?: React.ReactNode; error?: string | null | false; children: React.ReactNode; className?: string; htmlFor?: string}) {
+export function Field({label, hint, error, children, className, htmlFor, group}: {label?: React.ReactNode; hint?: React.ReactNode; error?: string | null | false; children: React.ReactNode; className?: string; htmlFor?: string; group?: boolean}) {
   const auto = React.useId();
   const childId = React.isValidElement<{id?: unknown}>(children) && typeof children.props.id === 'string' ? children.props.id : undefined;
   const id = htmlFor ?? childId ?? auto;
+  const labelId = label ? `${id}-label` : undefined;
   const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
-  const wiring = React.useMemo(() => ({id, describedBy, invalid: !!error}), [id, describedBy, error]);
+  const wiring = React.useMemo(() => ({id, labelId, describedBy, invalid: !!error}), [id, labelId, describedBy, error]);
   return (
     <div className={cn('grid content-start gap-1.5', className)}>
-      {label && <Label htmlFor={id}>{label}</Label>}
-      <FieldContext.Provider value={wiring}>{children}</FieldContext.Provider>
+      {label && (group ? <Label id={labelId}>{label}</Label> : <Label id={labelId} htmlFor={id}>{label}</Label>)}
+      {/* A group's controls are named by their own labels: none of them takes the Field's id. */}
+      <FieldContext.Provider value={group ? null : wiring}>
+        {group ? (
+          <div role="group" aria-labelledby={labelId} aria-describedby={describedBy}>
+            {children}
+          </div>
+        ) : (
+          children
+        )}
+      </FieldContext.Provider>
       {error ? (
         <p id={`${id}-error`} role="alert" className="text-xs font-medium text-destructive">
           {error}

@@ -29,6 +29,15 @@ export const valid = <T extends ZodType, K extends 'json' | 'query' | 'param'>(t
 
 export const notFound = (what = 'Record') => new HTTPException(404, {message: `${what} not found`});
 
+/**
+ * A hand-written check about ONE input (`throw fieldError('slug', 'Another form already uses that
+ * link', 409)`): answers `{error, fields: {[field]: message}}` in `valid()`'s shape, so the form shows
+ * the words under that field (`f.fail`). Keeps its status (400 by default, 409 for "already taken").
+ * Checks that are not about one input (permissions, a record's state) stay plain HTTPExceptions.
+ */
+export const fieldError = (field: string, message: string, status: 400 | 409 | 422 = 400) =>
+  new HTTPException(status, {message, res: Response.json({error: message, fields: {[field]: message}}, {status})});
+
 // Shared zod pieces
 export const optStr = z.string().trim().max(5000).nullish().transform((v) => (v === '' ? null : v));
 export const tags = z.array(z.string().trim().min(1).max(40)).max(50);
@@ -43,7 +52,16 @@ export const isoDate = z
  * a 500 further down), within [min, max].
  */
 export const intParam = (min: number, max: number) =>
-  z.string().regex(/^-?\d{1,9}$/, 'must be a whole number').transform(Number).pipe(z.number().int().min(min).max(max));
+  z.string().regex(/^-?\d{1,9}$/, 'must be a whole number').transform(Number).pipe(z.number().int().min(min, `must be at least ${min}`).max(max, `must be at most ${max}`));
+
+/**
+ * A whole number in a JSON body: a number, or digits in a string (forms send either); `1.5`,
+ * `"1e3"`, `"0x10"` are refused. Within [min, max].
+ */
+export const intValue = (min: number, max: number) =>
+  z
+    .union([z.number(), z.string().trim().regex(/^-?\d{1,9}$/, 'must be a whole number').transform(Number)], {error: 'must be a whole number'})
+    .pipe(z.number().int('must be a whole number').min(min, `must be at least ${min}`).max(max, `must be at most ${max}`));
 
 /** Deepest page a list may ask for (offset paging; past this, narrow the filters). */
 export const MAX_PAGE = 1000;

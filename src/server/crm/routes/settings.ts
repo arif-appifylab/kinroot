@@ -8,7 +8,7 @@ import {oauthClient} from '../email/oauth';
 import {currentUser, isAdmin, requireRole, type AppEnv} from '../kit/guards';
 import {diff} from '../lib/activity';
 import {audit} from '../lib/audit';
-import {valid} from '../lib/http';
+import {fieldError, valid} from '../lib/http';
 import {getPrivateSettings, getSettings, saveSettings, type StoredSettings} from '../lib/settings';
 import {publicLink} from '../kit/storage';
 import type {Db} from '../kit/db';
@@ -89,7 +89,7 @@ export const settings = new Hono<AppEnv>()
       const before: StoredSettings = {...pub, ...priv};
       if (patch.brandLogo !== undefined) {
         const problem = await logoProblem(db, patch.brandLogo, before.brandLogo);
-        if (problem) return c.json({error: `brandLogo: ${problem}`}, 400);
+        if (problem) throw fieldError('brandLogo', problem);
       }
       // saveSettings clears the cached settings and brand right after the write.
       await saveSettings(db, patch);

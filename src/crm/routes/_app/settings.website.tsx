@@ -7,6 +7,7 @@ import {LoadError} from '@/components/data-table';
 import {AdminOnly, SettingsSection} from '@/components/settings-section';
 import {Button} from '@/components/ui/button';
 import {Field, NativeSelect, Switch} from '@/components/ui/form';
+import {useFormState} from '@/components/ui/form-state';
 import {api} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
 import {keys, useApiMutation, useMe} from '@/lib/queries';
@@ -46,6 +47,8 @@ function WebsiteSettingsPage() {
     if (q.data && !form) setForm(q.data.settings);
   }, [q.data, form]);
   const save = useApiMutation(() => api.put<{settings: WebsiteSettings}>('/website/settings', form), {invalidate: [QUERY, ['website']], success: 'Website saved', onSuccess: (r) => setForm(r.settings)});
+  // Both choices come from lists, so only the server can find them wrong (a form unpublished meanwhile).
+  const f = useFormState((form ?? {}) as WebsiteSettings);
 
   if (!isAdmin) return <AdminOnly />;
   if (q.isError) return <LoadError error={q.error} onRetry={() => q.refetch()} />;
@@ -54,7 +57,7 @@ function WebsiteSettingsPage() {
   const {forms, links} = q.data;
 
   return (
-    <form noValidate onSubmit={(e) => (e.preventDefault(), save.mutate(undefined))} className="min-w-0">
+    <form {...f.form(() => !save.isPending && save.mutate(undefined, {onError: f.fail}))} className="min-w-0">
       <SettingsSection
         title="Website"
         description={<>Your public website: the home page at <code>/</code>, <code>/contact/</code> and <code>/demo/</code>. The team works in the app at <code>/crm/</code>. Name, logo and colours come from Branding; the page copy is edited by prompting.</>}
@@ -74,7 +77,7 @@ function WebsiteSettingsPage() {
 
       <SettingsSection title="Pages" description="What Contact us and Book a demo show. Every response and booking lands in the CRM with its contact.">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <Field label="Contact us form" htmlFor="ws-form" hint={forms.length ? <>The website’s own Contact us form is made for you; edit its questions in <Link to="/forms" className="font-semibold text-primary hover:underline">Forms</Link>.</> : undefined}>
+          <Field label="Contact us form" htmlFor="ws-form" error={f.error('contactFormId')} hint={forms.length ? <>The website’s own Contact us form is made for you; edit its questions in <Link to="/forms" className="font-semibold text-primary hover:underline">Forms</Link>.</> : undefined}>
             {forms.length ? (
               <NativeSelect id="ws-form" value={form.contactFormId ?? ''} onChange={(e) => set({contactFormId: e.target.value || null})}>
                 {forms.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
@@ -83,7 +86,7 @@ function WebsiteSettingsPage() {
               <p className="text-sm text-muted-foreground">No published form yet: <Link to="/forms" className="font-semibold text-primary hover:underline">publish one in Forms</Link>.</p>
             )}
           </Field>
-          <Field label="Book a demo calendar" htmlFor="ws-link" hint={links.length ? <>A team “Product demo” link is made for you (admins host it); change hours and hosts in <Link to="/meetings" className="font-semibold text-primary hover:underline">Meetings</Link>.</> : undefined}>
+          <Field label="Book a demo calendar" htmlFor="ws-link" error={f.error('demoLinkId')} hint={links.length ? <>A team “Product demo” link is made for you (admins host it); change hours and hosts in <Link to="/meetings" className="font-semibold text-primary hover:underline">Meetings</Link>.</> : undefined}>
             {links.length ? (
               <NativeSelect id="ws-link" value={form.demoLinkId ?? ''} onChange={(e) => set({demoLinkId: e.target.value || null})}>
                 {links.map((l) => <option key={l.id} value={l.id}>{l.name} · {l.minutes} min</option>)}

@@ -2,6 +2,7 @@ import type {Interval} from '@/lib/scheduling';
 import type {OAuthCreds} from '../email/providers';
 import type {CalendarProvider} from './oauth';
 import {fetchOut} from '../kit/outbound';
+import {CalendarCallError} from './errors';
 
 /**
  * Google Calendar API and Microsoft Graph behind one small interface:
@@ -57,7 +58,8 @@ async function call<T>(creds: OAuthCreds, url: string, init: RequestInit = {}, p
   if (!res.ok) {
     const err = body.error;
     const message = typeof err === 'string' ? err : err?.message;
-    throw new Error(`${provider === 'google' ? 'Google Calendar' : 'Microsoft Graph'}: ${message ?? `HTTP ${res.status}`}`);
+    const code = typeof err === 'object' && err && 'code' in err ? String((err as {code?: unknown}).code ?? '') || null : null;
+    throw new CalendarCallError(`${provider === 'google' ? 'Google Calendar' : 'Microsoft Graph'}: ${message ?? `HTTP ${res.status}`}`, res.status, code === 'InvalidAuthenticationToken' ? 'invalid_token' : null);
   }
   return body;
 }

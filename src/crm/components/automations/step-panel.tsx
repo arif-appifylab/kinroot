@@ -1,6 +1,6 @@
 import {Eye, KeyRound, Trash2} from 'lucide-react';
 import {toast} from 'sonner';
-import {useState} from 'react';
+import {useId, useState} from 'react';
 
 import {STEP_TYPES, TARGETS, targetLabel, WEEKDAY_SHORT, type AssigneeMode, type AutoObject, type Problem, type RecordField, type Step, type Target} from '@/lib/automations';
 import {api} from '@/lib/api';
@@ -55,7 +55,7 @@ function StepFields(props: Props & {automationId: string; isAdmin: boolean}) {
   switch (step.type) {
     case 'if':
       return (
-        <Field label="Conditions" hint="Matching records take the Yes branch, the others the No branch.">
+        <Field label="Conditions" group hint="Matching records take the Yes branch, the others the No branch.">
           <ConditionsEditor object={props.object} value={step.conditions} onChange={(conditions) => props.onChange({...step, conditions})} emptyText="Add the record to check, then its rules." />
         </Field>
       );
@@ -111,14 +111,16 @@ function TargetSelect({step, object, onChange, label = 'Record'}: Props & {label
 }
 
 function TextWithMerge({label, value, onChange, placeholder, multiline, hint, list}: {label: string; value: string; onChange: (v: string) => void; placeholder?: string; multiline?: boolean; hint?: string; list?: string}) {
+  const id = useId();
+  const describedBy = hint ? `${id}-hint` : undefined;
   return (
     <div className="grid gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <Label>{label}</Label>
+        <Label htmlFor={id}>{label}</Label>
         <MergeMenu onPick={(t) => onChange(`${value}${value && !value.endsWith(' ') ? ' ' : ''}${t}`)} />
       </div>
-      {multiline ? <Textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="min-h-20" /> : <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} list={list} />}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+      {multiline ? <Textarea id={id} aria-describedby={describedBy} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="min-h-20" /> : <Input id={id} aria-describedby={describedBy} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} list={list} />}
+      {hint && <p id={describedBy} className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );
 }
@@ -256,7 +258,7 @@ function AssignOwner(props: Props) {
       {step.assignMode === 'user' ? (
         <Field label="New owner"><UserSelect value={step.userId} onChange={(userId) => onChange({...step, userId})} allowNone={false} /></Field>
       ) : (
-        <Field label="Rotate among" hint="Each run picks the next person in this order; inactive people are skipped.">
+        <Field label="Rotate among" group hint="Each run picks the next person in this order; inactive people are skipped.">
           <UserChips users={users} value={step.userIds ?? []} onChange={(userIds) => onChange({...step, userIds})} />
         </Field>
       )}
@@ -387,11 +389,9 @@ function SendEmail({step, onChange}: Props) {
         </NativeSelect>
       </Field>
       <TextWithMerge label="Subject" value={step.subject ?? ''} onChange={(subject) => onChange({...step, subject})} />
-      <div className="grid gap-1.5">
-        <Label>Email</Label>
+      <Field label="Email" hint={<>Also usable as text: {'{{ticket.number}}'}, {'{{deal.stage}}'}, {'{{owner.name}}'}, {'{{record.url}}'}.</>}>
         <RichEditor key={editorKey} compact value={step.html ?? ''} onChange={(html) => onChange({...step, html})} placeholder="Write the email… merge fields are filled in per contact" />
-        <p className="text-xs text-muted-foreground">Also usable as text: {'{{ticket.number}}'}, {'{{deal.stage}}'}, {'{{owner.name}}'}, {'{{record.url}}'}.</p>
-      </div>
+      </Field>
       <Segmented label="Layout" value={step.layout ?? 'branded'} onChange={(layout) => onChange({...step, layout})} options={[{value: 'branded', label: 'Branded'}, {value: 'plain', label: 'Plain'}]} />
       <Field label="Send from">
         <NativeSelect value={step.from ?? 'owner'} onChange={(e) => onChange({...step, from: e.target.value as 'owner' | 'shared', accountId: e.target.value === 'shared' ? shared[0]?.id : undefined})}>
@@ -427,7 +427,7 @@ function Notify(props: Props) {
           {ASSIGNEES.filter((a) => a.value !== 'none' && (a.value !== 'assignee' || props.object === 'ticket')).map((a) => <option key={a.value} value={a.value}>{a.value === 'user' ? 'Specific people' : a.label}</option>)}
         </NativeSelect>
       </Field>
-      {step.assignee === 'user' && <Field label="People"><UserChips users={users} value={step.userIds ?? []} onChange={(userIds) => onChange({...step, userIds})} /></Field>}
+      {step.assignee === 'user' && <Field label="People" group><UserChips users={users} value={step.userIds ?? []} onChange={(userIds) => onChange({...step, userIds})} /></Field>}
       <TextWithMerge label="Notification" value={step.title ?? ''} onChange={(title) => onChange({...step, title})} placeholder="{{deal.title}} needs attention" />
       <TextWithMerge label="Details" value={step.body ?? ''} onChange={(body) => onChange({...step, body})} multiline />
       <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -508,19 +508,18 @@ function Wait(props: Props) {
       )}
       {step.waitMode === 'until_weekday' && (
         <>
-          <div className="grid gap-1.5">
-            <Label>Next</Label>
+          <Field label="Next" group>
             <div className="flex flex-wrap gap-1.5">
               {WEEKDAY_SHORT.map((d, i) => {
                 const on = (step.weekdays ?? []).includes(i);
                 return (
-                  <button key={d} type="button" onClick={() => onChange({...step, weekdays: on ? (step.weekdays ?? []).filter((x) => x !== i) : [...(step.weekdays ?? []), i].sort()})} className={on ? 'cursor-pointer rounded-lg border border-primary bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary' : 'cursor-pointer rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-primary/50'}>
+                  <button key={d} type="button" aria-pressed={on} onClick={() => onChange({...step, weekdays: on ? (step.weekdays ?? []).filter((x) => x !== i) : [...(step.weekdays ?? []), i].sort()})} className={on ? 'cursor-pointer rounded-lg border border-primary bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary' : 'cursor-pointer rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 hover:border-primary/50'}>
                     {d}
                   </button>
                 );
               })}
             </div>
-          </div>
+          </Field>
           <Field label="At"><Input type="time" value={step.time ?? '09:00'} onChange={(e) => onChange({...step, time: e.target.value || '09:00'})} /></Field>
         </>
       )}

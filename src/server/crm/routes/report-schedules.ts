@@ -11,7 +11,7 @@ import type {Db} from '../kit/db';
 import {currentUser, isAdmin, type AppContext, type AppEnv} from '../kit/guards';
 import {diff} from '../lib/activity';
 import {audit} from '../lib/audit';
-import {notFound, valid} from '../lib/http';
+import {fieldError, notFound, valid} from '../lib/http';
 import {nextSlot, readUnsubscribeToken, recipientsOf, unsubscribeRecipient, renderScheduleEmail, scheduleInclude, ScheduleError, sendNow, targetName, upcomingSlots, type ScheduleWithTarget} from '../lib/report-schedules';
 import {userSelect} from '../lib/users';
 import {strings} from '../lib/json-list';
@@ -45,7 +45,7 @@ async function checkBody(db: Db, creator: Pick<User, 'id'>, b: ScheduleBody) {
   if (b.reportId && !(await db.report.findFirst({where: {id: b.reportId, ...visible}, select: {id: true}}))) throw notFound('Report');
   if (b.dashboardId && !(await db.dashboard.findFirst({where: {id: b.dashboardId, ...visible}, select: {id: true}}))) throw notFound('Dashboard');
   const userIds = [...new Set(b.userIds)];
-  if (userIds.length && (await db.member.count({where: {id: {in: userIds}, active: true}})) !== userIds.length) throw new HTTPException(400, {message: 'Pick active team members'});
+  if (userIds.length && (await db.member.count({where: {id: {in: userIds}, active: true}})) !== userIds.length) throw fieldError('userIds', 'Pick active team members');
   return {...b, userIds, emails: [...new Set(b.emails.map((e) => e.trim().toLowerCase()))]};
 }
 

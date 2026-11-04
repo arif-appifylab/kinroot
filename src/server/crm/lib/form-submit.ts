@@ -31,6 +31,7 @@ import {createTicket} from './tickets';
 import {formConversation} from '../inbox/forms';
 import {bookFormSlots, checkFormSlots} from '../scheduling/form-booking';
 import {strings} from './json-list';
+import {httpUrl} from './http';
 import {lockFor, runOnce, type Once} from './once';
 
 export const formSettings = (form: Pick<Form, 'settings'>): FormSettings => ({...defaultSettings(), ...(form.settings as Partial<FormSettings>)});
@@ -168,7 +169,11 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput, once: O
       const [entity, prop, key] = f.mapTo.split('.');
       const text = Array.isArray(v) ? v.join(', ') : answerText(f.type, v);
       if (entity === 'contact' && prop === 'custom' && key) custom[key] = v;
-      else if (entity === 'contact' && prop && ['title', 'linkedin', 'city', 'country', 'leadStatus', 'buyingRole'].includes(prop)) contactData[prop] = text.slice(0, 300);
+      else if (entity === 'contact' && prop === 'linkedin') {
+        // A link: http(s) only, as the forms in the app accept (a bad one is left out).
+        const r = httpUrl.safeParse(text.slice(0, 300));
+        if (r.success && r.data) contactData.linkedin = r.data;
+      } else if (entity === 'contact' && prop && ['title', 'city', 'country', 'leadStatus', 'buyingRole'].includes(prop)) contactData[prop] = text.slice(0, 300);
       else if (entity === 'company' && prop && ['industry', 'size'].includes(prop)) company[prop] = text.slice(0, 200);
       else if (entity === 'company' && prop === 'employees' && !Number.isNaN(Number(v))) company.employees = Math.round(Number(v));
       else if (entity === 'deal' && prop === 'value' && !Number.isNaN(Number(v))) dealValue = Number(v);

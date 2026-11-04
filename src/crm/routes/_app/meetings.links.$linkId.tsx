@@ -142,8 +142,8 @@ function LinkEditor() {
               <Textarea id="ln-desc" rows={3} value={draft.description ?? ''} onChange={(e) => set({description: e.target.value || null})} placeholder="What the call is about, what to prepare…" />
             </Field>
             <div className="grid gap-2">
-              <Label>Durations</Label>
-              <div className="flex flex-wrap gap-1.5">
+              <Label id="ln-durations">Durations</Label>
+              <div role="group" aria-labelledby="ln-durations" className="flex flex-wrap gap-1.5">
                 {DURATIONS.map((d) => {
                   const on = draft.durations.includes(d);
                   return (
@@ -176,7 +176,7 @@ function LinkEditor() {
             <Field label="Timezone" className="max-w-sm"><TimeZoneSelect value={draft.timezone} onChange={(timezone) => set({timezone})} /></Field>
             <WeeklyHours value={draft.availability} onChange={(availability) => set({availability})} />
             <Overrides value={draft.availability} onChange={(availability) => set({availability})} />
-            {problem && <p role="alert" className="text-sm font-medium text-destructive">{problem}</p>}
+            {(problem || f.error('availability')) && <p role="alert" className="text-sm font-medium text-destructive">{problem || f.error('availability')}</p>}
           </div>
         </SettingsSection>
 
@@ -234,6 +234,7 @@ function LinkEditor() {
         {link.kind === 'team' && (
           <SettingsSection title="Rotation" description="Who can be booked. Each time goes to whoever is free, least recently booked first.">
             <HostPicker value={draft.hostIds} onChange={(hostIds) => set({hostIds})} />
+            {f.error('hostIds') && <p role="alert" className="mt-2 text-sm font-medium text-destructive">{f.error('hostIds')}</p>}
           </SettingsSection>
         )}
       </fieldset>

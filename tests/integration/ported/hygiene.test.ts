@@ -369,8 +369,11 @@ describe.skipIf(!DATABASE_URL)('ported: duplicates (scripts/test-hygiene.mjs dup
   });
 
   it('a full scan finds the same pairs with their reasons, and stays precise on look-alikes', async () => {
+    // "Scan now" queues the scan as background jobs; here they run locally before the answer returns,
+    // so by now the scan has finished and "Scan now" is free again.
     const scan = await o.post('/duplicates/scan', {});
-    expect(scan.status, 'scan ran').toBe(200);
+    expect([scan.status, scan.json], 'scan queued').toEqual([202, {queued: true}]);
+    expect(must<{scanning: boolean; lastScan: Record<string, string>}>(await o.get('/duplicates/counts'), 'counts'), 'scan finished').toMatchObject({scanning: false, lastScan: {contact: expect.any(String), company: expect.any(String)}});
     const want: Record<string, [string, number]> = {gmail: ['email', 85], plusTag: ['email', 85], phone: ['phone', 85], nameCompany: ['name_company', 85], similar: ['similar_name', 60]};
     for (const [name, [a, b]] of Object.entries(pairs)) {
       const p = await pairOf('contact', a!, b!);

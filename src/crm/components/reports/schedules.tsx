@@ -297,7 +297,7 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
     <form ref={f.ref} noValidate onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
       <DialogBody className="grid-cols-1 @4xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @4xl:items-start @4xl:gap-6">
         <div className="grid min-w-0 content-start gap-4">
-          <Field label="Frequency">
+          <Field label="Frequency" group>
             <Segmented
               label="Frequency"
               value={draft.frequency}
@@ -339,6 +339,7 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
             <div
               id="schedule-recipients"
               role="group"
+              aria-labelledby="schedule-recipients-label"
               tabIndex={-1}
               aria-invalid={f.invalid('userIds') || undefined}
               aria-describedby={f.invalid('userIds') ? 'schedule-recipients-error' : undefined}
@@ -355,7 +356,7 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
               {!activeTeam.length && <p className="px-2 py-1.5 text-sm text-muted-foreground">Loading the team…</p>}
             </div>
           </Field>
-          <Field label="People outside the team" error={emailError} hint="Press Enter or comma to add. They get the same email, unsubscribe link included.">
+          <Field label="People outside the team" htmlFor="schedule-emails" error={emailError} hint="Press Enter or comma to add. They get the same email, unsubscribe link included.">
             <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-input bg-card px-2 py-1.5 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/25">
               {draft.emails.map((e) => (
                 <span key={e} className="inline-flex items-center gap-1 rounded-md bg-slate-100 py-0.5 pr-1 pl-2 text-xs font-medium text-slate-700">
@@ -364,7 +365,9 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
                 </span>
               ))}
               <input
-                aria-label="Add an email address"
+                id="schedule-emails"
+                aria-invalid={emailError ? true : undefined}
+                aria-describedby={emailError ? 'schedule-emails-error' : 'schedule-emails-hint'}
                 value={emailInput}
                 onChange={(e) => setEmailInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -386,7 +389,7 @@ function ScheduleForm({target, row, onDone, onCancel}: {target: ScheduleTarget; 
             </span>
           </div>
 
-          <Field label="Date range">
+          <Field label="Date range" group>
             <div className="grid gap-2">
               {(Object.keys(SCHEDULE_RANGES) as ScheduleRange[]).map((r) => (
                 <label key={r} className={cn('flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors', draft.range === r ? 'border-primary/40 bg-blue-50/50' : 'border-slate-200 hover:bg-slate-50')}>

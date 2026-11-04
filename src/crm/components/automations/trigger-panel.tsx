@@ -94,7 +94,7 @@ export function TriggerPanel({object, trigger, onChange, readOnly}: {object: Aut
       )}
 
       {object !== 'none' && (
-        <Field label="Only for records that match" hint="Leave empty to run for every record.">
+        <Field label="Only for records that match" group hint="Leave empty to run for every record.">
           <ConditionsEditor object={object} value={trigger.conditions} onChange={(conditions) => set({...trigger, conditions})} />
         </Field>
       )}

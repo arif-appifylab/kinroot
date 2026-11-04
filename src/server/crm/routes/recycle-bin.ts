@@ -7,7 +7,7 @@ import {BIN_ENTITIES, type BinEntity} from '@/lib/hygiene';
 import {currentUser, isAdmin, requireRole, type AppContext, type AppEnv} from '../kit/guards';
 import {audit, auditMany} from '../lib/audit';
 import {checkDuplicates} from '../lib/duplicates';
-import {notFound, valid} from '../lib/http';
+import {intParam, MAX_PAGE, notFound, valid} from '../lib/http';
 import {purgeBinEntries, RestoreConflict, restoreFromBin} from '../lib/recycle-bin';
 
 const entity = z.enum(Object.keys(BIN_ENTITIES) as [BinEntity, ...BinEntity[]]);
@@ -48,7 +48,7 @@ async function restoreOne(c: AppContext, entry: DeletedRecord) {
 
 /** Settings → Recycle bin. */
 export const recycleBin = new Hono<AppEnv>()
-  .get('/', valid('query', z.object({entity: entity.optional(), q: z.string().trim().max(100).optional(), page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(50)})), async (c) => {
+  .get('/', valid('query', z.object({entity: entity.optional(), q: z.string().trim().max(100).optional(), page: intParam(1, MAX_PAGE).default(1), pageSize: intParam(1, 100).default(50)})), async (c) => {
     const db = c.var.db;
     const q = c.req.valid('query');
     const scope = binScope(c);

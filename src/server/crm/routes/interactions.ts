@@ -10,7 +10,7 @@ import {currentUser, isAdmin, type AppContext, type AppEnv} from '../kit/guards'
 import {logActivity} from '../lib/activity';
 import {emit} from '../lib/events';
 import {notifyWatchers} from '../lib/notify';
-import {assertVisible, attachedWhere, isoDate, notFound, optStr, ownerScope, textOrHttpUrl, valid} from '../lib/http';
+import {assertVisible, attachedWhere, fieldError, isoDate, notFound, optStr, ownerScope, textOrHttpUrl, valid} from '../lib/http';
 import {getSettings} from '../lib/settings';
 import {userSelect} from '../lib/users';
 import {sendEmail} from '../email/service';
@@ -236,7 +236,7 @@ export const interactions = new Hono<AppEnv>()
     const db = c.var.db;
     const {followUp, invite, ...input} = c.req.valid('json');
     if (!input.contactId && !input.companyId && !input.dealId) throw new HTTPException(400, {message: 'Log it against a contact, company or deal'});
-    if (input.kind === 'MEETING' && !input.title) throw new HTTPException(400, {message: 'Give the meeting a title'});
+    if (input.kind === 'MEETING' && !input.title) throw fieldError('title', 'Give the meeting a title');
     // The records and attendees must be ones the user may see (an invite emails the attendees).
     await assertVisible(c, {...input, contactIds: input.attendeeIds});
 
@@ -246,7 +246,7 @@ export const interactions = new Hono<AppEnv>()
     if (followUp) {
       await db.task.create({
         data: {
-          title: `Follow up${interaction.title ? `: ${interaction.title}` : ` on ${LABEL[interaction.kind]}`}`,
+          title: `Follow up${interaction.title ? `: ${interaction.title}` : ` on ${LABEL[interaction.kind]}`}`.slice(0, 300),
           type: followUp.type,
           dueAt: addBusinessDays(new Date(), followUp.days),
           assigneeId: me.id,

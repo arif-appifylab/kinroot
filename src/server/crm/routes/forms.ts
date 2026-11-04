@@ -7,7 +7,7 @@ import {answerText, defaultSettings, FORM_TEMPLATES, slugify, type FieldType, ty
 import {currentUser, isAdmin, requireRole, type AppEnv, type User} from '../kit/guards';
 import {audit} from '../lib/audit';
 import {formFields, formSettings} from '../lib/form-submit';
-import {httpUrl, notFound, valid} from '../lib/http';
+import {fieldError, httpUrl, notFound, valid} from '../lib/http';
 import {moveToBin} from '../lib/recycle-bin';
 import {userSelect} from '../lib/users';
 import {csv} from './import-export';
@@ -134,8 +134,8 @@ export const forms = new Hono<AppEnv>()
     const found = await db.form.findUnique({where: {id: c.req.param('id')}, select: {id: true, settings: true}});
     if (!found) throw notFound('Form');
     if (body.slug !== undefined) {
-      if (!SLUG.test(body.slug)) throw new HTTPException(400, {message: 'The link can only use lowercase letters, numbers and dashes'});
-      if (await db.form.findFirst({where: {slug: body.slug, id: {not: found.id}}, select: {id: true}})) throw new HTTPException(409, {message: 'Another form already uses that link'});
+      if (!SLUG.test(body.slug)) throw fieldError('slug', 'The link can only use lowercase letters, numbers and dashes');
+      if (await db.form.findFirst({where: {slug: body.slug, id: {not: found.id}}, select: {id: true}})) throw fieldError('slug', 'Another form already uses that link', 409);
     }
     if (body.fields) {
       const ids = body.fields.map((f) => f.id);

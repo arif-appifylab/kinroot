@@ -257,8 +257,8 @@ export function MeetingForm({links, onDone, initialMode = 'schedule'}: {links: R
         ) : null}
       </div>
       <div className="grid gap-2">
-        <Label>Meeting type</Label>
-        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" role="radiogroup" aria-label="Meeting type">
+        <Label id="mt-type">Meeting type</Label>
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" role="radiogroup" aria-labelledby="mt-type">
           {(Object.keys(MEETING_TYPES) as MeetingType[]).map((t) => {
             const m = MEETING_TYPES[t];
             const on = form.locationType === t;

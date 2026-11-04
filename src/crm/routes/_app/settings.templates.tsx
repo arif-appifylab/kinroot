@@ -81,7 +81,7 @@ function TemplateDialog({template, onClose}: {template: EmailTemplate | null; on
             <div className="grid content-start gap-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <Field label="Template name" htmlFor="tp-name" error={f.error('name')}><Input id="tp-name" value={form.name} maxLength={100} onChange={(e) => setForm({...form, name: e.target.value})} onBlur={f.blur('name')} /></Field>
-                <Field label="Layout" hint={form.layout === 'branded' ? 'Header, footer and unsubscribe link' : 'Looks like a personal email'}>
+                <Field label="Layout" group hint={form.layout === 'branded' ? 'Header, footer and unsubscribe link' : 'Looks like a personal email'}>
                   <Segmented label="Layout" value={form.layout} onChange={(layout) => setForm({...form, layout})} options={LAYOUTS} />
                 </Field>
               </div>

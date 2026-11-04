@@ -6,7 +6,7 @@ import {CRM_APP, publicOrigin} from '../kit/config';
 import {randomToken, sha256Hex} from '../kit/crypto';
 import {currentUser, outranks, requireRole, type AppContext, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
-import {notFound, valid} from '../lib/http';
+import {fieldError, notFound, valid} from '../lib/http';
 import {publicUser, seesEmails} from '../lib/users';
 
 const role = z.enum(['ADMIN', 'MEMBER', 'VIEWER']);
@@ -41,7 +41,7 @@ export const team = new Hono<AppEnv>()
     const body = c.req.valid('json');
     const email = body.email.trim().toLowerCase();
     const taken = await db.member.findFirst({where: {OR: [{inviteEmail: email}, {user: {email}}]}, select: {id: true}});
-    if (taken) throw new HTTPException(409, {message: 'Someone with that email is already on the team'});
+    if (taken) throw fieldError('email', 'Someone with that email is already on the team', 409);
     const invite = await newInvite();
     const member = await db.member.create({data: {name: body.name, role: body.role, inviteEmail: email, ...invite.data}});
     await audit(db, c, {action: 'team.invited', entity: 'user', recordId: member.id, label: member.name, meta: {role: member.role}});

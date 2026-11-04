@@ -50,7 +50,7 @@ import {associateByDomain, nameFromDomain} from './domains';
 import {contactsByEmail} from './contact-email';
 import {checkDuplicates} from './duplicates';
 import {emit} from './events';
-import {userScope} from './http';
+import {httpUrl, userScope} from './http';
 import {hit, ipKey} from './rate-limit';
 import {createCompanyRecord, createContactRecord, createDealRecord, findCompany, findContact, linkContactCompany, resolveCompany, updateCompanyRecord, updateContactRecord, type DealInput, type Writer} from './record-writes';
 import {addToList} from './segments';
@@ -127,6 +127,9 @@ class DataInError extends Error {
 const fieldError = (field: string, message: string) => new DataInError('E_INVALID_FIELD', `${field}: ${message}`, field);
 const notFoundError = (field: string, message: string) => new DataInError('E_NOT_FOUND', message, field);
 
+/** Catalogue fields that hold a link (contacts' and companies' LinkedIn, companies' website). */
+const URL_FIELDS = new Set(['website', 'linkedin']);
+
 function fieldSchema(f: DataInField): ZodType {
   const max = f.max;
   let s: ZodType;
@@ -138,7 +141,15 @@ function fieldSchema(f: DataInField): ZodType {
       if (f.type !== 'text') str = str.trim();
       if (f.min) str = str.min(f.min, `must be at least ${f.min} characters`);
       str = str.max(max ?? (f.type === 'id' ? 60 : f.type === 'text' ? 20_000 : 200), `must be at most ${max ?? (f.type === 'id' ? 60 : f.type === 'text' ? 20_000 : 200)} characters`);
-      s = str;
+      // Links go through the app's own check: http(s) only (a bare `acme.com` becomes https://acme.com).
+      s = URL_FIELDS.has(f.name)
+        ? str.transform((v, ctx) => {
+            const r = httpUrl.safeParse(v);
+            if (r.success) return r.data;
+            ctx.addIssue({code: 'custom', message: 'must be a web address starting with http:// or https://'});
+            return z.NEVER;
+          })
+        : str;
       break;
     }
     case 'email':

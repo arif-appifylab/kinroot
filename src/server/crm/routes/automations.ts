@@ -28,7 +28,7 @@ import {invalidateAutomationInterest} from '../lib/automation-hook';
 import {fieldsFor} from '../lib/automation-records';
 import {automationSecret} from '../lib/automation-steps';
 import {definitionOf, queueRun, runOnList, runOnRecord, sampleRecord, startTestRun, stepsOf, testAutomation} from '../lib/automations';
-import {notFound, ownerScope, valid} from '../lib/http';
+import {intParam, MAX_PAGE, notFound, ownerScope, valid} from '../lib/http';
 import {segmentRulesSchema} from '../lib/segments';
 import {ticketScope} from '../lib/tickets';
 
@@ -278,9 +278,9 @@ const runQuery = z.object({
   status: z.enum(['running', 'waiting', 'done', 'failed', 'skipped', 'canceled']).optional(),
   source: z.enum(['event', 'date', 'inactivity', 'manual', 'list', 'test']).optional(),
   q: z.string().max(100).optional(),
-  days: z.coerce.number().int().min(1).max(365).optional(),
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  days: intParam(1, 365).optional(),
+  page: intParam(1, MAX_PAGE).default(1),
+  pageSize: intParam(1, 100).default(25),
 });
 
 export const automations = new Hono<AppEnv>()

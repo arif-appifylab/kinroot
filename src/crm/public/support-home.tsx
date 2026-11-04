@@ -9,6 +9,7 @@ import {Field, Input, NativeSelect} from '@/components/ui/form';
 import {is, useFormState} from '@/components/ui/form-state';
 import {IconBadge} from '@/components/ui/misc';
 import {api} from '@/lib/api';
+import {isEmptyHtml} from '@/lib/email-html';
 import {sendAttempt} from '@/lib/attempt';
 import type {Brand} from '@/lib/brand';
 import {useBrand} from '@/lib/use-brand';
@@ -36,6 +37,7 @@ function SupportHome({config}: {config: PortalConfig}) {
     name: [is.maxLength(120)],
     email: session ? [] : [is.required('Enter your email so we can reply.'), is.email(), is.maxLength(200)],
     subject: [is.required('Enter a short summary of your request.'), is.maxLength(300)],
+    description: [(v) => (isEmptyHtml(v) ? 'Tell us what you need help with.' : null)],
   });
 
   useEffect(() => {
@@ -117,7 +119,7 @@ function SupportHome({config}: {config: PortalConfig}) {
               </NativeSelect>
             </Field>
           )}
-          <Field label="How can we help?">
+          <Field label="How can we help?" error={f.error('description')}>
             <RichEditor variant="text" compact minHeight={150} value={form.description} onChange={(description) => set({description})} ariaLabel="How can we help?" placeholder="Tell us what happened and what you expected." />
           </Field>
           {/* Honeypot: people never see it, bots fill it in. */}

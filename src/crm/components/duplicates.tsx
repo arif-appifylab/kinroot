@@ -12,9 +12,11 @@ import {cn} from '@/lib/utils';
 import {Button} from './ui/button';
 
 /** Medium + high confidence open pairs (what the queue shows by default), plus how many low ones are hidden. */
-export type DuplicateCounts = {contact: number; company: number; lowConfidence: {contact: number; company: number}; lastScan: {contact?: string; company?: string}};
+export type DuplicateCounts = {contact: number; company: number; lowConfidence: {contact: number; company: number}; lastScan: {contact?: string; company?: string}; scanning?: boolean};
 
-export const useDuplicateCounts = () => useQuery({queryKey: [...keys.duplicates, 'counts'], queryFn: () => api.get<DuplicateCounts>('/duplicates/counts'), staleTime: 60_000});
+/** While a "Scan now" job is queued or running, asks again every 5 seconds (only then). */
+export const useDuplicateCounts = () =>
+  useQuery({queryKey: [...keys.duplicates, 'counts'], queryFn: () => api.get<DuplicateCounts>('/duplicates/counts'), staleTime: 60_000, refetchInterval: (q) => (q.state.data?.scanning ? 5_000 : false)});
 
 /** "Duplicates (3)" next to the list page actions; hidden when the queue is empty. */
 export function DuplicatesButton({entity}: {entity: 'contact' | 'company'}) {

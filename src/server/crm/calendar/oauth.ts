@@ -4,6 +4,7 @@ import type {Db} from '../kit/db';
 import {oauthClient, type OAuthKind} from '../email/oauth';
 import type {OAuthCreds} from '../email/providers';
 import {fetchOut} from '../kit/outbound';
+import {CalendarCallError, calendarErrorText, logCalendarError} from './errors';
 
 /**
  * Calendar OAuth. Same Google Cloud / Azure apps as the mailboxes
@@ -55,8 +56,8 @@ async function tokenRequest(kind: CalendarProvider, client: Client, params: Reco
     headers: {'content-type': 'application/x-www-form-urlencoded'},
     body: new URLSearchParams({client_id: client.clientId, client_secret: client.clientSecret, ...params}),
   });
-  const body = (await res.json()) as TokenResponse;
-  if (!res.ok || body.error) throw new Error(body.error_description ?? body.error ?? `Token request failed (${res.status})`);
+  const body = (await res.json().catch(() => ({}))) as TokenResponse;
+  if (!res.ok || body.error) throw new CalendarCallError(body.error_description ?? body.error ?? `Token request failed (${res.status})`, res.ok ? 400 : res.status, body.error ?? null);
   return body;
 }
 
@@ -77,7 +78,7 @@ export async function connectionCredentials(db: Db, conn: CalendarConnection): P
   if (creds.expiresAt - Date.now() > 120_000) return creds;
   const kind = conn.provider as CalendarProvider;
   const client = await calendarClient(db, kind);
-  if (!client) throw new Error(`${kind === 'google' ? 'Google' : 'Microsoft'} OAuth app is not configured`);
+  if (!client) throw Object.assign(new Error(`${kind === 'google' ? 'Google' : 'Microsoft'} OAuth app is not configured`), {notConfigured: true});
   try {
     const t = await tokenRequest(kind, client, {refresh_token: creds.refreshToken, grant_type: 'refresh_token'});
     const next: OAuthCreds = {
@@ -89,7 +90,8 @@ export async function connectionCredentials(db: Db, conn: CalendarConnection): P
     await db.calendarConnection.update({where: {id: conn.id}, data: {credentials: await encryptJson(next), status: 'CONNECTED', lastError: null}});
     return next;
   } catch (e) {
-    await db.calendarConnection.update({where: {id: conn.id}, data: {status: 'ERROR', lastError: `Reconnect needed: ${(e as Error).message}`.slice(0, 500)}});
+    logCalendarError('token refresh', e);
+    await db.calendarConnection.update({where: {id: conn.id}, data: {status: 'ERROR', lastError: calendarErrorText(e)}});
     throw e;
   }
 }

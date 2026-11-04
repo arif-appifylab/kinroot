@@ -4,14 +4,13 @@ import {cache} from '../../../platform/cache';
 import {BRAND} from '@/lib/brand';
 import {loadBrand} from '../lib/brand';
 import {getSettings} from '../lib/settings';
-import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
 import {MAX_HIGHLIGHTS, type WebsiteSettings} from '@/lib/website';
 import {requireRole, type AppEnv} from '../kit/guards';
 import {diff} from '../lib/activity';
 import {audit} from '../lib/audit';
-import {valid} from '../lib/http';
+import {fieldError, valid} from '../lib/http';
 import {ensureWebsiteDefaults, getWebsiteSettings, publicWebsite, saveWebsiteSettings, WEBSITE_CACHE_KEY, websiteChoices} from '../lib/website';
 
 /**
@@ -103,8 +102,8 @@ export const website = new Hono<AppEnv>()
     const before = await getWebsiteSettings(db);
     const next: WebsiteSettings = c.req.valid('json');
     const {forms, links} = await websiteChoices(db);
-    if (next.contactFormId && !forms.some((f) => f.id === next.contactFormId)) throw new HTTPException(400, {message: 'Pick a published form for Contact us'});
-    if (next.demoLinkId && !links.some((l) => l.id === next.demoLinkId)) throw new HTTPException(400, {message: 'Pick an active booking link for Book a demo'});
+    if (next.contactFormId && !forms.some((f) => f.id === next.contactFormId)) throw fieldError('contactFormId', 'Pick a published form for Contact us');
+    if (next.demoLinkId && !links.some((l) => l.id === next.demoLinkId)) throw fieldError('demoLinkId', 'Pick an active booking link for Book a demo');
     await saveWebsiteSettings(db, next);
     await audit(db, c, {action: 'settings.website', meta: {changes: diff(before as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>)}});
     return c.json({settings: next});

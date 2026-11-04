@@ -5,7 +5,7 @@ import type {Prisma} from '../../../generated/prisma/client';
 import {actionLabel, AUDIT_CATEGORIES, AUDIT_RETENTION_DAYS, type AuditCategory} from '@/lib/hygiene';
 import {requireRole, type AppEnv} from '../kit/guards';
 import {audit, getAuditSettings, saveAuditSettings} from '../lib/audit';
-import {valid} from '../lib/http';
+import {intParam, MAX_PAGE, valid} from '../lib/http';
 import {csv} from './import-export';
 
 const filters = z.object({
@@ -48,7 +48,7 @@ function auditWhere(f: z.infer<typeof filters>): Prisma.AuditLogWhereInput {
 export const auditRoutes = new Hono<AppEnv>()
   .use('*', requireRole('ADMIN'))
 
-  .get('/', valid('query', filters.extend({page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(200).default(50)})), async (c) => {
+  .get('/', valid('query', filters.extend({page: intParam(1, MAX_PAGE).default(1), pageSize: intParam(1, 200).default(50)})), async (c) => {
     const db = c.var.db;
     const q = c.req.valid('query');
     const where = auditWhere(q);

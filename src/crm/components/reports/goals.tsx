@@ -174,7 +174,7 @@ export function GoalDialog({open, onOpenChange, goal}: {open: boolean; onOpenCha
               </Field>
             </div>
             {draft.metric === 'activities' && (
-              <Field label="Counts" hint="Emails include emails sent from the CRM and emails logged by hand.">
+              <Field label="Counts" group hint="Emails include emails sent from the CRM and emails logged by hand.">
                 <div className="flex flex-wrap gap-4">
                   {Object.entries(ACTIVITY_KINDS).map(([k, l]) => (
                     <label key={k} className="inline-flex items-center gap-2 text-sm text-slate-700">

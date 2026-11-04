@@ -7,7 +7,8 @@ import {CRM_APP, publicOrigin} from '../kit/config';
 import {encryptJson, sign, verifySignature} from '../kit/crypto';
 import {currentUser, type AppContext, type AppEnv} from '../kit/guards';
 import {calendarAuthorizeUrl, calendarClient, exchangeCalendarCode, type CalendarProvider} from '../calendar/oauth';
-import {calendarsOf, refreshCalendars, syncConnection} from '../calendar/service';
+import {calendarsOf, queueCalendarSync, refreshCalendars} from '../calendar/service';
+import {calendarErrorText, logCalendarError} from '../calendar/errors';
 import {audit} from '../lib/audit';
 import {notFound, valid} from '../lib/http';
 import {strings} from '../lib/json-list';
@@ -19,9 +20,10 @@ const redirectUri = (c: AppContext, kind: CalendarProvider) => `${publicOrigin(c
 /** Never send tokens to the browser. */
 const view = ({credentials: _c, ...conn}: CalendarConnection) => ({...conn, calendars: calendarsOf(conn), busyCalendarIds: strings(conn.busyCalendarIds)});
 
+/** The signed-in user's own connection: the owner is in the query, anyone else's is a 404. */
 async function ownConnection(c: AppContext, id: string) {
-  const conn = await c.var.db.calendarConnection.findUnique({where: {id}});
-  if (!conn || conn.userId !== currentUser(c).id) throw notFound('Calendar');
+  const conn = await c.var.db.calendarConnection.findFirst({where: {id, userId: currentUser(c).id}});
+  if (!conn) throw notFound('Calendar');
   return conn;
 }
 
@@ -104,14 +106,16 @@ export const calendar = new Hono<AppEnv>()
     try {
       return c.json({connection: view(await refreshCalendars(c.var.db, conn))});
     } catch (e) {
-      console.error('[calendar] refresh', conn.provider, String((e as Error)?.message ?? e).slice(0, 200));
-      throw new HTTPException(502, {message: 'The calendar provider did not answer. Try again in a moment, or connect the calendar again.'});
+      logCalendarError(`refresh ${conn.provider}`, e);
+      throw new HTTPException(502, {message: calendarErrorText(e)});
     }
   })
 
+  /** "Sync now": queued as the connection's sync job (it calls the provider for up to 40 s), never run in the request. */
   .post('/connections/:id/sync', async (c) => {
     const conn = await ownConnection(c, c.req.param('id'));
-    return c.json(await syncConnection(c.var.db, {...conn, syncMeetings: true}));
+    await queueCalendarSync(c.var.db, conn.id);
+    return c.json({queued: true});
   })
 
   .delete('/connections/:id', async (c) => {

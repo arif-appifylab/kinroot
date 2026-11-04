@@ -5,7 +5,7 @@ import {z} from 'zod';
 import {Prisma} from '../../../generated/prisma/client';
 import {currentUser, requireRole, type AppContext, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
-import {findLikelyDuplicates, lastScans, scanDuplicates, type DupEntity} from '../lib/duplicates';
+import {findLikelyDuplicates, lastScans, manualScanRunning, queueManualScan, type DupEntity} from '../lib/duplicates';
 import {intParam, MAX_PAGE, notFound, ownerScope, valid} from '../lib/http';
 import {userSelect} from '../lib/users';
 
@@ -72,22 +72,25 @@ export const duplicates = new Hono<AppEnv>()
   })
 
   .get('/counts', async (c) => {
-    const [contact, company, low, scans] = await Promise.all([
+    const [contact, company, low, scans, scanning] = await Promise.all([
       visiblePairs(c, 'contact', 'open', 1, 1),
       visiblePairs(c, 'company', 'open', 1, 1),
       Promise.all([visiblePairs(c, 'contact', 'open', 1, 1, 0), visiblePairs(c, 'company', 'open', 1, 1, 0)]),
       lastScans(c.var.db),
+      manualScanRunning(c.var.db),
     ]);
-    return c.json({contact: contact.total, company: company.total, lowConfidence: {contact: low[0].total - contact.total, company: low[1].total - company.total}, lastScan: scans});
+    return c.json({contact: contact.total, company: company.total, lowConfidence: {contact: low[0].total - contact.total, company: low[1].total - company.total}, lastScan: scans, scanning});
   })
 
-  /** Full scan now (also runs from the job runner every few hours). Admins only: it compares every record. */
+  /**
+   * "Scan now": a full scan as background jobs (it also runs on its own every few hours), one at a
+   * time. Admins only: it compares every record. A click while one is queued or running changes nothing.
+   */
   .post('/scan', requireRole('ADMIN'), valid('json', z.object({entity: entity.optional()})), async (c) => {
-    const db = c.var.db;
     const which = c.req.valid('json').entity;
-    const result: Partial<Record<DupEntity, Awaited<ReturnType<typeof scanDuplicates>>>> = {};
-    for (const kind of which ? [which] : (['contact', 'company'] as const)) result[kind] = await scanDuplicates(db, kind);
-    return c.json({result});
+    const queued = await queueManualScan(c.var.db, which ? [which] : ['contact', 'company']);
+    if (!queued) return c.json({queued: false, running: true, message: 'A duplicate scan is already running. New matches appear here when it finishes.'});
+    return c.json({queued: true}, 202);
   })
 
   /** Non-blocking hint while creating a record: the best few likely matches. */

@@ -18,7 +18,7 @@ import {IconBadge} from '@/components/ui/misc';
 import {api} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
 import {ago} from '@/lib/format';
-import {keys, recordKeys, useApiMutation, useMe} from '@/lib/queries';
+import {keys, useApiMutation, useMe} from '@/lib/queries';
 import type {CalendarConnectionView} from '@/lib/types';
 import {useBrand} from '@/lib/use-brand';
 
@@ -156,9 +156,10 @@ function ConnectionCard({conn, multiple}: {conn: CalendarConnectionView; multipl
   const invalidate = [keys.calendar];
   const update = useApiMutation((patch: Partial<Pick<CalendarConnectionView, 'busyCalendarIds' | 'targetCalendarId' | 'syncMeetings'>> & {isDefault?: true}) => api.patch(`/calendar/connections/${conn.id}`, patch), {invalidate});
   const refresh = useApiMutation(() => api.post(`/calendar/connections/${conn.id}/refresh`), {invalidate, success: 'Calendar list updated'});
-  const sync = useApiMutation(() => api.post<{logged: number; updated: number; error?: string}>(`/calendar/connections/${conn.id}/sync`), {
-    invalidate: [...invalidate, ...recordKeys, keys.scheduling],
-    onSuccess: (r) => (r.error ? toast.error(r.error) : toast.success(`${r.logged} meeting${r.logged === 1 ? '' : 's'} logged${r.updated ? `, ${r.updated} updated` : ''}`)),
+  // The sync runs as a background job: say so instead of counting meetings here.
+  const sync = useApiMutation(() => api.post<{queued?: boolean; logged?: number; updated?: number; error?: string}>(`/calendar/connections/${conn.id}/sync`), {
+    invalidate,
+    onSuccess: (r) => (r.error ? toast.error(r.error) : toast.success(r.queued ? 'Syncing in the background. New events appear in a minute.' : `${r.logged ?? 0} meeting${r.logged === 1 ? '' : 's'} logged`)),
   });
   const remove = useApiMutation(() => api.del(`/calendar/connections/${conn.id}`), {invalidate, success: 'Calendar disconnected'});
   const meta = PROVIDER[conn.provider as keyof typeof PROVIDER] ?? PROVIDER.google;
@@ -192,8 +193,8 @@ function ConnectionCard({conn, multiple}: {conn: CalendarConnectionView; multipl
         </DropdownMenu>
       </div>
       <div className="grid grid-cols-1 gap-5 border-t border-slate-100 p-4 lg:grid-cols-2">
-        <div className="grid content-start gap-2">
-          <Label>Check for conflicts</Label>
+        <div role="group" aria-labelledby={`conflicts-${conn.id}`} className="grid content-start gap-2">
+          <Label id={`conflicts-${conn.id}`}>Check for conflicts</Label>
           {conn.calendars.length ? (
             conn.calendars.map((c) => (
               <label key={c.id} className="flex cursor-pointer items-center gap-2 text-sm text-slate-700">

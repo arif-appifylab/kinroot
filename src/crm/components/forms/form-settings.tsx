@@ -15,10 +15,11 @@ import {SettingsSection} from '../settings-section';
 import {Badge} from '../ui/badge';
 import {Button} from '../ui/button';
 import {Checkbox, Field, Input, NativeSelect, Switch, Textarea} from '../ui/form';
+import {is, useFormState} from '../ui/form-state';
 import {useTicketSettings} from '../tickets/ticket-badges';
 import {RuleGroupEditor} from './logic-editor';
 
-type Props = {fields: FormField[]; settings: FormSettings; onChange: (s: FormSettings) => void; slug: string; onSlug: (slug: string) => void};
+type Props = {fields: FormField[]; settings: FormSettings; onChange: (s: FormSettings) => void; slug: string; onSlug: (slug: string, onError: (e: unknown) => void) => void};
 
 function Toggle({label, hint, checked, onChange}: {label: string; hint?: ReactNode; checked: boolean; onChange: (v: boolean) => void}) {
   return (
@@ -40,6 +41,10 @@ export function FormSettingsPanel({fields, settings: s, onChange, slug, onSlug, 
   const team = useTeam();
   const pipelines = usePipelines();
   const [slugDraft, setSlugDraft] = useState(slug);
+  // The server's rule for a form's address (PATCH /forms/:id); "already used" comes back on the field.
+  const slugForm = useFormState({slug: slugDraft.replace(/^-+|-+$/g, '')}, {
+    slug: [is.required('Enter an address, like contact-us.'), is.maxLength(60), is.pattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Use lowercase letters, numbers and single dashes, like contact-us.')],
+  });
   const owner = s.owner ?? {mode: 'none'};
   const deal = s.createDeal ?? {enabled: false};
   const ticket = s.createTicket ?? {enabled: false};
@@ -56,15 +61,25 @@ export function FormSettingsPanel({fields, settings: s, onChange, slug, onSlug, 
   return (
     <div className="max-w-3xl">
       <SettingsSection title="Link" description="Where the hosted form lives.">
-        <Field label="Form address" htmlFor="form-slug" hint="Changing it breaks links you already shared.">
+        <form {...slugForm.form(() => !slugPending && onSlug(slugDraft.replace(/^-+|-+$/g, ''), slugForm.fail))}>
+        <Field label="Form address" htmlFor="form-slug" hint="Changing it breaks links you already shared." error={slugForm.error('slug')}>
           <div className="flex gap-2">
             <div className="flex min-w-0 flex-1 items-center rounded-lg border border-input bg-card pl-3 text-sm focus-within:ring-2 focus-within:ring-ring/30">
               <span className="shrink-0 text-muted-foreground">{origin}/f/</span>
-              <input id="form-slug" aria-describedby="form-slug-hint" className="h-10 min-w-0 flex-1 bg-transparent pr-3 outline-none" value={slugDraft} onChange={(e) => setSlugDraft(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))} />
+              <input
+                id="form-slug"
+                aria-invalid={slugForm.invalid('slug') || undefined}
+                aria-describedby={slugForm.invalid('slug') ? 'form-slug-error' : 'form-slug-hint'}
+                className="h-10 min-w-0 flex-1 bg-transparent pr-3 outline-none"
+                value={slugDraft}
+                onChange={(e) => setSlugDraft(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-'))}
+                onBlur={slugForm.blur('slug')}
+              />
             </div>
-            <Button variant="secondary" disabled={!slugDraft || slugDraft === slug} pending={slugPending} pendingLabel="Saving…" onClick={() => onSlug(slugDraft.replace(/^-+|-+$/g, ''))}>Save</Button>
+            <Button type="submit" variant="secondary" disabled={!slugDraft || slugDraft === slug} pending={slugPending} pendingLabel="Saving…">Save</Button>
           </div>
         </Field>
+        </form>
       </SettingsSection>
 
       <SettingsSection title="When someone submits" description="Responses create a contact, or update the one with the same email.">
@@ -81,7 +96,7 @@ export function FormSettingsPanel({fields, settings: s, onChange, slug, onSlug, 
           <Field label="Add tags" className="sm:col-span-2">
             <TagInput value={s.tags ?? []} onChange={(tags) => set({tags})} entity="CONTACT" />
           </Field>
-          <Field label="Add respondents to lists" hint="Static lists only; segments pick people up from their rules." className="sm:col-span-2">
+          <Field label="Add respondents to lists" group hint="Static lists only; segments pick people up from their rules." className="sm:col-span-2">
             <ListMultiSelect value={s.listIds ?? []} onChange={(listIds) => set({listIds})} />
           </Field>
         </div>

@@ -191,7 +191,7 @@ function FormPage() {
 
       <div className={cn(!canEdit && tab !== 'results' && tab !== 'share' && 'pointer-events-none opacity-80')}>
         {tab === 'build' && <FormBuilder fields={draft.fields} settings={draft.settings} onFields={(fields) => setDraft({...draft, fields})} onSettings={(settings) => setDraft({...draft, settings})} />}
-        {tab === 'settings' && <FormSettingsPanel fields={draft.fields} settings={draft.settings} onChange={(settings) => setDraft({...draft, settings})} slug={form.slug} onSlug={(s) => slug.mutate(s)} slugPending={slug.isPending} />}
+        {tab === 'settings' && <FormSettingsPanel fields={draft.fields} settings={draft.settings} onChange={(settings) => setDraft({...draft, settings})} slug={form.slug} onSlug={(s, onError) => slug.mutate(s, {onError})} slugPending={slug.isPending} />}
         {tab === 'share' && <SharePanel slug={form.slug} status={form.status} onPublish={publish} publishing={status.isPending || flushing} />}
         {tab === 'results' && <ResultsPanel formId={form.id} fields={draft.fields} />}
       </div>

@@ -60,6 +60,27 @@ describe.skipIf(!DATABASE_URL)('Kinroot import and export (integration, real Pos
     expect(people.every(p => (p.tags as string[]).includes('imported'))).toBe(true);
   });
 
+  it('leaves a bad website / LinkedIn link out with a row warning and imports the rest (AUDIT P2-13)', async () => {
+    const browser = await owner();
+    await browser.get('/site-api/crm/auth/state');
+    const fileId = await upload(browser, 'companies.csv', 'Name,Website,LinkedIn\nGood Co,good-co.example,https://www.linkedin.com/company/good\nBad Co,javascript:alert(1),data:text/html;x\n');
+    const imp = (await browser.post(`/site-api/crm/imports/${fileId}/complete`, {entity: 'company'})).json.import as Imp;
+    expect(imp.mapping).toEqual(['name', 'website', 'linkedin']);
+    const options = {mode: 'upsert', skipBlanks: true, dateOrder: 'mdy', listId: null, tag: null, defaultOwner: 'me', createCompanies: true, pipelineId: null, emailMe: false, valueMap: {}};
+    expect((await browser.post(`/site-api/crm/imports/${imp.id}/validate`, {mapping: imp.mapping, options})).status).toBe(200);
+    const read = async () => (await browser.get(`/site-api/crm/imports/${imp.id}`)).json.import as Imp;
+    expect((await settle(read, ['ready'])).status).toBe('ready');
+    expect((await browser.post(`/site-api/crm/imports/${imp.id}/start`)).status).toBe(200);
+    expect((await settle(read, ['done', 'failed'])).status).toBe('done');
+    const rows = await db.company.findMany({select: {name: true, website: true, linkedin: true}, orderBy: {name: 'asc'}});
+    expect(rows).toEqual([
+      {name: 'Bad Co', website: null, linkedin: null},
+      {name: 'Good Co', website: 'https://good-co.example', linkedin: 'https://www.linkedin.com/company/good'},
+    ]);
+    const warnings = await db.importIssue.findMany({where: {importId: imp.id, phase: 'run', level: 'warning'}, select: {row: true, message: true}});
+    expect(warnings.filter((w) => w.row === 3 && /not a web address/.test(w.message)).length, JSON.stringify(warnings)).toBe(2);
+  });
+
   it("exports a CSV only its owner downloads, with formulas defused", async () => {
     const browser = await owner();
     await browser.get('/site-api/crm/auth/state');

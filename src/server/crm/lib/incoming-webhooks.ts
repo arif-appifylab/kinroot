@@ -368,7 +368,8 @@ async function once(ctx: Ctx, key: string, create: () => Promise<string>): Promi
 /** Reads the mapped (then fixed) values for one entity, parsed like import cells. */
 async function readValues(ctx: Ctx, entity: InEntity): Promise<Values> {
   const v: Values = {fields: {}, custom: {}, tags: []};
-  const users = (await ctx.db.member.findMany({where: {active: true}, select: {id: true, name: true, user: {select: {email: true}}}})).map((u) => ({id: u.id, name: u.name, email: u.user?.email ?? ''}));
+  // A teammate who joined (their account's address) or one invited who has not joined yet, as Data in and imports match.
+  const users = (await ctx.db.member.findMany({where: {active: true}, select: {id: true, name: true, inviteEmail: true, user: {select: {email: true}}}})).map((u) => ({id: u.id, name: u.name, email: u.user?.email ?? '', inviteEmail: u.inviteEmail ?? ''}));
   const apply = (target: InTarget, cell: string) => {
     let value: unknown;
     if (!cell) {
@@ -388,7 +389,7 @@ async function readValues(ctx: Ctx, entity: InEntity): Promise<Values> {
     else if (f === 'owner') {
       if (value === null) return;
       const s = lower(String(value));
-      const u = users.find((x) => lower(x.email) === s || lower(x.name) === s);
+      const u = users.find((x) => (!!x.email && lower(x.email) === s) || (!!x.inviteEmail && lower(x.inviteEmail) === s)) ?? users.find((x) => lower(x.name) === s);
       if (u) v.owner = u.id;
       else ctx.warnings.push(`No team member "${value}"; owner left as configured`);
     } else if (f === 'company') v.company = {...v.company, name: value === null ? undefined : String(value).slice(0, 200)};

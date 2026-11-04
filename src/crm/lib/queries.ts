@@ -129,9 +129,11 @@ export function useApiMutation<TVars, TResult = unknown>(
       opts.onSuccess?.(result, vars);
     },
     // A 422 with plain field names shows them under the fields (forms pass `f.fail`): the toast only points
-    // there. Nested keys (`stages.0.name`) have no field to land on, so their words stay in the toast.
+    // there. Nested keys (`stages.0.name`) have no field to land on, so their words stay in the toast. A
+    // hand-written 400 / 409 that names its field (`fieldError()`) keeps its words in the toast too, as
+    // some screens calling that route have no field for it.
     onError: (e: Error) => {
-      const keys = e instanceof ApiError ? Object.keys(e.fields ?? {}) : [];
+      const keys = e instanceof ApiError && e.status === 422 ? Object.keys(e.fields ?? {}) : [];
       toast.error(keys.length && keys.every((k) => !k.includes('.')) ? 'Check the highlighted fields.' : e.message);
     },
   });

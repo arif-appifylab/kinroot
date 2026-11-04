@@ -195,7 +195,7 @@ function ChatSettingsPage() {
               </NativeSelect>
             </Field>
             <Field label="Greeting" htmlFor="ch-greeting" className="sm:col-span-2" error={f.error('greeting')}><Textarea id="ch-greeting" rows={2} maxLength={300} value={form.greeting} onChange={(e) => set({greeting: e.target.value})} onBlur={f.blur('greeting')} /></Field>
-            <Field label="Colour" htmlFor="ch-color" hint="The brand colour from Settings → Branding unless you pick one.">
+            <Field label="Colour" group hint="The brand colour from Settings → Branding unless you pick one.">
               <div className="flex items-center gap-3">
                 <label className="flex items-center gap-2 text-sm text-slate-700">
                   <Checkbox checked={!form.color} onCheckedChange={(v) => set({color: v === true ? null : brand.primary || BRAND.primary})} /> Brand colour

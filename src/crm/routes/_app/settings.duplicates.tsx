@@ -1,7 +1,8 @@
-import {keepPreviousData, useQuery} from '@tanstack/react-query';
+import {keepPreviousData, useQuery, useQueryClient} from '@tanstack/react-query';
 import {createFileRoute, Link, useNavigate} from '@tanstack/react-router';
 import {Building2, CopyCheck, GitMerge, RefreshCw, RotateCcw, User, X} from 'lucide-react';
-import {useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
+import {toast} from 'sonner';
 import {z} from 'zod';
 
 import {LoadError, Pagination} from '@/components/data-table';
@@ -142,14 +143,18 @@ function Duplicates() {
   const counts = useDuplicateCounts();
   const params = {entity, status, page, low: s.low ? '1' : undefined};
   const list = useQuery({queryKey: [...keys.duplicates, 'list', params], queryFn: () => api.get<Paged>('/duplicates', params), placeholderData: keepPreviousData});
-  const scan = useApiMutation(() => api.post<{result: Record<Entity, {found: number; created: number}>}>('/duplicates/scan', {}), {
+  // The scan runs as a background job: say so; the counts poll while it runs and the queue refreshes when it ends.
+  const scan = useApiMutation(() => api.post<{queued: boolean; running?: boolean; message?: string}>('/duplicates/scan', {}), {
     invalidate: [keys.duplicates],
-    success: (r) => {
-      const found = (r.result.contact?.found ?? 0) + (r.result.company?.found ?? 0);
-      const added = (r.result.contact?.created ?? 0) + (r.result.company?.created ?? 0);
-      return `Scan finished · ${found} likely duplicate pair${found === 1 ? '' : 's'}${added ? `, ${added} new` : ''}`;
-    },
+    onSuccess: (r) => (r.queued ? toast.success('Scanning in the background. New matches appear here in a minute.') : toast.info(r.message ?? 'A duplicate scan is already running.')),
   });
+  const scanning = !!counts.data?.scanning;
+  const queryClient = useQueryClient();
+  const wasScanning = useRef(scanning);
+  useEffect(() => {
+    if (wasScanning.current && !scanning) void queryClient.invalidateQueries({queryKey: [...keys.duplicates, 'list']});
+    wasScanning.current = scanning;
+  }, [scanning, queryClient]);
   const set = (next: {entity?: Entity; status?: 'open' | 'dismissed'; low?: boolean}) => (setPage(1), navigate({search: (p) => ({...p, ...next})}));
   const last = counts.data?.lastScan[entity];
   const data = list.data;
@@ -161,7 +166,7 @@ function Duplicates() {
       actions={
         // A full scan is an admin action (the server refuses others).
         isAdmin && (
-          <Button variant="secondary" size="sm" pending={scan.isPending} pendingLabel="Scanning…" onClick={() => scan.mutate(undefined)}>
+          <Button variant="secondary" size="sm" pending={scan.isPending || scanning} pendingLabel={scanning ? 'Scan running…' : 'Starting…'} onClick={() => scan.mutate(undefined)}>
             <RefreshCw /> Scan now
           </Button>
         )

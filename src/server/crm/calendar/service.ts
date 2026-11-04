@@ -8,11 +8,15 @@ import {teamAddresses} from '../lib/users';
 import {enqueue} from '../lib/jobs';
 import {cache} from '../../../platform/cache';
 import {strings} from '../lib/json-list';
+import {calendarErrorText, logCalendarError} from './errors';
 
 const DAY = 86_400_000;
 
-const fail = (db: Db, conn: CalendarConnection, e: unknown) =>
-  db.calendarConnection.update({where: {id: conn.id}, data: {status: 'ERROR', lastError: (e as Error).message.slice(0, 500)}}).catch(() => null);
+/** Marks the connection as needing attention, with the error in words (the raw text is only logged). */
+const fail = (db: Db, conn: CalendarConnection, e: unknown) => {
+  logCalendarError(conn.provider, e);
+  return db.calendarConnection.update({where: {id: conn.id}, data: {status: 'ERROR', lastError: calendarErrorText(e)}}).catch(() => null);
+};
 
 export const calendarsOf = (conn: Pick<CalendarConnection, 'calendars'>) => (conn.calendars ?? []) as CalendarInfo[];
 
@@ -236,7 +240,7 @@ export async function syncConnection(db: Db, conn: CalendarConnection, {deadline
     return {logged, updated, ...(finished ? {} : {more: true})};
   } catch (e) {
     await fail(db, conn, e);
-    return {logged: 0, updated: 0, error: (e as Error).message};
+    return {logged: 0, updated: 0, error: calendarErrorText(e)};
   }
 }
 
@@ -263,11 +267,16 @@ async function applyEventChange(db: Db, interactionId: string, e: {title: string
   return true;
 }
 
-/** `calendar.sync_connection` job: one connection, within its own job's time. */
-export async function syncConnectionJob(db: Db, connectionId: string) {
+/** `calendar.sync_connection` job: one connection, within its own job's time (`force`: "Sync now", also when logging meetings is off). */
+export async function syncConnectionJob(db: Db, connectionId: string, force = false) {
   const conn = await db.calendarConnection.findUnique({where: {id: connectionId}});
   if (!conn) return; // disconnected since it was queued
-  await syncConnection(db, conn);
+  await syncConnection(db, force ? {...conn, syncMeetings: true} : conn);
+}
+
+/** Queues one connection's sync now ("Sync now"): a keyed job per minute, so a double click queues it once. */
+export async function queueCalendarSync(db: Db, connectionId: string): Promise<void> {
+  await enqueue(db, 'calendar.sync_connection', {connectionId, force: true}, {key: `sync-${connectionId}-m${Math.floor(Date.now() / 60_000)}`});
 }
 
 /**

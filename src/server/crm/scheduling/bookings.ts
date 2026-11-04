@@ -8,6 +8,7 @@ import {cancelMeetingEvents, pushMeeting} from '../calendar/service';
 import {logActivity} from '../lib/activity';
 import {associateByDomain} from '../lib/domains';
 import {emit} from '../lib/events';
+import {fieldError} from '../lib/http';
 import {enqueue} from '../lib/jobs';
 import {notify, recordLink} from '../lib/notify';
 import {rememberOption} from '../lib/settings';
@@ -137,9 +138,9 @@ export async function createBooking(db: Db, link: BookingLink, input: BookInput,
   // Forms ask their own questions; the link's apply to its booking page.
   const q = questionsOf(link.questions);
   if (input.source !== 'form') {
-    if (q.phone === 'required' && !input.phone?.trim()) throw new HTTPException(400, {message: 'Phone number is required'});
-    if (q.company === 'required' && !input.company?.trim()) throw new HTTPException(400, {message: 'Company is required'});
-    if (q.notes === 'required' && !input.notes?.trim()) throw new HTTPException(400, {message: 'Please add a note'});
+    if (q.phone === 'required' && !input.phone?.trim()) throw fieldError('phone', 'Phone number is required');
+    if (q.company === 'required' && !input.company?.trim()) throw fieldError('company', 'Company is required');
+    if (q.notes === 'required' && !input.notes?.trim()) throw fieldError('notes', 'Please add a note');
   }
   const start = new Date(input.start);
   const hostId = await claimSlot(db, link, start, input.duration);

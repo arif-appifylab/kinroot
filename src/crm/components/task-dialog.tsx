@@ -266,8 +266,8 @@ export function TaskDialog({defaults, task, onClose}: {defaults?: TaskDefaults; 
             </Field>
 
             <div className="grid gap-1.5">
-              <Label>Task type</Label>
-              <div className="flex flex-wrap gap-1.5">
+              <Label id="t-type">Task type</Label>
+              <div role="group" aria-labelledby="t-type" className="flex flex-wrap gap-1.5">
                 {(Object.keys(TASK_TYPES) as TaskType[]).map((t) => {
                   const Icon = TASK_ICONS[t];
                   return (

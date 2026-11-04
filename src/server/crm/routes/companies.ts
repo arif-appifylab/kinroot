@@ -9,7 +9,7 @@ import {audit, auditMany} from '../lib/audit';
 import {cleanCustom} from '../lib/custom-fields';
 import {forgetPairs, queueDuplicateCheck} from '../lib/duplicates';
 import {emit, emitMany} from '../lib/events';
-import {custom, httpUrl, listQuery, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {custom, fieldError, httpUrl, listQuery, notFound, optStr, ownerScope, sortBy, tags, valid} from '../lib/http';
 import {adoptContactsForDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
 import {moveToBin} from '../lib/recycle-bin';
@@ -86,8 +86,13 @@ export const companies = new Hono<AppEnv>()
     const me = currentUser(c);
     const {custom: customInput, ...body} = c.req.valid('json');
     if (body.domain) {
-      const dupe = await c.var.db.company.findFirst({where: {domain: body.domain}, select: {id: true, name: true}});
-      if (dupe) throw new HTTPException(409, {message: `${dupe.name} already uses ${body.domain}`});
+      const dupe = await c.var.db.company.findFirst({where: {domain: body.domain}, select: {id: true, name: true, ownerId: true}});
+      if (dupe) {
+        // Named only when this person may see that company (owner-only visibility hides the rest).
+        const scope = await ownerScope(c);
+        const visible = scope.ownerId === undefined || dupe.ownerId === scope.ownerId;
+        throw fieldError('domain', visible ? `${dupe.name} already uses ${body.domain}` : `Another company already uses ${body.domain}`, 409);
+      }
     }
     const company = await c.var.db.company.create({
       data: {

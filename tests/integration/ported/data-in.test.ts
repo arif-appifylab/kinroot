@@ -249,6 +249,16 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     expect(field(await call('/companies', {city: 'Paris'}))).toBe('domain');
   });
 
+  it('checks website and LinkedIn links like the app does (AUDIT P2-13), and finds an invited teammate as owner (P3-3)', async () => {
+    const bad = await call('/companies', {domain: 'links-port.example', website: 'javascript:alert(1)'});
+    expect([bad.status, code(bad), field(bad)]).toEqual([422, 'E_INVALID_FIELD', 'website']);
+    expect(field(await call('/contacts', {email: 'links@links-port.example', linkedin: 'data:text/html,hi'}))).toBe('linkedin');
+    expect(await db.company.count({where: {domain: 'links-port.example'}}), 'nothing written').toBe(0);
+    const good = await call('/companies', {domain: 'links-port.example', website: 'links-port.example', linkedin: 'https://www.linkedin.com/company/links'});
+    expect(good.status).toBe(201);
+    expect(await db.company.findUniqueOrThrow({where: {id: good.data.result.id}, select: {website: true, linkedin: true}})).toEqual({website: 'https://links-port.example', linkedin: 'https://www.linkedin.com/company/links'});
+  });
+
   it('POST /deals creates in the pipeline and stage named, with its contact and company', async () => {
     const pipe = (await ok(own.get('/site-api/crm/pipelines'))).rows.find((p: {stages: unknown[]}) => p.stages.length >= 2);
     const stage = pipe.stages[1];

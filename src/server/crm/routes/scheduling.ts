@@ -8,11 +8,10 @@ import {availabilityError, defaultAvailability, defaultQuestions, isTimeZone, RE
 import {publicOrigin} from '../kit/config';
 import {currentUser, isAdmin, type AppContext, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
-import {notFound, optStr, ownerScope, valid} from '../lib/http';
+import {fieldError, notFound, optStr, ownerScope, textOrHttpUrl, valid} from '../lib/http';
 import {userSelect} from '../lib/users';
 import {cancelBooking, manageUrl} from '../scheduling/bookings';
 import {ensureProfile, linkPath, linkPaths, uniqueHandle, uniqueLinkSlug} from '../scheduling/links';
-import {strings} from '../lib/json-list';
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const HHMM_END = /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/;
@@ -38,7 +37,8 @@ const linkFields = z.object({
   dailyLimit: z.number().int().min(1).max(50).nullable(),
   slotStepMin: z.number().int().min(5).max(240).nullable(),
   locationType: z.enum(['VIDEO', 'PHONE', 'IN_PERSON', 'OTHER']),
-  location: optStr,
+  // A room, a phone number or a meeting link; written as a link it must be http(s).
+  location: textOrHttpUrl,
   questions: z.object({phone: mode, company: mode, notes: mode}),
   hostIds: z.array(z.string()).max(50),
   active: z.boolean(),
@@ -49,10 +49,17 @@ function canManage(me: User, link: Pick<BookingLink, 'kind' | 'userId'>) {
   return isAdmin(me) || (link.kind === 'personal' && link.userId === me.id);
 }
 
+/** Links this person may see, in the query: admins any, members their own and team links they host (as GET /links lists). */
+function readableLink(me: User, id: string): Prisma.BookingLinkWhereInput {
+  return isAdmin(me) ? {id} : {id, OR: [{userId: me.id}, {kind: 'team', hostIds: {array_contains: [me.id]}}]};
+}
+
 async function ownLink(c: AppContext, id: string) {
-  const link = await c.var.db.bookingLink.findUnique({where: {id}});
+  const me = currentUser(c);
+  const link = await c.var.db.bookingLink.findFirst({where: readableLink(me, id)});
+  // Someone else's link is a 404 (no hint that it exists); a team link they host but can't change says why.
   if (!link) throw notFound('Booking link');
-  if (!canManage(currentUser(c), link)) throw new HTTPException(403, {message: link.kind === 'team' ? 'Only admins can change team links' : "You can only change your own booking links"});
+  if (!canManage(me, link)) throw new HTTPException(403, {message: 'Only admins can change team links'});
   return link;
 }
 
@@ -76,9 +83,9 @@ export const scheduling = new Hono<AppEnv>()
     const body = c.req.valid('json');
     await ensureProfile(db, me, body.timezone);
     if (body.handle) {
-      if (RESERVED_HANDLES.includes(body.handle)) throw new HTTPException(400, {message: `"${body.handle}" is reserved, pick another handle`});
+      if (RESERVED_HANDLES.includes(body.handle)) throw fieldError('handle', `"${body.handle}" is reserved, pick another handle`);
       const taken = await db.schedulingProfile.findFirst({where: {handle: body.handle, userId: {not: me.id}}});
-      if (taken) throw new HTTPException(409, {message: `${body.handle} is taken. Try ${await uniqueHandle(db, body.handle, me.id)}`});
+      if (taken) throw fieldError('handle', `${body.handle} is taken. Try ${await uniqueHandle(db, body.handle, me.id)}`, 409);
     }
     const profile = await db.schedulingProfile.update({where: {userId: me.id}, data: body});
     return c.json({profile, baseUrl: `${publicOrigin(c.req.raw)}/book/${profile.handle}`});
@@ -100,8 +107,8 @@ export const scheduling = new Hono<AppEnv>()
 
   .get('/links/:id', async (c) => {
     const me = currentUser(c);
-    const link = await c.var.db.bookingLink.findUnique({where: {id: c.req.param('id')}, include: {user: {select: userSelect}}});
-    if (!link || (!canManage(me, link) && !strings(link.hostIds).includes(me.id))) throw notFound('Booking link');
+    const link = await c.var.db.bookingLink.findFirst({where: readableLink(me, c.req.param('id')), include: {user: {select: userSelect}}});
+    if (!link) throw notFound('Booking link');
     return c.json({link: {...(await withPath(c, link)), user: link.user, canEdit: canManage(me, link)}});
   })
 
@@ -135,17 +142,17 @@ export const scheduling = new Hono<AppEnv>()
     const body = c.req.valid('json');
     if (body.availability) {
       const error = availabilityError(body.availability);
-      if (error) throw new HTTPException(400, {message: error});
+      if (error) throw fieldError('availability', error);
     }
     if (body.slug && body.slug !== link.slug && (await uniqueLinkSlug(db, link, body.slug, link.id)) !== body.slug) {
-      throw new HTTPException(409, {message: `The address /${body.slug} is already used by another link`});
+      throw fieldError('slug', `The address /${body.slug} is already used by another link`, 409);
     }
     if (body.hostIds) {
       if (link.kind !== 'team') delete body.hostIds;
       else {
         const users = await db.member.findMany({where: {id: {in: body.hostIds}, active: true, role: {not: 'VIEWER'}}, select: {id: true}});
         body.hostIds = body.hostIds.filter((id) => users.some((u) => u.id === id));
-        if (!body.hostIds.length) throw new HTTPException(400, {message: 'Pick at least one person for the rotation'});
+        if (!body.hostIds.length) throw fieldError('hostIds', 'Pick at least one person for the rotation');
       }
     }
     if (body.durations) body.durations = [...new Set(body.durations)];
@@ -209,9 +216,9 @@ export const scheduling = new Hono<AppEnv>()
   .post('/bookings/:id/cancel', valid('json', z.object({reason: z.string().max(1000).optional()})), async (c) => {
     const me = currentUser(c);
     const db = c.var.db;
-    const booking = await db.booking.findUnique({where: {id: c.req.param('id')}, include: {link: true}});
+    // The host (or an admin) only: anyone else's booking is a 404, in the query.
+    const booking = await db.booking.findFirst({where: {id: c.req.param('id'), ...(isAdmin(me) ? {} : {hostId: me.id})}, include: {link: true}});
     if (!booking) throw notFound('Booking');
-    if (booking.hostId !== me.id && !isAdmin(me)) throw new HTTPException(403, {message: 'Only the host can cancel this meeting'});
     const updated = await cancelBooking(db, booking, {reason: c.req.valid('json').reason, by: 'host', actorId: me.id});
     await audit(db, c, {action: 'booking.canceled', entity: 'booking', recordId: booking.id, label: `${booking.title} · ${booking.name}`, meta: {startAt: booking.startAt, reason: c.req.valid('json').reason}});
     return c.json({booking: updated});

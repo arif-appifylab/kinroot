@@ -1,10 +1,9 @@
 import {Hono} from 'hono';
-import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
 import {requireRole, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
-import {valid} from '../lib/http';
+import {fieldError, valid} from '../lib/http';
 import {withStrings} from '../lib/json-list';
 
 const entity = z.enum(['CONTACT', 'COMPANY', 'DEAL']);
@@ -32,7 +31,7 @@ export const fields = new Hono<AppEnv>()
     let key = toKey(body.label);
     for (let n = 2; await db.customFieldDef.findUnique({where: {entity_key: {entity: body.entity, key}}}); n++) key = `${toKey(body.label)}_${n}`;
     if ((body.type === 'SELECT' || body.type === 'MULTISELECT') && !body.options.length) {
-      throw new HTTPException(400, {message: 'Add at least one option'});
+      throw fieldError('options', 'Add at least one option');
     }
     const position = await db.customFieldDef.count({where: {entity: body.entity}});
     const field = await db.customFieldDef.create({data: {...body, key, position}});

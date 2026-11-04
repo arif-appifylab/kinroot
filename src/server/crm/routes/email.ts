@@ -7,9 +7,9 @@ import {GALLERY} from '@/lib/email-gallery';
 import {toEmailHtml} from '@/lib/email-html';
 import {CRM_APP, publicOrigin} from '../kit/config';
 import {decryptJson, encryptJson, sign, verifySignature} from '../kit/crypto';
-import {currentUser, isAdmin, requireRole, type AppContext, type AppEnv} from '../kit/guards';
+import {currentUser, isAdmin, requireRole, type AppContext, type AppEnv, type User} from '../kit/guards';
 import {audit} from '../lib/audit';
-import {notFound, valid} from '../lib/http';
+import {fieldError, intParam, intValue, notFound, valid} from '../lib/http';
 import {getSettings} from '../lib/settings';
 import {userSelect} from '../lib/users';
 import {emailBrand, getEmailDesign, saveEmailDesign} from '../email/design';
@@ -42,7 +42,7 @@ const accountMeta = z.object({
   isDefault: z.boolean().optional(),
   trackOpens: z.boolean().optional(),
   trackClicks: z.boolean().optional(),
-  dailyLimit: z.coerce.number().int().min(1).max(10000).optional(),
+  dailyLimit: intValue(1, 10000).optional(),
   signature: z.string().max(2000).nullish(),
   signatureHtml: z.string().max(50_000).nullish(),
   replyTo: z.union([email, z.literal('')]).nullish().transform((v) => v || null),
@@ -80,14 +80,16 @@ function templateData<T extends {html?: string | null; body?: string}>(t: T) {
   return t.html ? {...t, body: templateBody(t.html)} : t;
 }
 
+/** One's own account (admins: also shared team accounts), the owner in the query: anyone else's is a 404. */
 async function ownAccount(c: AppContext, id: string) {
   const me = currentUser(c);
-  const account = await c.var.db.emailAccount.findUnique({where: {id}});
+  const account = await c.var.db.emailAccount.findFirst({where: {id, OR: [{userId: me.id}, ...(isAdmin(me) ? [{userId: null}] : [])]}});
   if (!account) throw notFound('Email account');
-  const mine = account.userId === me.id || (account.userId === null && isAdmin(me));
-  if (!mine) throw new HTTPException(403, {message: 'You can only manage your own accounts'});
   return account;
 }
+
+/** Templates this person may see (shared ones and their own; admins any), in the query. */
+const visibleTemplate = (me: User, id: string) => (isAdmin(me) ? {id} : {id, OR: [{shared: true}, {ownerId: me.id}]});
 
 async function setDefault(c: AppContext, account: EmailAccount) {
   await c.var.db.emailAccount.updateMany({where: {userId: account.userId, id: {not: account.id}}, data: {isDefault: false}});
@@ -346,7 +348,7 @@ export const emailRoutes = new Hono<AppEnv>()
     companyId: z.string().max(60).optional(),
     unread: z.string().optional(),
     q: z.string().max(200).optional(),
-    take: z.coerce.number().int().min(1).max(200).default(50),
+    take: intParam(1, 200).default(50),
   })), async (c) => {
     const db = c.var.db;
     const q = c.req.valid('query');
@@ -456,7 +458,7 @@ export const emailRoutes = new Hono<AppEnv>()
   })
   .post('/templates', valid('json', templateInput), async (c) => {
     const input = templateData(c.req.valid('json'));
-    if (!input.body?.trim()) throw new HTTPException(400, {message: 'Write the template first'});
+    if (!input.body?.trim()) throw fieldError('html', 'Write the template first');
     const template = await c.var.db.emailTemplate.create({data: {...input, body: input.body, ownerId: currentUser(c).id}});
     await audit(c.var.db, c, {action: 'template.created', entity: 'template', recordId: template.id, label: template.name});
     return c.json({template}, 201);
@@ -471,7 +473,8 @@ export const emailRoutes = new Hono<AppEnv>()
   })
   .patch('/templates/:id', valid('json', templateFields.partial()), async (c) => {
     const me = currentUser(c);
-    const t = await c.var.db.emailTemplate.findUnique({where: {id: c.req.param('id')}});
+    // Another member's private template is a 404; a shared one they can see but not change says why.
+    const t = await c.var.db.emailTemplate.findFirst({where: visibleTemplate(me, c.req.param('id'))});
     if (!t) throw notFound('Template');
     if (t.ownerId !== me.id && !isAdmin(me)) throw new HTTPException(403, {message: 'Only the creator can edit this template'});
     const template = await c.var.db.emailTemplate.update({where: {id: t.id}, data: templateData(c.req.valid('json'))});
@@ -480,7 +483,7 @@ export const emailRoutes = new Hono<AppEnv>()
   })
   .delete('/templates/:id', async (c) => {
     const me = currentUser(c);
-    const t = await c.var.db.emailTemplate.findUnique({where: {id: c.req.param('id')}});
+    const t = await c.var.db.emailTemplate.findFirst({where: visibleTemplate(me, c.req.param('id'))});
     if (!t) throw notFound('Template');
     if (t.ownerId !== me.id && !isAdmin(me)) throw new HTTPException(403, {message: 'Only the creator can delete this template'});
     await c.var.db.emailTemplate.delete({where: {id: t.id}});
@@ -496,7 +499,7 @@ export const emailRoutes = new Hono<AppEnv>()
   .put('/design', requireRole('ADMIN'), valid('json', z.object({
     logo: z.enum(['brand', 'upload', 'none']),
     logoUrl: z.union([z.literal(''), z.string().trim().max(1000).regex(/^https?:\/\//, 'must be a web address')]),
-    logoWidth: z.coerce.number().int().min(40).max(280),
+    logoWidth: intValue(40, 280),
     headerColor: z.union([z.literal(''), z.string().regex(/^#[0-9a-f]{6}$/i)]),
     accentColor: z.union([z.literal(''), z.string().regex(/^#[0-9a-f]{6}$/i)]),
     companyName: z.string().trim().max(120),

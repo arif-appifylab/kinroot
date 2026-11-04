@@ -14,8 +14,9 @@ import {ApiError} from '@/lib/api';
  *
  * - An error shows after the field is left or after a submit, then updates while typing.
  * - Submit validates every field, focuses the first wrong one and sends nothing until all are right.
- * - The server's `422 {error, fields}` lands on its fields (`fail`); a server error clears when that
- *   field changes. Input is never cleared on an error.
+ * - The server's `422 {error, fields}` (or a 400 / 409 that names its field: `fieldError()` on the
+ *   server) lands on its fields (`fail`); a server error clears when that field changes. Input is
+ *   never cleared on an error.
  * The kit's `Field` wires the error to its control (`aria-invalid`, `aria-describedby`).
  */
 
@@ -120,7 +121,10 @@ export function useFormState<V extends Record<string, unknown>>(values: V, rules
     /** Pass as a mutation's `onError`: puts the server's `422 {fields}` on their fields; true when it did. */
     fail: (e: unknown) => {
       if (!(e instanceof ApiError) || !Object.keys(e.fields).length) return false;
-      setServer({errors: e.fields, at: values});
+      // A list item's error (`blockedDomains.2`) also lands on its list's field (`blockedDomains`).
+      const errors = {...e.fields};
+      for (const [name, message] of Object.entries(e.fields)) errors[name.split('.')[0]!] ??= message;
+      setServer({errors, at: values});
       setFocusTick((t) => t + 1);
       return true;
     },

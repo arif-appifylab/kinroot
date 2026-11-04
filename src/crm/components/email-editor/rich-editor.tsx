@@ -38,7 +38,7 @@ import {useEffect, useRef, useState} from 'react';
 import {toast} from 'sonner';
 
 import {Button} from '@/components/ui/button';
-import {Field, Input} from '@/components/ui/form';
+import {Field, Input, useFieldWiring} from '@/components/ui/form';
 import {is, useFormState} from '@/components/ui/form-state';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, Popover, PopoverAnchor, PopoverContent} from '@/components/ui/menu';
 import {MERGE_FIELDS, mergeLabel} from '@/lib/email-html';
@@ -373,6 +373,15 @@ export default function RichEditor({value, onChange, placeholder, compact, image
   const submit = useRef(onSubmit);
   submit.current = onSubmit;
   const text = variant === 'text';
+  // Inside a kit `Field` the editable element is named by its visible label (a contenteditable
+  // can't take `<label for>`) and carries the Field's error wiring; else `ariaLabel` names it.
+  const field = useFieldWiring();
+  const attributes: Record<string, string> = {role: 'textbox', 'aria-multiline': 'true'};
+  if (field?.labelId) attributes['aria-labelledby'] = field.labelId;
+  else attributes['aria-label'] = ariaLabel;
+  if (field?.invalid) attributes['aria-invalid'] = 'true';
+  if (field?.describedBy) attributes['aria-describedby'] = field.describedBy;
+  const attributesKey = JSON.stringify(attributes);
   const editor = useEditor({
     immediatelyRender: false,
     // Its base CSS is in src/crm/tiptap.css: the CSP blocks the <style> tag TipTap would inject.
@@ -387,7 +396,7 @@ export default function RichEditor({value, onChange, placeholder, compact, image
     ],
     content: value,
     editorProps: {
-      attributes: {'aria-label': ariaLabel, role: 'textbox', 'aria-multiline': 'true'},
+      attributes,
       handleKeyDown: (_view, e) => {
         if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter' || !submit.current) return false;
         e.preventDefault();
@@ -402,6 +411,12 @@ export default function RichEditor({value, onChange, placeholder, compact, image
     },
   });
 
+  // The error wiring changes after the editor exists (a failed submit): update its attributes.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.setOptions({editorProps: {...editor.options.editorProps, attributes: JSON.parse(attributesKey) as Record<string, string>}});
+  }, [editor, attributesKey]);
+
   // Outside changes (a template was inserted, the form reset) replace the content.
   useEffect(() => {
     if (editor && value !== last.current) {
@@ -414,6 +429,7 @@ export default function RichEditor({value, onChange, placeholder, compact, image
     <div
       className={cn(
         'overflow-hidden rounded-lg border border-input bg-card shadow-xs transition-[box-shadow,border-color] focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/25',
+        field?.invalid && 'border-destructive',
         className,
       )}
     >

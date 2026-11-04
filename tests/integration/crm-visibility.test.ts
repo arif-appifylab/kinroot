@@ -287,6 +287,7 @@ describe.skipIf(!DATABASE_URL)('Kinroot owner-only visibility (integration, real
 
   it('only admins start a full duplicate scan (P2-6)', async () => {
     expect((await post(amy, '/duplicates/scan', {})).status).toBe(403);
-    ok(await post(own, '/duplicates/scan', {entity: 'company'}));
+    // Queued as a background job (one at a time), not run inside the request.
+    expect(ok(await post(own, '/duplicates/scan', {entity: 'company'}), 202)).toEqual({queued: true});
   });
 });
