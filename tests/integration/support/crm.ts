@@ -2,9 +2,9 @@ import {expect} from 'vitest';
 
 import {setCacheModeForTests} from '../../../src/platform/cache';
 import {app} from '../../../src/server/app';
-import {type Browser, db, resetDatabase, signedIn, userId} from './harness';
+import {type Browser, db, ownerAccountId, ownerSignedIn, resetDatabase, signedIn, userId} from './harness';
 
-export {userId};
+export {ownerAccountId, userId};
 
 /** Kinroot's tables (PascalCase; the template's are snake_case), emptied with the template's. */
 export async function resetCrm() {
@@ -24,10 +24,31 @@ export async function setRoles(email: string, ...slugs: string[]) {
   await db.userRole.createMany({data: roles.map(role => ({userId: id, roleId: role.id}))});
 }
 
+/** The site owner, in through a "View as admin" ticket (the one way to be owner): the CRM's first Owner. */
 export async function owner() {
-  const browser = await signedIn(app, 'owner@example.com');
-  await setRoles('owner@example.com', 'owner');
-  return browser;
+  return ownerSignedIn(app);
+}
+
+/** The site owner's Kinroot `Member` id (after their first CRM request). */
+export async function ownerMemberId() {
+  return (await db.member.findUniqueOrThrow({where: {userId: await ownerAccountId()}, select: {id: true}})).id;
+}
+
+/**
+ * A CRM Owner with a real address (the site owner has none on the site), the way the product makes
+ * one: the site owner gives that account a site role holding `site:crm:own` (Settings → Roles and
+ * Accounts), and its first CRM request makes it an Owner. For tests that read an Owner's own mail.
+ */
+export async function ownerAt(email: string) {
+  const site = await owner();
+  expect((await site.get('/site-api/crm/auth/state')).status).toBe(200);
+  const browser = await signedIn(app, email);
+  const made = await site.post('/site-api/admin/roles', {slug: 'crm-owner', name: 'CRM owner', description: '', permissions: ['site:crm:own']});
+  expect([201, 409]).toContain(made.status);
+  expect((await site.request('PUT', `/site-api/admin/users/${await userId(email)}/roles`, {roles: ['member', 'crm-owner']})).status).toBe(200);
+  const state = await browser.get('/site-api/crm/auth/state');
+  expect(state.json.user?.role).toBe('OWNER');
+  return {browser, site};
 }
 
 /** Signs up `email`, then joins the team through an invite the owner makes. */

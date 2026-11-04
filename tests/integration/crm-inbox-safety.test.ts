@@ -6,7 +6,7 @@ import {htmlToText} from '../../src/server/crm/email/render';
 import {saveSettings} from '../../src/server/crm/lib/settings';
 import {safeStyle, sanitizeEmailHtml} from '../../src/server/crm/inbox/sanitize';
 import {env} from './support/cloudflare-workers';
-import {owner, resetCrm, teammate, userId} from './support/crm';
+import {owner, ownerAccountId, resetCrm, teammate, userId} from './support/crm';
 import {Browser, configureEnv, DATABASE_URL, db} from './support/harness';
 import {crmDb, outside} from './ported/support';
 import {fakeResend, inbound, inJob, mailbox, restoreResend} from './ported/support-inbox';
@@ -39,7 +39,7 @@ async function seed() {
   own = await owner();
   await own.get('/site-api/crm/auth/state');
   await ok(own.post('/site-api/crm/auth/setup', {brandName: 'Kinroot', demoData: false}));
-  ownerId = (await db.member.findUniqueOrThrow({where: {userId: await userId('owner@example.com')}, select: {id: true}})).id;
+  ownerId = (await db.member.findUniqueOrThrow({where: {userId: await ownerAccountId()}, select: {id: true}})).id;
   const a = await teammate(own, 'ada@safety-port.io', 'MEMBER');
   A = {c: a.browser, id: (await db.member.findUniqueOrThrow({where: {userId: await userId('ada@safety-port.io')}, select: {id: true}})).id};
   V = (await teammate(own, 'vic@safety-port.io', 'VIEWER')).browser;

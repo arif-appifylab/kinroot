@@ -3,16 +3,18 @@ title: Performance: fast pages, cheap queries, Workers limits
 read-when: before writing a query, a list, a page, adding a dependency, an image, a font, a cache, or anything that loops
 ---
 The site runs on ONE Cloudflare Worker: 128 MB per isolate, a short CPU budget per request
-(one PBKDF2 hash alone is ~45 ms), no KV/Redis of your own, no cron. The Site Database is Prisma
-Postgres over HTTPS: every query is a network round trip (~100–150 ms). Design for few, small,
-indexed queries, and put read-heavy data that changes rarely in the platform's Site Cache
-(`cache.md`: a read is a few ms).
+(one password hash alone is ~160 ms), no KV/Redis of your own, no cron. The Site Database is Prisma
+Postgres over one WebSocket per request: a query is ~3 ms, ~20 ms to open the socket once
+(`database.md` › Connections; a site without `src/platform/db-socket.ts` still pays ~130 ms a query:
+upgrade it). Design for few, small, indexed queries, reads together in `Promise.all`. Every query is
+also billed, one operation each whatever its joins, so one join beats three queries, and reads many requests share go in the
+Site Cache, by `cache.md` › "Should this be cached?".
 
 ## Worker budgets (design to these)
 | Budget | Target | Why |
 | --- | --- | --- |
 | CPU per request | < 10 ms for a read, < 50 ms for a write (password hashing aside) | CPU is the Worker's hard limit; waiting on the database is not CPU |
-| Database round trips per request | ≤ 5, independent ones in parallel | each one is an HTTPS call; the Worker also caps subrequests per request |
+| Database round trips per request | ≤ 5, independent ones in parallel | about 1 Worker instance in 15 pays ~170 ms for each one, so five is already ~1 s there |
 | Response size | ≤ 100 rows, ≤ ~200 KB JSON | serializing is CPU; the portal renders it all |
 | Module memory | small public maps with a size cap (`PUBLIC_CACHE`: 200 entries) | an isolate serves many visitors and lives on |
 | Request body | 64 KB (`bodyLimit` in `src/server/app.ts`) | files go straight to storage (`files.md`) |
@@ -24,7 +26,9 @@ indexed queries, and put read-heavy data that changes rarely in the platform's S
 
 ## Queries (non-negotiable)
 - **Round-trip budget: at most ~5 sequential database round trips per request**, ideally 1–3.
-  Count them for every route you write (`review.md` step 5): each costs ~100–150 ms.
+  Count them for every route you write (`review.md` step 5): ~3 ms each normally, ~170 ms on a
+  slow Worker instance (~130 ms each on a site not yet upgraded). `Promise.all` of plain reads
+  counts as ONE: they share the trip.
 - **One query per read**: related rows in the SAME query (nested `select`, one SQL join with
   `relationJoins`), aggregates and multi-table reads as ONE tagged `$queryRaw` (`database.md` ›
   One query per read). Never "load the list, then load each item's details".
@@ -89,7 +93,7 @@ indexed queries, and put read-heavy data that changes rarely in the platform's S
 | anything that read the visitor, or depends on their roles | `private, no-store` | set by `withViewer`, `pageContext`, `/me`; an SSR page calling `pageContext` is private, always |
 | sign-in, tokens, account answers | `no-store` | `withAuthCore` and the managed auth routes set it |
 | public platform data (brand) | per-isolate memo | `publicGet(..., {ttlSeconds})` (60 s); public data only |
-| Site API reads many visitors share (settings, hours, menus, categories, products, page text) | the Site Cache | `cache.getOrSet(key, ttl, load)` + `cache.del` in the route that saves (`cache.md`) |
+| Site API reads many requests share (settings, hours, menus, categories, products, page text, totals, an outside API) | the Site Cache: fewer billed queries | `cache.getOrSet(key, ttl, load)` + `cache.del` everywhere it's saved (`cache.md`) |
 | portal reads | TanStack Query in the browser | `staleTime: 30_000` in `PortalApp.tsx` |
 - Never `public` on: a response that varies by cookie, a list filtered by permissions, anything
   with an email, a draft, a signed file link, an error, or a 404 that may soon exist. A wrong
@@ -139,10 +143,21 @@ indexed queries, and put read-heavy data that changes rarely in the platform's S
   forward). Listeners on `document`/`window` are added once, outside it. `history.replaceState`
   keeps `history.state` (the router's). After a sign-in or sign-out, a full load
   (`location.assign`): the header must be rendered again for the new session.
+- **List pages (static shell + JSON).** A long list is a prerendered page: title, text and filters in the HTML,
+  skeleton rows, and `bindListPage` (`src/lib/list-page.ts`) fills in rows from the JSON route. Filters, search and
+  "load more" fetch only the data, and filters stay in the URL. Copy `src/pages/jobs/index.astro`:
+  - `preloadData="<the route>"` on `<Base>` starts the data with the page, not after it. On a link with filters
+    in it, that first fetch is unused: one extra query, which is why it's only for the plain list.
+  - The rows are `<template>` + `textContent`, no React: public pages stay light.
+  - Loading, empty, no match and error all come from the helper, with the error's Try again button.
+  - The route answers fast and small: `select` only what a row shows, keyset paging, bounded (`database.md`).
+  - Search engines read the shell: the title, description and intro text go in it, never in the JSON. Every detail page goes
+    in `/sitemap.xml`. See `seo.md`.
+  - An older list page rendered on the server keeps working. Move it when a task changes it, not for its own sake.
 - **Prefetch is opt-in** (`prefetch: {prefetchAll: false, defaultStrategy: 'hover'}`): a link
   to a PRERENDERED page carries `data-astro-prefetch` (fetched on hover or focus); the header
   nav uses `data-astro-prefetch="viewport"` (`Base.astro`, phones have no hover). Never on a
-  link to an SSR page (`/jobs/*`) or `/dashboard`: they answer `no-store`, so the prefetch is a
+  link to an SSR page (`/jobs/<slug>/`) or `/dashboard`: they answer `no-store`, so the prefetch is a
   wasted Worker request. A new SSR page in `NAV` gets `prefetch: false` (`src/content/site.ts`).
 - **View transitions**: the ClientRouter animates page to page; the header holds still
   (`view-transition-name: site-header`, unique per page). The cross-document `@view-transition`

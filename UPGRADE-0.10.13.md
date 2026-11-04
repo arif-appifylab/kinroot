@@ -4,7 +4,7 @@ Kinroot is built on template **0.10.10**. Three releases came out since (`~/Down
 `CHANGELOG.md`). **0.10.11 is a required security upgrade**: the platform's rules now say a site below it must be
 upgraded before any other work. Nothing reaches visitors until a Publish, and the site has never been published.
 
-**How to approve:** tick boxes or reply with IDs ("all", "U-1 to U-6"…). Nothing below is done yet.
+**Status (4 Nov):** all approved. U-1 to U-14 are done (the upgrade commit); U-15 to U-19 follow in order.
 
 ---
 
@@ -12,30 +12,30 @@ upgraded before any other work. Nothing reaches visitors until a Publish, and th
 
 | ✓ | ID | What changes | Why it matters for Kinroot | Effort |
 |---|---|---|---|---|
-| [ ] | U-1 | **Passwords: PBKDF2 (600k) → scrypt.** The live Worker refuses PBKDF2 above 100,000 iterations, so on the deployed site **every password sign-up and sign-in fails with a 500** (tests pass because Node allows it). | Kinroot's sign-in pages, Security tab and invites use passwords: they would be broken live. Managed code; no Kinroot change. | in U-5 |
-| [ ] | U-2 | **Database over one WebSocket per request.** A query goes from ~130 ms to ~3 ms (10 reads: 1.3 s → 40 ms). New managed `src/platform/db-socket.ts`, used by `getDb()`. | Kinroot already gets its client from `getDb()`, so every CRM screen, poll and job gets faster with no Kinroot code change. Many audit speed items become less urgent. | in U-5 |
-| [ ] | U-3 | **`catch P2002` works on the live database** (duplicates gave 500s before). | Kinroot catches unique-key conflicts in several places (invites, keys, deduped jobs). | in U-5 |
-| [ ] | U-4 | **The owner comes only from "View as admin"** in the dashboard (or the shield in the Preview). Removed: owner by email (`SITE_OWNER_EMAILS`), by sign-up, code, password reset or the first account. Fixes an **admin takeover**: someone who registered the owner's address first kept their password. The owner account has no email, password or two-step on the site and can't be suspended or demoted. | Kinroot's CRM Owner is the site owner (`site:crm:own`). See section B for what Kinroot must adapt. | in U-5 |
+| [x] | U-1 | **Passwords: PBKDF2 (600k) → scrypt.** The live Worker refuses PBKDF2 above 100,000 iterations, so on the deployed site **every password sign-up and sign-in fails with a 500** (tests pass because Node allows it). | Kinroot's sign-in pages, Security tab and invites use passwords: they would be broken live. Managed code; no Kinroot change. | in U-5 |
+| [x] | U-2 | **Database over one WebSocket per request.** A query goes from ~130 ms to ~3 ms (10 reads: 1.3 s → 40 ms). New managed `src/platform/db-socket.ts`, used by `getDb()`. | Kinroot already gets its client from `getDb()`, so every CRM screen, poll and job gets faster with no Kinroot code change. Many audit speed items become less urgent. | in U-5 |
+| [x] | U-3 | **`catch P2002` works on the live database** (duplicates gave 500s before). | Kinroot catches unique-key conflicts in several places (invites, keys, deduped jobs). | in U-5 |
+| [x] | U-4 | **The owner comes only from "View as admin"** in the dashboard (or the shield in the Preview). Removed: owner by email (`SITE_OWNER_EMAILS`), by sign-up, code, password reset or the first account. Fixes an **admin takeover**: someone who registered the owner's address first kept their password. The owner account has no email, password or two-step on the site and can't be suspended or demoted. | Kinroot's CRM Owner is the site owner (`site:crm:own`). See section B for what Kinroot must adapt. | in U-5 |
 
 ## B. The upgrade steps (from `docs/agent/upgrade.md`)
 
 | ✓ | ID | Step | Notes for Kinroot | Effort |
 |---|---|---|---|---|
-| [ ] | U-5 | Run `npm run platform -- upgrade --from ~/Downloads/site-astro-app-0.10.13`: replaces `src/platform/**`, `docs/agent/**` (adds `upgrade.md`, `orders-and-stock.md`), scripts, `template.json`, merges `AGENTS.md`. | Needs a **clean git tree first** (today it holds the clean-ups and the half-finished audit fixes: see "Order" below). | S |
-| [ ] | U-6 | `package.json`: add `@prisma/driver-adapter-utils 7.10.1`, `@prisma/ppg 1.0.1`, `pg-types 4.0.2`, `postgres-array 3.0.4`; `npm install` (one lockfile). | Kinroot's own dependencies stay. | S |
-| [ ] | U-7 | `prisma/schema.prisma`: `User.platformOwnerId`, `AuthState.ownerEnvId`, the new `IdempotencyKey` model; the two new migrations (`owner_from_platform`, `idempotency_keys`). | Their dates (2 Nov, 09:00 and 10:00) sort before Kinroot's own migrations; fine on a never-published database, and the local databases get them with `migrate deploy`. | S |
-| [ ] | U-8 | Template's own code: `src/server/app.ts` (no `ownerClaimMode` / `ownerSetup` in `/health`), `src/server/auth-settings.ts` (no `ownerEmails`), `src/env.d.ts` (`SITE_OWNER_ID`, `SITE_DB_TRANSPORT`), `.env.example` (`SITE_OWNER_ID` instead of `SITE_OWNER_EMAILS`). | Kinroot removed the dashboard, blog, jobs and checkout files the template also updated: those updates are skipped, the checkout "idempotency" copy step too (Kinroot sells nothing). | S |
-| [ ] | U-9 | Template tests: copy the new ones (`owner`, `idempotency`, `db-socket`, `upgrade`, `password`, auth/admin/preview updates), then **redo Kinroot's changes** to them (no job board or checkout tests, no `jobs` table in the reset, permissions without "Manage jobs"). Skip `list-page` and the checkout tests (features Kinroot doesn't have). | `tests/upgrade.test.ts` fails if a schema line is missing. | M |
+| [x] | U-5 | Run `npm run platform -- upgrade --from ~/Downloads/site-astro-app-0.10.13`: replaces `src/platform/**`, `docs/agent/**` (adds `upgrade.md`, `orders-and-stock.md`), scripts, `template.json`, merges `AGENTS.md`. | Needs a **clean git tree first** (today it holds the clean-ups and the half-finished audit fixes: see "Order" below). | S |
+| [x] | U-6 | `package.json`: add `@prisma/driver-adapter-utils 7.10.1`, `@prisma/ppg 1.0.1`, `pg-types 4.0.2`, `postgres-array 3.0.4`; `npm install` (one lockfile). | Kinroot's own dependencies stay. | S |
+| [x] | U-7 | `prisma/schema.prisma`: `User.platformOwnerId`, `AuthState.ownerEnvId`, the new `IdempotencyKey` model; the two new migrations (`owner_from_platform`, `idempotency_keys`). | Their dates (2 Nov, 09:00 and 10:00) sort before Kinroot's own migrations; fine on a never-published database, and the local databases get them with `migrate deploy`. | S |
+| [x] | U-8 | Template's own code: `src/server/app.ts` (no `ownerClaimMode` / `ownerSetup` in `/health`), `src/server/auth-settings.ts` (no `ownerEmails`), `src/env.d.ts` (`SITE_OWNER_ID`, `SITE_DB_TRANSPORT`), `.env.example` (`SITE_OWNER_ID` instead of `SITE_OWNER_EMAILS`). | Kinroot removed the dashboard, blog, jobs and checkout files the template also updated: those updates are skipped, the checkout "idempotency" copy step too (Kinroot sells nothing). | S |
+| [x] | U-9 | Template tests: copy the new ones (`owner`, `idempotency`, `db-socket`, `upgrade`, `password`, auth/admin/preview updates), then **redo Kinroot's changes** to them (no job board or checkout tests, no `jobs` table in the reset, permissions without "Manage jobs"). Skip `list-page` and the checkout tests (features Kinroot doesn't have). | `tests/upgrade.test.ts` fails if a schema line is missing. | M |
 
 ## C. What Kinroot's own code must adapt (because of U-4, the new owner)
 
 | ✓ | ID | Change | Why | Effort |
 |---|---|---|---|---|
-| [ ] | U-10 | **The owner has no email address on the site** (`viewer.email` is empty). Every Kinroot email meant for the owner (notifications, report emails, import / export done, mentions, digests) must go as a platform `notification` **with no `to`** (the platform delivers it to the owner). The owner's team row shows "Account owner" instead of an address. | Today those emails would silently go nowhere. | M |
-| [ ] | U-11 | **Settings → Security** for the owner: a card "You're the site owner: your access comes from the dashboard (View as admin)", no password, two-step or delete account (as the template's account screen now does). **Settings → Accounts**: the owner row shows "Comes from the dashboard" and has no actions. | The backend refuses those actions for the owner; the screens should not offer them. | S |
-| [ ] | U-12 | **Kinroot's tests**: the `owner()` helper signs in through a "View as admin" ticket (the template's new `ownerSignedIn`), and tests that relied on the owner's email address use a teammate instead. | The old helper made an owner by sign-up + role, which no longer counts. | M |
-| [ ] | U-13 | **Local development**: to open the CRM as owner on this machine, add the site's **Site Key** to `.env` and open it with "View as admin" (the `DEV_OWNER_EMAIL` / `DEV_OWNER_PASSWORD` account becomes a normal user). I'll write the steps in the README. | The template allows the owner locally only with a Site Key. | S |
-| [ ] | U-14 | One-click sign-in into Kinroot (`/portal/?owner_ticket=…` → `/crm/`): re-check against the new owner route and keep it working. | Kinroot redeems the ticket itself since Phase 10. | S |
+| [x] | U-10 | **The owner has no email address on the site** (`viewer.email` is empty). Every Kinroot email meant for the owner (notifications, report emails, import / export done, mentions, digests) must go as a platform `notification` **with no `to`** (the platform delivers it to the owner). The owner's team row shows "Account owner" instead of an address. | Today those emails would silently go nowhere. | M |
+| [x] | U-11 | **Settings → Security** for the owner: a card "You're the site owner: your access comes from the dashboard (View as admin)", no password, two-step or delete account (as the template's account screen now does). **Settings → Accounts**: the owner row shows "Comes from the dashboard" and has no actions. | The backend refuses those actions for the owner; the screens should not offer them. | S |
+| [x] | U-12 | **Kinroot's tests**: the `owner()` helper signs in through a "View as admin" ticket (the template's new `ownerSignedIn`), and tests that relied on the owner's email address use a teammate instead. | The old helper made an owner by sign-up + role, which no longer counts. | M |
+| [x] | U-13 | **Local development**: to open the CRM as owner on this machine, add the site's **Site Key** to `.env` and open it with "View as admin" (the `DEV_OWNER_EMAIL` / `DEV_OWNER_PASSWORD` account becomes a normal user). I'll write the steps in the README. | The template allows the owner locally only with a Site Key. | S |
+| [x] | U-14 | One-click sign-in into Kinroot (`/portal/?owner_ticket=…` → `/crm/`): re-check against the new owner route and keep it working. | Kinroot redeems the ticket itself since Phase 10. | S |
 
 ## D. New rules Kinroot's code must follow
 
@@ -46,6 +46,22 @@ upgraded before any other work. Nothing reaches visitors until a Publish, and th
 | [ ] | U-17 | **Repeatable public submissions** (support request, form response, chat start): an idempotency key from the browser so a retry after a lost connection doesn't create a second one (the new database connection never re-sends a write, so the browser retries). | Duplicate tickets, responses or chats. | S–M |
 | [ ] | U-18 | **Page progress bar** (0.10.12): the template's `src/lib/page-progress.ts` (the thin bar in the site's colour while the next page loads) in Kinroot's router and public pages. Optional in the guide; the UI rules now say it's built in and not to add another. | Same feel as the template, in Kinroot's colours. | S |
 | [ ] | U-19 | **Caching guidance** (every query is now billed, a cache read isn't): review Kinroot's caches (brand, chat settings, website, and the settings caches the audit adds) against `cache.md` "How caches go wrong", and check every write clears them. | Aligns with audit P2-21 / P2-26. | S |
+
+## How U-10 to U-14 were done
+- **U-10**: `src/server/crm/lib/owner-account.ts`. On the server the owner's `User.email` is a stand-in
+  (`owner@owner.invalid`); `sendSystemEmail` sends anything for it as the platform's `notification` (text, no
+  attachments, no `to`) and never uses it as a Reply-To; merge fields, the audit log, exports and calendar
+  files show nothing for it. **Not testable here**: this machine has no Site Key, and the docs name the
+  `notification` kind without its fields, so it sends `{kind, subject, text}`; a refusal is logged and the
+  email skipped. Check it once in the Preview (an import finishing, a report schedule to the owner).
+- **U-11**: Settings → Security and Profile show "You're the site owner" (devices stay); Settings → Accounts
+  shows "Comes from the dashboard" with no actions; Team shows "Account owner"; the user menu shows "Site
+  owner"; the roles dialog no longer offers `owner`.
+- **U-12**: the tests' `owner()` is the template's `ownerSignedIn` (a ticket). Tests that read an Owner's own
+  mail use `ownerAt(email)`: a teammate the site owner made a CRM Owner.
+- **U-13**: README › Accounts.
+- **U-14**: `kinroot-site-admin.test.ts` redeems tickets as `CrmApp.tsx` does (POST) and checks the owner
+  account refuses password, email, two-step and delete (403 `owner_account`).
 
 ## Not needed for Kinroot
 - **List pages** (`src/lib/list-page.ts`, 0.10.13): for long public lists (jobs, products). Kinroot has no public lists, and its CRM lists keep their page numbers (your decision today).

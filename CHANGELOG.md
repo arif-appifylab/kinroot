@@ -4,6 +4,59 @@ Template releases. `npm run platform -- check` says when a newer one is out;
 `npm run platform -- upgrade` applies it (see `scripts/platform.mjs`).
 Managed by the template: replaced on upgrade.
 
+## 0.10.13
+
+- **List pages: a static shell, with rows as JSON.** New `src/lib/list-page.ts`: skeleton, filters in the URL, load more,
+  empty, no match and error. A filter, a search or "load more" fetches only the data. `/jobs/` is built this way.
+- `AGENTS.md`, `performance.md`, `seo.md`: which kind of page to build, including when a short list stays server-rendered.
+- **The AI can see what the live database has applied.** `/opt/ezy/live-migrations.json`, written by the platform on each editor
+  Open and after each publish: names and statuses, no rows and no credentials. `database.md` says how to fix a failed migration with it.
+- `data-ability` on a prerendered page shows an element to people with that ability, once the browser knows who they are.
+
+## 0.10.12
+
+- **A progress bar at the top of every page while the next one loads,** in the site's own `--accent` colour, on public pages and in the dashboard. It stays hidden on a page that loads fast. New `src/lib/page-progress.ts`.
+- `docs/agent/payments.md`: the checkout endpoint lists `idempotencyKey`.
+- `AGENTS.md`: on a site below the required version, the AI upgrades as its first step without asking, then does the owner's task. Nothing reaches visitors until they publish.
+
+## 0.10.11
+
+**Required security upgrade. Follow `docs/agent/upgrade.md`:** a plain upgrade leaves `package.json` and `prisma/schema.prisma`, and
+this release needs both changed.
+
+- **Nothing charged twice, nothing sold twice.** Every checkout now carries an idempotency key: a double click, a retry
+  or a reload gets the same checkout, and an attempt already paid goes to the thanks page. New managed
+  `src/platform/idempotency.ts` (`idempotent()`), a new `idempotency_keys` table, `src/lib/idempotency.ts` in the browser, and
+  `docs/agent/orders-and-stock.md`: keys, conditional stock updates, unique and exclusion constraints, locks and holds.
+- **The database now uses one WebSocket per request, not one HTTPS call per query.** New managed
+  `src/platform/db-socket.ts`, used by `getDb()` on Prisma Postgres. A query is ~3 ms (was ~130 ms),
+  ~20 ms to open once; 10 awaited reads went from ~1,300 ms to ~40 ms and writes improved the same way. No
+  site code changes: every Prisma call works as before, with Prisma's HTTPS driver as the fallback.
+  Plain reads overlap on the socket; writes run alone in order, and are never sent twice. Transactions keep
+  their own socket. New direct dependencies, exact versions: `@prisma/ppg`,
+  `@prisma/driver-adapter-utils`, `pg-types`, `postgres-array` (already installed through Prisma).
+  How it behaves: `database.md`.
+- **Caching: reads that repeat, in balance.** Every Prisma Postgres query is billed and a cache read isn't, so `cache.md` now opens with
+  what each read costs and "Should this be cached?": fix the query first, then cache what many requests read and rarely changes. It walks through deciding for each read by tracing the code, with a table of how caches go wrong, worked
+  examples, and the rules that stop old data showing. `AGENTS.md`, `performance.md`, `review.md`.
+- **The owner comes only from "View as admin".** A ticket from the dashboard is now the ONE way to hold
+  `owner`: on live, staging, the Preview and a local copy with a Site Key. Removed: owner by sign-up, confirmation,
+  password reset or emailed code, the first-account rule, `ownerEmails`, `firstUserBecomesOwner`, `SITE_OWNER_EMAILS`
+  and `/site-api/health`'s `ownerSetup`. Fixes a takeover: someone who registered the owner's address first kept
+  their password when the owner clicked. The owner account is tied to an opaque id, so the site never learns
+  the owner's email. It has no password or two-step here, and nobody can suspend or demote it from inside the
+  site. When the site changes hands, all admin rights go. **After publishing:** whoever held `owner` becomes
+  a normal user and admins stay, so open the admin once with View as admin. A new migration is included.
+- **`catch P2002` works on deployed sites.** Prisma's Prisma Postgres adapter throws driver errors as plain
+  objects, so a duplicate never became `P2002` and the visitor got a 500 (for example, two sign-ups for one
+  address at the same moment). `db-socket.ts` wraps them as Prisma expects, with the socket on or off.
+- **Password sign-up and sign-in work on deployed sites.** Passwords were hashed with PBKDF2 at 600,000
+  iterations, and the Workers runtime refuses above 100,000: every hash failed with a 500 (Node allows it, so
+  tests passed). Now scrypt, N=2^14, r=8, p=5 (OWASP), through `node:crypto`, ~160 ms per hash. Older hashes
+  the runtime can verify are re-hashed at the next login. Others count as a wrong password: the person
+  signs in by email or resets it. `password.ts`, `auth.md`.
+- **Don't use `String[]`.** Prisma's Prisma Postgres driver mishandles scalar lists, over HTTPS too (`database.md`).
+
 ## 0.10.10
 
 - **Passwords and email addresses (owner's rule).** A password never leaves the server in any form

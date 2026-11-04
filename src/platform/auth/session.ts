@@ -55,7 +55,7 @@ async function resolveViewer(request: Request): Promise<Viewer> {
   const [user, signIn] = await Promise.all([
     db.user.findUnique({
       where: {id: userId},
-      select: {id: true, name: true, email: true, status: true, emailVerifiedAt: true, sessionVersion: true},
+      select: {id: true, name: true, email: true, platformOwnerId: true, status: true, emailVerifiedAt: true, sessionVersion: true},
     }),
     // A sign-in is live while its family has a token nobody revoked (`@@index([familyId])`).
     db.refreshToken.findFirst({
@@ -70,8 +70,10 @@ async function resolveViewer(request: Request): Promise<Viewer> {
     state: 'user',
     id: user.id,
     name: user.name,
-    email: user.email,
+    // The owner's account holds only a placeholder address: nothing to show.
+    email: user.platformOwnerId ? '' : user.email,
     emailVerified: user.emailVerifiedAt !== null,
+    platformOwner: user.platformOwnerId !== null,
   };
 }
 

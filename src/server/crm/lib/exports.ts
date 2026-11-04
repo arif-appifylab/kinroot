@@ -32,6 +32,7 @@ import {enqueue} from './jobs';
 import {notify} from './notify';
 import {scoreBandWhere} from './scoring';
 import {listContactWhere} from './segments';
+import {shownEmail} from './owner-account';
 
 const PAGE = 1_000;
 const BUDGET_MS = 8_000;
@@ -41,7 +42,7 @@ type Row = Record<string, unknown> & {id: string; custom: unknown};
 /** The owner as an export shows them: the name, and the address only of the requester's own records (others masked). */
 const ownerSelect = {select: {id: true, name: true, user: {select: {email: true}}}} as const;
 const ownerEmailOf = (owner: {id: string; user: {email: string} | null} | null, user: User) =>
-  !owner?.user ? null : owner.id === user.id ? owner.user.email : maskEmail(owner.user.email);
+  !owner?.user || !shownEmail(owner.user.email) ? null : owner.id === user.id ? owner.user.email : maskEmail(owner.user.email);
 
 /** The export's rows as a where: the saved filters, the list, and what the requester may see. */
 async function exportWhere(db: Db, exp: Export, user: User) {

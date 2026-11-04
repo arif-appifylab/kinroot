@@ -12,7 +12,7 @@ generator client {
   // The client runs in the Cloudflare Workers runtime, never in Node.
   runtime         = "workerd"
   // ONE SQL query per read: a nested `select` of related rows is joined in the database instead
-  // of one extra query per relation (each query is an HTTPS round trip). docs/agent/database.md.
+  // of one extra query per relation (each query is a round trip). docs/agent/database.md.
   previewFeatures = ["relationJoins"]
 }
 
@@ -39,7 +39,9 @@ datasource db {
 model User {
   id                Int       @id @default(autoincrement())
   email             String    @unique @db.VarChar(254)
-  /// `pbkdf2-sha256$v1$<iterations>$<salt>$<key>` (src/platform/auth/password.ts).
+  /// The platform's opaque id, on the site owner's account only (src/platform/auth/owner.ts).
+  platformOwnerId   String?   @unique @map("platform_owner_id") @db.VarChar(64)
+  /// A versioned hash string (src/platform/auth/password.ts).
   passwordHash      String    @map("password_hash") @db.VarChar(255)
   name              String    @db.VarChar(80)
   /// `active` or `suspended`.
@@ -283,11 +285,12 @@ model AuditEvent {
   @@map("audit_events")
 }
 
-/// One row (`id = 1`): who claimed the owner role first. Claimed with a
-/// conditional update, so two simultaneous sign-ups can never both become owner.
+/// One row (`id = 1`): the account holding the owner seat, taken with a conditional
+/// update, and the `SITE_OWNER_ID` this database last saw.
 model AuthState {
   id          Int      @id
   ownerUserId Int?     @map("owner_user_id")
+  ownerEnvId  String?  @map("owner_env_id") @db.VarChar(64)
   updatedAt   DateTime @default(now()) @updatedAt @map("updated_at")
 
   @@map("auth_state")
@@ -320,6 +323,21 @@ model PaymentEvent {
 
   @@index([receivedAt])
   @@map("payment_events")
+}
+
+/// One thing that must happen once (`idempotent` in src/platform/idempotency.ts): the first request
+/// runs it, a repeat of the same `key` gets `response`. Kept for 7 days.
+model IdempotencyKey {
+  id          Int      @id @default(autoincrement())
+  scope       String   @db.VarChar(120)
+  key         String   @db.VarChar(64)
+  fingerprint String   @db.VarChar(64)
+  response    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@unique([scope, key])
+  @@index([createdAt])
+  @@map("idempotency_keys")
 }
 
 // ---------------------------------------------------------------- the site's own data

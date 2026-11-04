@@ -1,4 +1,5 @@
 import type {Prisma, PrismaClient} from '../../generated/prisma/client';
+import {tableMissing} from '../background';
 import {type Attempt, ATTEMPT_LOCK_WAIT_MS, AttemptBusyError, type AttemptKind, type AttemptStore} from './rate-limit';
 import type {NewRefreshRow, RefreshRow, RefreshStore, RevokeReason} from './refresh';
 
@@ -106,4 +107,8 @@ export async function sweep(db: PrismaClient, now: Date = new Date()): Promise<v
   await db.$executeRaw`DELETE FROM "password_resets" WHERE "id" IN (SELECT "id" FROM "password_resets" WHERE "expires_at" < ${day} LIMIT 500)`;
   await db.$executeRaw`DELETE FROM "email_verifications" WHERE "id" IN (SELECT "id" FROM "email_verifications" WHERE "expires_at" < ${week} LIMIT 500)`;
   await db.$executeRaw`DELETE FROM "sign_in_codes" WHERE "id" IN (SELECT "id" FROM "sign_in_codes" WHERE "expires_at" < ${day} LIMIT 500)`;
+  await db.$executeRaw`DELETE FROM "idempotency_keys" WHERE "id" IN (SELECT "id" FROM "idempotency_keys" WHERE "created_at" < ${week} LIMIT 500)`.catch((error: unknown) => {
+    // A site between the upgrade and its migration has no such table yet.
+    if (!tableMissing(error)) throw error;
+  });
 }

@@ -1,6 +1,6 @@
 {
   "name": "site-app",
-  "version": "0.10.10",
+  "version": "0.10.13",
   "private": true,
   "type": "module",
   "engines": {
@@ -26,6 +26,8 @@
     "@prisma/adapter-pg": "7.10.1",
     "@prisma/adapter-ppg": "7.10.1",
     "@prisma/client": "7.10.1",
+    "@prisma/driver-adapter-utils": "7.10.1",
+    "@prisma/ppg": "1.0.1",
     "@stripe/stripe-js": "10.1.0",
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-query": "^5.104.2",
@@ -45,6 +47,8 @@
     "hono": "^4.13.13",
     "lucide-react": "1.61.0",
     "papaparse": "5.7.0",
+    "pg-types": "4.0.2",
+    "postgres-array": "3.0.4",
     "radix-ui": "1.8.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

@@ -141,9 +141,9 @@ function AccountsList({canUpdate, canRoles, viewerId, isOwner}: {canUpdate: bool
                 {u.name}
                 {u.userId === viewerId && ' (you)'}
               </span>
-              {!u.emailVerified && <Badge tone="amber">Unconfirmed</Badge>}
+              {!u.platformOwner && !u.emailVerified && <Badge tone="amber">Unconfirmed</Badge>}
             </div>
-            <p className="truncate text-xs text-muted-foreground">{u.email}</p>
+            <p className="truncate text-xs text-muted-foreground">{u.platformOwner ? 'Comes from the dashboard' : u.email}</p>
           </div>
         </div>
       ),
@@ -168,7 +168,7 @@ function AccountsList({canUpdate, canRoles, viewerId, isOwner}: {canUpdate: bool
       key: 'twoFactor',
       header: 'Two-step',
       hideBelow: 'lg',
-      cell: (u) => (u.twoFactor ? <Badge tone="green">On</Badge> : <span className="text-muted-foreground">Off</span>),
+      cell: (u) => (u.platformOwner ? <span className="text-muted-foreground">Dashboard</span> : u.twoFactor ? <Badge tone="green">On</Badge> : <span className="text-muted-foreground">Off</span>),
     },
     {
       key: 'status',
@@ -207,6 +207,8 @@ function AccountsList({canUpdate, canRoles, viewerId, isOwner}: {canUpdate: bool
       className: 'w-12 text-right',
       cell: (r) => {
         const u = asUser(r);
+        // The site owner is managed from the dashboard: nothing to change here (the server refuses it too).
+        if (u.platformOwner) return null;
         const self = u.id === viewerId;
         const busy = busyId === u.id;
         return (

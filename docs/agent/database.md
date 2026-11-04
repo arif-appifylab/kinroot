@@ -8,21 +8,69 @@ pinned to 7.x). Generator `prisma-client`, `runtime = "workerd"`, output `src/ge
 (git-ignored; `npm run build` runs `prisma generate`); a second, test-only generator writes a Node
 build to `src/generated/prisma-node` (never import it). `getDb()` returns the request's client, or
 `null` without `DATABASE_URL`. The driver follows the URL's host: `*.prisma.io` (live, Preview) →
-`adapter-ppg` over HTTPS; any other host (a local Postgres, tests) →
+`src/platform/db-socket.ts`, one WebSocket per request; any other host (a local Postgres, tests) →
 `adapter-pg` over TCP. Deployed sites only ever get Prisma Postgres (raw TCP is blocked there).
 
 ## Connections (serverless)
 - ONE client per request from `getDb()` (`c.var.db` in routes): never `new PrismaClient()`,
   never a client in module scope, never one shared across requests.
-- Live and Preview (`*.prisma.io`): `adapter-ppg`, Prisma Postgres's serverless driver over
-  HTTPS. There is no TCP pool to size or exhaust: Prisma Postgres pools on its side, and every
-  query is one HTTPS round trip, so fewer, bounded queries matter more than anything else.
+- Live and Preview (`*.prisma.io`): `src/platform/db-socket.ts`. ONE WebSocket per request, opened
+  on the first query and shared by everything in that request. There is no pool to size: Prisma
+  Postgres pools on its side. Prisma's HTTPS driver stays underneath as the fallback.
+  | Measured from a Worker in Frankfurt | Socket | HTTPS (older sites) |
+  | --- | --- | --- |
+  | a query | ~3 ms | ~130 ms |
+  | opening, once per request | ~20 ms | none |
+  | 10 reads, awaited one by one | ~40 ms | ~1,300 ms |
+  | 10 reads in `Promise.all` | ~20 ms | ~300 ms |
+  About 1 in 15 Worker instances is slow to reach the database (a query ~170 ms, opening ~1 s).
+  You can't detect or avoid that from site code, and it is why the round-trip budget stays: on such
+  an instance 10 awaited reads take ~2.5 s and the same reads in `Promise.all` ~1 s.
 - Locally and in tests (plain Postgres): `adapter-pg` with `max: 1` and a 1 s idle timeout, a
   short-lived connection per request.
 - `DATABASE_URL` is the only URL: the same direct Prisma Postgres connection string serves the
   driver and the Prisma CLI (`migrate dev`, `studio` in the editor). There is no separate
   pooled/Accelerate URL and no `directUrl`; never add one or point it anywhere else. Deploy-time
   migrations are run by the platform with its own credentials.
+
+## What the socket means for your code
+Nothing changes in how you write queries: `getDb()`, `c.var.db` and every Prisma call work as
+before. Don't import `db-socket.ts`, open a session, or write your own connection handling. Know this:
+- **`Promise.all` of plain reads is the fastest form**: they go down the socket together.
+- **A write runs alone, in the order you wrote it.** In `Promise.all`, a write waits for the
+  reads and writes before it, and what comes after it waits for it. So a read listed after a write
+  sees it, and mixing writes into `Promise.all` gains nothing: await them, or use a transaction.
+- **A read that fails on a lost connection is sent again by itself. A write never is**: a lost
+  connection can't say whether it landed, so the write throws and the row may or may not exist.
+  Writes a person may repeat (checkout, payments, anything charged) need their own safeguard:
+  `idempotent()`, or a unique key on the order or request (`@@unique`, catch `P2002`), and a read-back after an
+  error (`orders-and-stock.md`). Never loop and retry a write on your own without one.
+- **`P2002` and Prisma's other error codes work on the socket.** On a site not yet upgraded, a driver
+  error reaches your code as a plain object with `originalCode` (`23505` for a duplicate) and no `code`,
+  so `catch P2002` never runs and the visitor gets a 500. Upgrade the site rather than working around it.
+- **Only a plain `SELECT` counts as a read.** `INSERT/UPDATE/DELETE … RETURNING`, a `WITH` query,
+  `FOR UPDATE`, `nextval()` and advisory locks run alone and are never sent again. A `SELECT` that
+  calls YOUR function which writes would be treated as a read: use `$executeRaw` for it, or
+  run it in a transaction, which is never retried.
+- **A transaction has its own socket**, ~20 ms to open: keep using it when the writes must be all or
+  nothing, not as a way to share a connection. Keep it short, and keep a row every request updates (a
+  shared stock or total counter) out of it where you can: requests queue behind its lock, and past Prisma's 5 s
+  limit they fail with `P2028`. In rare bursts under that load, a commit has been reported failed
+  although it was saved. So treat a failed commit as unknown: read back, and use `idempotent()` for anything charged.
+- **No session state between statements**: `SET`, temporary tables and session advisory locks don't
+  carry from one query to the next outside a transaction. Between statements the database connection
+  may serve other work.
+- **The socket closes after 5 s idle** and reopens by itself: a slow outside call in a route is fine.
+- **Don't use `String[]` or other Prisma scalar lists.** Prisma's Prisma Postgres driver mishandles
+  them (a write fails with `malformed array literal`, a read crashes, raw SQL returns `{a,b}` as text),
+  with HTTPS too. Use a related table, or `Json` for an opaque list.
+- **Leave the managed files alone**: `src/platform/db-socket*.ts` come from the template. Bumping
+  `@prisma/adapter-ppg` means copying its conversion again: `tests/db-socket.test.ts` fails until
+  someone does. Don't change the Prisma version without a template upgrade.
+
+**A site built before this** has no `src/platform/db-socket.ts`. It keeps working over HTTPS, where a query costs ~130 ms, so
+treat every query as ~130 ms until it's upgraded. Upgrading is required, and comes first: `upgrade.md`. A Publish alone doesn't
+upgrade a site, and a new site starts on the socket.
 
 ## Tables
 - MANAGED (auth core, change only through a template upgrade): `users`, `roles`, `permissions`,
@@ -109,7 +157,7 @@ Each index speeds reads and costs every insert/update. One per QUERY SHAPE, no m
   a new migration. Small tables (a few thousand rows): a normal index in the transaction is fine.
 - Check a doubtful plan with `EXPLAIN` in Prisma Studio / psql on the Preview Database.
 
-## One query per read (each query is an HTTPS round trip, ~100–150 ms)
+## One query per read (each query is a round trip: ~3 ms, ~170 ms on a slow instance)
 - **`relationJoins` is on** (`prisma/schema.prisma`, both generators: `previewFeatures =
   ["relationJoins"]`): a nested `select` of related rows runs as ONE SQL query (a join), not one
   extra query per relation. A site built before it has `previewFeatures` missing: add that line to
@@ -156,6 +204,8 @@ Each index speeds reads and costs every insert/update. One per QUERY SHAPE, no m
   ```
   Without a relation (no FK): collect ids, `findMany({where: {id: {in: ids}}, select})` (bounded),
   join in a `Map`. A nested `include` of a to-many relation is bounded too (`take`).
+- **Independent reads go in `Promise.all`**: on the socket they travel together, so 10 of them take
+  about as long as 2. Awaiting them one by one costs a round trip each.
 - **Transactions**: the batch form `db.$transaction([a, b])` (as the admin routes do), or the
   callback form for a read-then-write that must be consistent. Keep them short: no platform
   call, `sendJob` or email inside one (do those after commit). A single conditional `updateMany`
@@ -242,3 +292,28 @@ Add an integration test for every new route that guards data (who may, who may n
   Database (`prisma migrate reset`) is the owner's call: ask first.
 - No `DATABASE_URL` = the Site Database is not enabled: routes answer 503. Ask the owner to enable
   it in the site's Database tab; never point it anywhere else.
+
+## What the live database has
+You can't reach the live database, and never ask for its address. The platform writes what it has applied to
+`/opt/ezy/live-migrations.json` in the editor: names and statuses, never rows. It's refreshed each time the editor opens and after
+each publish, and `readAt` says when. Read it before you write a migration, and first thing when a publish fails on one.
+
+| Field | Meaning |
+| --- | --- |
+| `state` | `ready`; `no_database` (not created yet); `unavailable` (couldn't be read: don't guess, say so and try after the next Open) |
+| `applied` | On the live database, oldest first. Never edit or delete one of these files: write a new migration |
+| `failed` | Started and never finished. Every later publish stops here until it's resolved |
+| `rolledBack` | Marked rolled back. Its file may run again |
+| `lastPublish` | The live site's last publish: `status`, `errorCode`, `error`, `pending`, and `destructive` (SQL waiting for the owner's approval) |
+| `lastStagingPublish` | The same for the staging site. `applied` and `failed` are the live database's only: check the staging database yourself |
+
+**A publish failed on a migration (`migrate_failed`):**
+1. Compare `prisma/migrations/` with `applied` and `failed`, and read `lastPublish.error`.
+2. Find out what the failed file does. A file that failed may have done part of its work, because Prisma doesn't undo it unless it ran in one transaction.
+3. Write the fix as a new migration that works whether or not that part was done (`IF NOT EXISTS`, `IF EXISTS`), and test it on the staging database.
+4. A failed migration blocks everything after it. Marking it rolled back or applied is the owner's step, in the site's Database tab. Tell them which one, and which to pick, in plain words:
+   rolled back if it changed nothing, applied if you've made the rest of its work safe another way.
+5. Then ask them to publish again.
+
+Don't edit the failed file, unless it never ran anywhere and you're sure of that from `failed` and `applied`. Never tell the owner to run SQL by hand.
+

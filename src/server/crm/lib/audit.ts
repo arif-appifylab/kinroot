@@ -5,6 +5,7 @@ import {sha256Hex, sign} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import type {AppContext} from '../kit/guards';
 import {automationOf} from './automation-context';
+import {shownEmail} from './owner-account';
 
 /**
  * Audit log: who did what, when and from where. Call `audit(db, c, {...})`
@@ -92,7 +93,7 @@ async function row(c: AppContext | null, input: AuditInput): Promise<Prisma.Audi
     actorId: actor?.id ?? null,
     actorName: actor?.name ?? null,
     // Never a copy of an address: masked, enough to recognise (AGENTS.md › Never).
-    actorEmail: actor?.email ? maskEmail(actor.email) : null,
+    actorEmail: shownEmail(actor?.email) ? maskEmail(shownEmail(actor?.email)) : null,
     meta: (redact(input.meta ?? {}) ?? {}) as Prisma.InputJsonValue,
     ip: await ipOf(c),
     userAgent: c?.req.header('user-agent')?.slice(0, 300) ?? null,

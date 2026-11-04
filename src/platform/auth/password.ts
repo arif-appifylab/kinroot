@@ -1,23 +1,26 @@
 import {constantTimeEqual, fromBase64Url, randomBytes, toBase64Url, utf8} from './encoding';
 
 /**
- * Password hashing: PBKDF2-HMAC-SHA256 through WebCrypto (no native modules,
- * so it runs on Workers), a fresh 16-byte salt per hash, a 32-byte key.
+ * Password hashing: scrypt through `node:crypto`, a fresh 16-byte salt per hash, a
+ * 32-byte key. Workers refuse PBKDF2 above 100,000 iterations (below OWASP's 600,000)
+ * and have no native Argon2; a JavaScript Argon2 takes ~2.7 s, so scrypt is the
+ * strongest choice that runs here. N=2^14, r=8, p=5 is one of OWASP's settings, and
+ * the cheapest of them measured on Workers: 16 MiB, ~160 ms per hash or verify. That
+ * is why every route that verifies a password is rate-limited first.
  *
- * Stored as a VERSIONED string, so the cost can be raised later without a
- * migration: a hash with fewer iterations than `CURRENT` still verifies and
- * reports `needsRehash`, and the login route re-hashes it on the spot.
+ * Stored as a VERSIONED string, so the cost can change later without a migration:
+ * an older hash still verifies where the runtime allows it and reports
+ * `needsRehash`, and the login route re-hashes it on the spot.
  *
- *   pbkdf2-sha256$v1$600000$<salt base64url>$<key base64url>
- *
- * Cost: ~45 ms of CPU per hash or verify on the Workers runtime (600k: OWASP's
- * figure for PBKDF2-HMAC-SHA256; older 210k hashes are re-hashed at sign-in). That is why
- * every route that verifies a password is rate-limited first.
+ *   scrypt$v1$16384$8$5$<salt base64url>$<key base64url>
+ *   pbkdf2-sha256$v1$100000$<salt base64url>$<key base64url>   (older: verify only)
  */
 export const PASSWORD_HASH = {
-  scheme: 'pbkdf2-sha256',
+  scheme: 'scrypt',
   version: 'v1',
-  iterations: 600_000,
+  N: 16_384,
+  r: 8,
+  p: 5,
   saltBytes: 16,
   keyBytes: 32,
 } as const;
@@ -25,14 +28,30 @@ export const PASSWORD_HASH = {
 /** Server and client agree on these (`src/lib/auth-rules.ts` mirrors them). */
 export const PASSWORD_LIMITS = {min: 10, max: 128} as const;
 
-/** Bounds on a STORED iteration count, so a corrupted row cannot stall the Worker. */
+const OLD_SCHEME = 'pbkdf2-sha256';
+/** Bounds on a STORED cost, so a corrupted row cannot stall the Worker. */
 const MIN_ITERATIONS = 100_000;
 const MAX_ITERATIONS = 2_000_000;
+const MIN_N = 2 ** 13;
+const MAX_N = 2 ** 17;
+const MAX_P = 10;
 
 /** NFKC so the same password typed on two keyboards hashes the same. */
 const normalize = (password: string) => password.normalize('NFKC');
 
-async function derive(password: string, salt: Uint8Array<ArrayBuffer>, iterations: number): Promise<Uint8Array> {
+type ScryptCost = {N: number; r: number; p: number};
+
+async function deriveScrypt(password: string, salt: Uint8Array<ArrayBuffer>, {N, r, p}: ScryptCost): Promise<Uint8Array> {
+  // Loaded here, not at the top: browser code imports PASSWORD_LIMITS from this file.
+  const {scrypt} = await import('node:crypto');
+  return new Promise((resolve, reject) => {
+    scrypt(utf8(normalize(password)), salt, PASSWORD_HASH.keyBytes, {N, r, p, maxmem: 2 * 128 * r * (N + p)}, (error, key) =>
+      error ? reject(error) : resolve(new Uint8Array(key))
+    );
+  });
+}
+
+async function derivePbkdf2(password: string, salt: Uint8Array<ArrayBuffer>, iterations: number): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey('raw', utf8(normalize(password)), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits(
     {name: 'PBKDF2', hash: 'SHA-256', salt, iterations},
@@ -42,30 +61,48 @@ async function derive(password: string, salt: Uint8Array<ArrayBuffer>, iteration
   return new Uint8Array(bits);
 }
 
-export async function hashPassword(password: string, iterations: number = PASSWORD_HASH.iterations): Promise<string> {
-  const salt = randomBytes(PASSWORD_HASH.saltBytes);
-  const key = await derive(password, salt, iterations);
-  return [PASSWORD_HASH.scheme, PASSWORD_HASH.version, iterations, toBase64Url(salt), toBase64Url(key)].join('$');
+export async function hashPassword(password: string): Promise<string> {
+  const {scheme, version, N, r, p, saltBytes} = PASSWORD_HASH;
+  const salt = randomBytes(saltBytes);
+  const key = await deriveScrypt(password, salt, {N, r, p});
+  return [scheme, version, N, r, p, toBase64Url(salt), toBase64Url(key)].join('$');
 }
 
-interface Parsed {
-  iterations: number;
-  salt: Uint8Array<ArrayBuffer>;
-  key: Uint8Array;
-}
+type Parsed =
+  | {kind: 'scrypt'; cost: ScryptCost; salt: Uint8Array<ArrayBuffer>; key: Uint8Array}
+  | {kind: 'pbkdf2'; iterations: number; salt: Uint8Array<ArrayBuffer>; key: Uint8Array};
+
+const whole = (text: string | undefined) => (text !== undefined && /^\d+$/.test(text) ? Number(text) : NaN);
 
 function parse(stored: string): Parsed | null {
   const parts = stored.split('$');
-  if (parts.length !== 5) return null;
-  const [scheme, version, rounds, salt64, key64] = parts as [string, string, string, string, string];
-  if (scheme !== PASSWORD_HASH.scheme || version !== PASSWORD_HASH.version) return null;
-  if (!/^\d+$/.test(rounds)) return null;
-  const iterations = Number(rounds);
-  if (iterations < MIN_ITERATIONS || iterations > MAX_ITERATIONS) return null;
-  const salt = fromBase64Url(salt64);
-  const key = fromBase64Url(key64);
+  const [scheme, version] = parts;
+  if (version !== PASSWORD_HASH.version) return null;
+  const salt = fromBase64Url(parts.at(-2) ?? '');
+  const key = fromBase64Url(parts.at(-1) ?? '');
   if (!salt || !key || salt.length < 16 || key.length !== PASSWORD_HASH.keyBytes) return null;
-  return {iterations, salt, key};
+  if (scheme === PASSWORD_HASH.scheme && parts.length === 7) {
+    const N = whole(parts[2]);
+    const r = whole(parts[3]);
+    const p = whole(parts[4]);
+    const powerOfTwo = Number.isInteger(Math.log2(N));
+    if (!powerOfTwo || N < MIN_N || N > MAX_N || r !== PASSWORD_HASH.r || !(p >= 1 && p <= MAX_P)) return null;
+    return {kind: 'scrypt', cost: {N, r, p}, salt, key};
+  }
+  if (scheme === OLD_SCHEME && parts.length === 5) {
+    const iterations = whole(parts[2]);
+    if (!(iterations >= MIN_ITERATIONS && iterations <= MAX_ITERATIONS)) return null;
+    return {kind: 'pbkdf2', iterations, salt, key};
+  }
+  return null;
+}
+
+const isCurrent = ({N, r, p}: ScryptCost) => N === PASSWORD_HASH.N && r === PASSWORD_HASH.r && p === PASSWORD_HASH.p;
+
+/** Same work as a real check, so a broken row or unknown address is not a timing oracle. */
+async function burn(password: string): Promise<void> {
+  const {N, r, p} = PASSWORD_HASH;
+  await deriveScrypt(password.slice(0, PASSWORD_LIMITS.max), randomBytes(16), {N, r, p});
 }
 
 /**
@@ -78,13 +115,21 @@ export async function verifyPassword(
 ): Promise<{ok: boolean; needsRehash: boolean}> {
   const parsed = parse(stored);
   if (!parsed || password.length > PASSWORD_LIMITS.max * 4) {
-    // Same work as a real check, so a broken row is not a timing oracle.
-    await derive(password.slice(0, PASSWORD_LIMITS.max), randomBytes(16), PASSWORD_HASH.iterations);
+    await burn(password);
     return {ok: false, needsRehash: false};
   }
-  const key = await derive(password, parsed.salt, parsed.iterations);
-  const ok = constantTimeEqual(key, parsed.key);
-  return {ok, needsRehash: ok && parsed.iterations < PASSWORD_HASH.iterations};
+  if (parsed.kind === 'scrypt') {
+    const ok = constantTimeEqual(await deriveScrypt(password, parsed.salt, parsed.cost), parsed.key);
+    return {ok, needsRehash: ok && !isCurrent(parsed.cost)};
+  }
+  try {
+    const ok = constantTimeEqual(await derivePbkdf2(password, parsed.salt, parsed.iterations), parsed.key);
+    return {ok, needsRehash: ok};
+  } catch {
+    // Workers refuse PBKDF2 above 100,000 iterations. This person signs in by email or resets it.
+    await burn(password);
+    return {ok: false, needsRehash: false};
+  }
 }
 
 /**
@@ -92,8 +137,7 @@ export async function verifyPassword(
  * when the email has no account, so "no such user" costs the same time as
  * "wrong password" (no user enumeration by timing).
  */
-export const DUMMY_PASSWORD_HASH =
-  'pbkdf2-sha256$v1$600000$wS110RKa2TFi7QjUo76uww$mfulC_fF1dXnE0A4JY35Jy5QD5n8oCRTzQunJcK4m5c';
+export const DUMMY_PASSWORD_HASH = 'scrypt$v1$16384$8$5$jIWw_e34wcMC0VDfa9vblQ$1hVERmuMP9dNVumGgy2F5AdiT9jK-80sGGPRtPQQrb8';
 
 /** Problems with a NEW password, in words; `null` when it is acceptable. */
 export function passwordProblem(password: string, email?: string): string | null {

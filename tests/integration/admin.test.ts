@@ -1,7 +1,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../src/server/app';
-import {Browser, configureEnv, DATABASE_URL, db, resetDatabase, signedIn, userId} from './support/harness';
+import {Browser, configureEnv, DATABASE_URL, db, ownerAccountId, ownerSignedIn, resetDatabase, signedIn, userId} from './support/harness';
 
 /** Users, roles and the anti-escalation rules, against a real Postgres. */
 describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
@@ -14,11 +14,11 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
   afterAll(() => db.$disconnect());
   beforeEach(async () => {
     await resetDatabase();
-    owner = await signedIn(app, 'owner@example.test', undefined, '203.0.113.1');
+    owner = await ownerSignedIn(app, undefined, '203.0.113.1');
     admin = await signedIn(app, 'admin@example.test', undefined, '203.0.113.2');
     member = await signedIn(app, 'member@example.test', undefined, '203.0.113.3');
     ids = {
-      owner: await userId('owner@example.test'),
+      owner: await ownerAccountId(),
       admin: await userId('admin@example.test'),
       member: await userId('member@example.test'),
     };
@@ -35,7 +35,7 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
     expect((list.json.users as {email: string}[]).map(u => u.email)).toEqual([
       'm•••@example.test',
       'admin@example.test',
-      'o•••@example.test',
+      '',
     ]);
     expect((await admin.get('/site-api/admin/users?email=MEMBER@example.test')).status).toBe(403);
     expect((await admin.get(`/site-api/admin/users/${ids.member}`)).json.user.email).toBe('m•••@example.test');
@@ -46,7 +46,7 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
     expect((list.json.users as {email: string}[]).map(u => u.email)).toEqual([
       'member@example.test',
       'admin@example.test',
-      'owner@example.test',
+      '', // The owner's account has no address to show: the site never gets it.
     ]);
     const found = await owner.get('/site-api/admin/users?email=MEMBER@example.test');
     expect((found.json.users as unknown[]).length).toBe(1);
@@ -80,29 +80,11 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
     expect(await db.auditEvent.count({where: {action: 'user_suspended'}})).toBe(1);
   });
 
-  it('nobody suspends themselves, and the last owner keeps the role', async () => {
+  it('nobody suspends themselves; nobody gives, takes or touches owner, the owner included', async () => {
     expect((await owner.request('PATCH', `/site-api/admin/users/${ids.owner}`, {status: 'suspended'})).status).toBe(403);
     expect((await owner.request('PUT', `/site-api/admin/users/${ids.owner}/roles`, {roles: ['member']})).status).toBe(403);
-    // With a second owner, the first may step down.
-    expect((await owner.request('PUT', `/site-api/admin/users/${ids.member}/roles`, {roles: ['member', 'owner']})).status).toBe(200);
-    expect((await owner.request('PUT', `/site-api/admin/users/${ids.owner}/roles`, {roles: ['member']})).status).toBe(200);
-  });
-
-  it('two owners removing each other at the same moment never leave the site with no owner (PIPE-13)', async () => {
-    expect((await owner.request('PUT', `/site-api/admin/users/${ids.member}/roles`, {roles: ['member', 'owner']})).status).toBe(200);
-    for (let round = 0; round < 3; round++) {
-      const [a, b] = await Promise.all([
-        owner.request('PUT', `/site-api/admin/users/${ids.member}/roles`, {roles: ['member']}),
-        member.request('PUT', `/site-api/admin/users/${ids.owner}/roles`, {roles: ['member']}),
-      ]);
-      const owners = await db.userRole.count({where: {role: {slug: 'owner'}}});
-      expect(owners).toBe(1);
-      expect([a.status, b.status].sort()).toEqual([200, 403]);
-      // Put the second owner back (whoever is left does it) for the next round.
-      const left = (await db.userRole.findFirstOrThrow({where: {role: {slug: 'owner'}}, select: {userId: true}})).userId;
-      const [keeper, other] = left === ids.owner ? [owner, ids.member] : [member, ids.owner];
-      expect((await keeper.request('PUT', `/site-api/admin/users/${other}/roles`, {roles: ['member', 'owner']})).status).toBe(200);
-    }
+    expect((await owner.request('PUT', `/site-api/admin/users/${ids.member}/roles`, {roles: ['member', 'owner']})).status).toBe(403);
+    expect(await db.userRole.count({where: {role: {slug: 'owner'}}})).toBe(1);
   });
 
   it('roles: only permissions you hold can be granted; owner and built-ins are protected', async () => {
@@ -149,7 +131,7 @@ describe.skipIf(!DATABASE_URL)('admin (integration, real Postgres)', () => {
     );
     expect(members.admin).toEqual({count: 1, more: false});
     expect(members.owner?.count).toBeGreaterThanOrEqual(1);
-    expect(members.member?.count).toBe(3);
+    expect(members.member?.count).toBe(2);
   });
 
   it('an admin turns off a member\'s two-step sign-in, but never an owner\'s', async () => {

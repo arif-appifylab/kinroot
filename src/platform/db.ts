@@ -1,8 +1,8 @@
 import {PrismaPg} from '@prisma/adapter-pg';
-import {PrismaPostgresAdapter} from '@prisma/adapter-ppg';
 
 import {PrismaClient} from '../generated/prisma/client';
 import {config} from './config';
+import {SocketAdapter} from './db-socket';
 import {scopedValue} from './request-scope';
 
 /**
@@ -14,8 +14,10 @@ import {scopedValue} from './request-scope';
  * across requests: a Worker must not share I/O objects between requests.
  *
  * Which driver is decided by the connection string's HOST:
- *   - Prisma Postgres (`*.prisma.io`, live and Preview): `@prisma/adapter-ppg`,
- *     over HTTPS. Deployed sites only ever get this; raw TCP is blocked there.
+ *   - Prisma Postgres (`*.prisma.io`, live and Preview): `db-socket.ts`, one
+ *     WebSocket per request, with Prisma's HTTPS driver as its fallback. Deployed
+ *     sites only ever get this; raw TCP is blocked there. `SITE_DB_TRANSPORT=https`
+ *     (set only by the platform) turns the socket off.
  *   - any other host (a local Postgres, tests):
  *     `@prisma/adapter-pg` over TCP, one short-lived connection per request.
  */
@@ -29,9 +31,9 @@ export function isPrismaPostgres(url: string): boolean {
 }
 
 export function createDb(url: string): PrismaClient {
-  const adapter = isPrismaPostgres(url)
-    ? new PrismaPostgresAdapter({connectionString: url})
-    : new PrismaPg({connectionString: url, max: 1, idleTimeoutMillis: 1000});
+  const adapter = !isPrismaPostgres(url)
+    ? new PrismaPg({connectionString: url, max: 1, idleTimeoutMillis: 1000})
+    : new SocketAdapter({connectionString: url, socket: config.dbTransport !== 'https'});
   return new PrismaClient({adapter});
 }
 

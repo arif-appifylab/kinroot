@@ -1,4 +1,5 @@
 import {sign} from '../kit/crypto';
+import {shownEmail} from '../lib/owner-account';
 
 export type MergeContext = {
   contact?: {firstName: string; lastName: string | null; email: string | null; title: string | null} | null;
@@ -27,7 +28,7 @@ export function mergeFields(template: string, ctx: MergeContext, opts: {html?: b
     'deal.value': ctx.deal ? money(ctx.deal.value, ctx.deal.currency) : null,
     'me.name': ctx.me.name,
     'me.first_name': ctx.me.name.split(' ')[0],
-    'me.email': ctx.me.email,
+    'me.email': shownEmail(ctx.me.email),
     unsubscribe_url: ctx.unsubscribeUrl,
   };
   return template.replace(/\{\{\s*([a-z_.]+)\s*(?:\|([^}]*))?\}\}/gi, (_, key: string, fallback?: string) => {

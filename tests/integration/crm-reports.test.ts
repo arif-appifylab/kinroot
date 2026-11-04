@@ -1,7 +1,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {cache} from '../../src/platform/cache';
-import {owner, resetCrm, teammate, userId} from './support/crm';
+import {owner, ownerAccountId, resetCrm, teammate, userId} from './support/crm';
 import {type Browser, configureEnv, DATABASE_URL, db} from './support/harness';
 
 /**
@@ -29,7 +29,7 @@ async function seed() {
   ownerBrowser = await owner();
   await ownerBrowser.get('/site-api/crm/auth/state'); // the owner's first visit makes their team row
   ({browser: memberBrowser} = await teammate(ownerBrowser, 'maya@example.com'));
-  const me = await db.member.findUniqueOrThrow({where: {userId: await userId('owner@example.com')}});
+  const me = await db.member.findUniqueOrThrow({where: {userId: await ownerAccountId()}});
   const maya = await db.member.findUniqueOrThrow({where: {userId: await userId('maya@example.com')}});
 
   const pipeline = await db.pipeline.create({data: {name: 'Sales', position: 0}});
@@ -99,7 +99,7 @@ describe.skipIf(!DATABASE_URL)('Kinroot reports (integration, real Postgres)', (
   it('labels refs, breaks down a non-additive measure and answers the picker list', async () => {
     const avg = await run(ownerBrowser, {object: 'deals', measure: {op: 'avg', field: 'value'}, groupBy: {field: 'stage'}, breakdown: {field: 'owner'}});
     expect(totals(avg)).toEqual({Qualified: 150, Proposal: 300});
-    expect(avg.series.map(s => s.label).sort()).toEqual(['No owner', 'maya', 'owner'].sort());
+    expect(avg.series.map(s => s.label).sort()).toEqual(['No owner', 'maya', 'Site owner'].sort()); // the site owner's account name
 
     const kpi = await run(ownerBrowser, {object: 'deals', measure: {op: 'sum', field: 'custom.score'}, chart: 'kpi', compare: true, filters: {range: {preset: 'last_30'}, conditions: []}});
     expect(kpi.total).toBeDefined();

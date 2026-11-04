@@ -24,7 +24,7 @@ how the site talks to the platform and how it signs people in, safely:
 | `routes.ts`      | `/site-api/auth/*`: register, verify, login, refresh, logout, reset…  |
 | `admin.ts`       | `/site-api/admin/*`: users, roles, audit log (anti-escalation)        |
 | `session.ts`     | `getViewer()` / `getAccess()`: who is visiting, what they may do     |
-| `password.ts`    | PBKDF2-SHA256 (600k, versioned hash strings), password rules         |
+| `password.ts`    | scrypt (OWASP N=2^14, r=8, p=5; versioned hash strings), password rules |
 | `jwt.ts`         | HS256 access tokens (10 min), strict verification                    |
 | `refresh.ts`     | opaque refresh tokens: families, rotation, reuse detection           |
 | `rate-limit.ts`  | per email+IP / email / IP limits with exponential backoff            |

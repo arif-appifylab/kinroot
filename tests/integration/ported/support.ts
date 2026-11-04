@@ -6,8 +6,8 @@ import {inRequestScope} from '../../../src/platform/request-scope';
 import {app} from '../../../src/server/app';
 import type {Db} from '../../../src/server/crm/kit/db';
 import {drainBacklog} from '../../../src/server/crm/lib/jobs';
-import {setRoles} from '../support/crm';
-import {type Browser, db, ORIGIN, signedIn} from '../support/harness';
+import {owner, ownerAt} from '../support/crm';
+import {type Browser, db, ORIGIN} from '../support/harness';
 
 /**
  * Helpers shared by the tests ported from Kinroot's scripts/test-*.mjs: the original scripts drove a
@@ -25,10 +25,12 @@ export function must<T = Record<string, any>>(res: Res, what: string): T {
   return res.json as T;
 }
 
-/** The site owner (any address), signed in and made the CRM Owner by its first visit. */
-export async function crmOwner(email = 'owner@example.com'): Promise<{browser: Browser; me: Member}> {
-  const browser = await signedIn(app, email);
-  await setRoles(email, 'owner');
+/**
+ * A CRM Owner, signed in: the site owner ("View as admin", made the CRM Owner by its first visit), or
+ * with `email`, an Owner at that real address (the site owner has none: `ownerAt`).
+ */
+export async function crmOwner(email?: string): Promise<{browser: Browser; me: Member}> {
+  const browser = email ? (await ownerAt(email)).browser : await owner();
   const state = await browser.get('/site-api/crm/auth/state');
   expect(state.status).toBe(200);
   return {browser, me: state.json.user as Member};

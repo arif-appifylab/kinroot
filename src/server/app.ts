@@ -2,7 +2,7 @@ import {Hono} from 'hono';
 import {bodyLimit} from 'hono/body-limit';
 
 import {isPreview} from '../platform/api';
-import {adminRoutes, authRoutes, getAccess, getViewer, ownerClaimMode} from '../platform/auth';
+import {adminRoutes, authRoutes, getAccess, getViewer} from '../platform/auth';
 import {config} from '../platform/config';
 import {csrf, previewCookies, problem, sameOrigin} from '../platform/guards';
 import {syncPermissions} from '../platform/permission-sync';
@@ -58,8 +58,6 @@ export const app = new Hono()
       database: Boolean(config.databaseUrl),
       auth: Boolean(config.jwtSecret && config.databaseUrl),
       siteKey: Boolean(config.siteKey),
-      // false = the live site has no owner email, so nobody can become owner.
-      ownerSetup: !authSettings.firstUserBecomesOwner || ownerClaimMode(authSettings) !== 'off',
     })
   )
 

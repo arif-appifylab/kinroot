@@ -5,6 +5,7 @@ import {getAccess} from '../../../platform/auth';
 import {maskEmail} from '../../../platform/auth/admin';
 import {SYSTEM_ROLES} from '../../../platform/auth/codenames';
 import type {User} from '../kit/guards';
+import {isOwnerAddress} from './owner-account';
 
 /**
  * Team members' email addresses follow the site's rule (AGENTS.md › Never): an address is seen
@@ -33,9 +34,12 @@ export async function seesEmails(c: Context): Promise<boolean> {
 /** The only shape of a team member that leaves the server for the team list and the profile. */
 export function publicUser(user: Member & {email?: string | null}, view: {meId: string | null; owner: boolean}) {
   const email = user.email ?? user.inviteEmail ?? '';
+  // The site owner's account has no address on the site: shown as "Account owner".
+  const accountOwner = isOwnerAddress(email);
   return {
     id: user.id,
-    email: view.owner || user.id === view.meId ? email : maskEmail(email),
+    email: accountOwner ? '' : view.owner || user.id === view.meId ? email : maskEmail(email),
+    accountOwner,
     name: user.name,
     role: user.role,
     color: user.color,

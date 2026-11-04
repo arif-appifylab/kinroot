@@ -131,7 +131,7 @@ function UserMenu() {
       <DropdownMenuContent className="w-56">
         <DropdownMenuLabel>
           <p className="text-sm font-semibold text-slate-900">{me.name}</p>
-          <p className="truncate text-xs font-normal">{me.email}</p>
+          <p className="truncate text-xs font-normal">{me.accountOwner ? 'Site owner' : me.email}</p>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => navigate({to: '/settings/profile'})}><UserCog /> Profile & security</DropdownMenuItem>

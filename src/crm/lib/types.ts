@@ -19,7 +19,8 @@ export type FieldType = P.FieldType;
 export type EmailProvider = P.EmailProvider;
 
 export type UserLite = {id: string; name: string; email: string; color: string; avatarUrl?: string | null};
-export type Me = UserLite & {role: Role; active: boolean; invited: boolean; lastSeenAt: string | null};
+/** `accountOwner`: the site owner's account, which has no email address on the site (it comes from the dashboard). */
+export type Me = UserLite & {role: Role; active: boolean; invited: boolean; lastSeenAt: string | null; accountOwner?: boolean};
 
 export type Stage = Jsonify<P.Stage>;
 export type Pipeline = Jsonify<P.Pipeline> & {stages: Stage[]; _count?: {deals: number}};

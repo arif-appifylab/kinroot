@@ -1,6 +1,6 @@
 import type {Hono} from 'hono';
 
-import {resetOwnerAccountsForTests} from '../../../src/platform/auth/owner';
+import {resetOwnerSeatForTests} from '../../../src/platform/auth/owner-seat';
 import {PREVIEW_COOKIE_HEADER, PREVIEW_SET_COOKIE_HEADER} from '../../../src/platform/auth/preview-cookies';
 import {createDb, getDb} from '../../../src/platform/db';
 import {inRequestScope} from '../../../src/platform/request-scope';
@@ -28,6 +28,7 @@ export function configureEnv() {
   env.SITE_URL = PLATFORM;
   env.SITE_KEY = process.env.TEST_SITE_KEY ?? 'stk_test_stub';
   env.SITE_PREVIEW = '';
+  env.SITE_OWNER_ID = OWNER_ID;
 }
 
 export interface SentEmail {
@@ -40,6 +41,10 @@ export interface SentEmail {
   /** The real platform's answer, when TEST_PLATFORM_URL is set. */
   platformStatus?: number;
 }
+
+/** The platform's opaque id for this site's owner. */
+export const OWNER_ID = Buffer.alloc(32, 1).toString('base64url');
+export const NEXT_OWNER_ID = Buffer.alloc(32, 2).toString('base64url');
 
 export const emails: SentEmail[] = [];
 const realFetch = globalThis.fetch;
@@ -89,7 +94,7 @@ function assertContract(body: Record<string, unknown>) {
  * One-click owner sign-in tickets the fake platform will redeem ONCE
  * (`POST /api/site/v1/owner-sign-in`, apps/api owner_sign_in.service.ts): ticket → answer.
  */
-export const ownerTickets = new Map<string, {email: string; name: string; ownerEmails: string[]}>();
+export const ownerTickets = new Map<string, {ownerId: string}>();
 
 globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -143,10 +148,10 @@ export async function resetDatabase() {
     'TRUNCATE "users", "user_roles", "refresh_tokens", "password_resets", "email_verifications", "email_changes", "recovery_codes", "sign_in_codes", "login_attempts", "audit_events", "job_deliveries" RESTART IDENTITY CASCADE'
   );
   await db.$executeRawUnsafe('DELETE FROM "roles" WHERE NOT "is_system"');
-  await db.$executeRawUnsafe('UPDATE "auth_state" SET "owner_user_id" = NULL');
+  await db.$executeRawUnsafe('UPDATE "auth_state" SET "owner_user_id" = NULL, "owner_env_id" = NULL');
   emails.length = 0;
   ownerTickets.clear();
-  resetOwnerAccountsForTests();
+  resetOwnerSeatForTests();
 }
 
 type App = Pick<Hono, 'request'>;
@@ -245,22 +250,23 @@ export async function signedIn(app: App, email: string, password = 'a long test 
   return browser;
 }
 
-/**
- * An OWNER address (`ownerEmails` / `SITE_OWNER_EMAILS`) signing up: register,
- * confirm (which drops the registered password and emails a link to choose
- * one), set the password through that link (which claims owner), sign in.
- */
-export async function ownerSignedIn(app: App, email: string, password = 'a long test passphrase', ip?: string) {
+let ticketCount = 0;
+
+/** The account's owner pressing "View as admin": the one way to become owner. */
+export async function ownerSignedIn(app: App, ownerId = OWNER_ID, ip?: string) {
+  const ticket = `T${String(++ticketCount).padStart(42, '0')}`;
+  ownerTickets.set(ticket, {ownerId});
   const browser = new Browser(app, ip);
-  const reg = await browser.post('/site-api/auth/register', {email, name: email.split('@')[0], password: 'a squat-proof first pass'});
-  if (reg.status !== 202) throw new Error(`register ${reg.status} ${JSON.stringify(reg.json)}`);
-  const verify = await browser.post('/site-api/auth/verify-email', {token: tokenFrom('verify_email', email)});
-  if (verify.status !== 200 || verify.json.setPassword !== true) throw new Error(`verify ${verify.status} ${JSON.stringify(verify.json)}`);
-  const reset = await browser.post('/site-api/auth/reset-password', {token: tokenFrom('password_reset', email), password});
-  if (reset.status !== 200) throw new Error(`reset ${reset.status} ${JSON.stringify(reset.json)}`);
-  const login = await browser.post('/site-api/auth/login', {email, password});
-  if (login.status !== 200) throw new Error(`login ${login.status} ${JSON.stringify(login.json)}`);
+  const res = await browser.get(`/site-api/auth/owner?ticket=${ticket}`);
+  if (res.status !== 303 || res.headers.get('location')?.includes('notice=')) {
+    throw new Error(`owner sign-in ${res.status} ${res.headers.get('location')}`);
+  }
   return browser;
+}
+
+/** The owner account's `users.id`. */
+export async function ownerAccountId(ownerId = OWNER_ID): Promise<number> {
+  return (await db.user.findUniqueOrThrow({where: {platformOwnerId: ownerId}, select: {id: true}})).id;
 }
 
 export async function userId(email: string): Promise<number> {

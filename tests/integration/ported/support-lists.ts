@@ -4,7 +4,7 @@ import {getDb} from '../../../src/platform/db';
 import {inRequestScope} from '../../../src/platform/request-scope';
 import type {Db} from '../../../src/server/crm/kit/db';
 import {app} from '../../../src/server/app';
-import {owner, setRoles} from '../support/crm';
+import {owner, ownerAt} from '../support/crm';
 import {type Browser, ORIGIN, signedIn} from '../support/harness';
 
 /**
@@ -40,12 +40,11 @@ export type Me = {id: string; name: string; email: string; role: string};
 
 /**
  * The signed-in CRM Owner, after the workspace setup (default pipeline; demo data when asked).
- * `email`: an owner at another address than the harness's owner@example.com (system emails skip
- * reserved test domains, so a test that reads the owner's mail needs a real-looking one).
+ * `email`: an Owner at a real-looking address (the site owner has none, and system emails skip
+ * reserved test domains, so a test that reads the owner's mail needs one).
  */
 export async function workspace(demoData = false, email?: string) {
-  const browser = email ? await signedIn(app, email) : await owner();
-  if (email) await setRoles(email, 'owner');
+  const browser = email ? (await ownerAt(email)).browser : await owner();
   const c = crm(browser);
   const state = must<{user: Me; needsSetup: boolean}>(await c.get('/auth/state'), 'state');
   if (state.needsSetup) must(await c.post('/auth/setup', {brandName: 'Kinroot', demoData}), 'setup');

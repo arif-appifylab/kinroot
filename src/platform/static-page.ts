@@ -49,9 +49,9 @@ const initials = (name: string) =>
     .join('');
 
 async function hydrateSession(): Promise<void> {
-  let me = await getJson<{viewer: Viewer}>('/site-api/me');
+  let me = await getJson<{viewer: Viewer; abilities?: Record<string, boolean>}>('/site-api/me');
   if (me?.viewer.state === 'returning' && (await refreshSession())) {
-    me = await getJson<{viewer: Viewer}>('/site-api/me');
+    me = await getJson<{viewer: Viewer; abilities?: Record<string, boolean>}>('/site-api/me');
   }
   const viewer = me?.viewer;
   if (!viewer || viewer.state !== 'user') return;
@@ -59,6 +59,8 @@ async function hydrateSession(): Promise<void> {
   document.body.dataset.viewer = viewer.state;
   for (const el of document.querySelectorAll<HTMLElement>('[data-user-only]')) el.hidden = false;
   for (const el of document.querySelectorAll<HTMLElement>('[data-guest-only]')) el.hidden = true;
+  // Something only some signed-in people may use (`data-ability="manageJobs"`). Showing it decides nothing: the route checks.
+  for (const el of document.querySelectorAll<HTMLElement>('[data-ability]')) el.hidden = !me?.abilities?.[el.dataset.ability!];
 
   const session = document.querySelector<HTMLElement>('[data-session]');
   if (!session) return;

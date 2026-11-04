@@ -12,6 +12,8 @@ import {env} from 'cloudflare:workers';
  *                                   (relayed emails). Server only.
  *   databaseUrl DATABASE_URL        secret: the Site Database (the Preview
  *                                   Database in the editor).
+ *   dbTransport SITE_DB_TRANSPORT  a plain var, set only by the platform: `https` turns the
+ *                                  database socket off (`db-socket.ts`). Normally unset.
  *   jobsSecret  SITE_JOBS_SECRET  secret: checks that a background-job
  *                                   delivery really came from the dashboard
  *                                   (`src/platform/background.ts`). Platform-managed.
@@ -20,21 +22,8 @@ import {env} from 'cloudflare:workers';
  *                                   at least 32 characters. Rotating it signs
  *                                   everyone out of their access token (their
  *                                   refresh token still works).
- *   ownerEmails SITE_OWNER_EMAILS    a plain var: the site owner's address(es),
- *                                   comma separated, set at each Deploy. Only
- *                                   these (and `ownerEmails` in
- *                                   src/server/auth-settings.ts) may claim the
- *                                   owner role on a live site.
- *   production  (no variable)       true on the deployed site: a production
- *                                   build that is not the editor Preview.
- *   ownerSecret(NAME)               a secret the OWNER added in the dashboard
- *                                   (another service's API key: a payment
- *                                   provider, mail, SMS, AI…): test value in
- *                                   `staging` (the Preview), live in
- *                                   `production`. Never a platform name.
- *
- * Server code only. Never send a value to the browser, log it, or write it to
- * a file.
+ *   ownerId     SITE_OWNER_ID   a plain var: the platform's opaque id for the account's owner. Never an
+ *                                   email. A change means the site changed hands (auth/owner-seat.ts).
  */
 /** The platform's own names: never readable as an owner secret. */
 const PLATFORM_NAMES = /^(SITE_|DATABASE_URL$|JWT_SECRET$)/;
@@ -52,6 +41,9 @@ export const config = {
   get databaseUrl(): string | null {
     return env.DATABASE_URL || null;
   },
+  get dbTransport(): string | null {
+    return env.SITE_DB_TRANSPORT || null;
+  },
   get jobsSecret(): string | null {
     return env.SITE_JOBS_SECRET || null;
   },
@@ -59,11 +51,8 @@ export const config = {
     const secret = env.JWT_SECRET ?? '';
     return secret.length >= 32 ? secret : null;
   },
-  get ownerEmails(): string[] {
-    return (env.SITE_OWNER_EMAILS ?? '')
-      .split(',')
-      .map(email => email.trim().toLowerCase())
-      .filter(email => /^[^\s@]+@[^\s@]+$/.test(email));
+  get ownerId(): string | null {
+    return env.SITE_OWNER_ID || null;
   },
   ownerSecret(name: string): string | null {
     if (!/^[A-Z][A-Z0-9_]{1,63}$/.test(name) || PLATFORM_NAMES.test(name)) return null;

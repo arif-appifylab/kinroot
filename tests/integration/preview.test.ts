@@ -42,9 +42,9 @@ describe.skipIf(!DATABASE_URL)('the editor Preview (integration, real Postgres)'
 
       const me = await browser.get('/site-api/auth/me');
       expect(me.status).toBe(200);
-      // The Preview's first account becomes owner (no owner list there).
-      expect(me.json.roles).toEqual(expect.arrayContaining(['owner']));
-      expect((await db.authState.findUniqueOrThrow({where: {id: 1}})).ownerUserId).toBe(await userId('maker@example.test'));
+      // The Preview's first account is a normal user, as everywhere: owner comes only from a ticket.
+      expect(me.json.roles).toEqual(['member']);
+      expect((await db.authState.findUniqueOrThrow({where: {id: 1}})).ownerUserId).toBeNull();
 
       const before = browser.cookie('site_rt');
       expect((await browser.post('/site-api/auth/refresh')).status).toBe(200);

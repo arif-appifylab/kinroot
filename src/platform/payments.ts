@@ -84,6 +84,12 @@ export interface CheckoutInput {
   gateway?: string;
   /** Charge now, without the price's free trial (after `E_SITE_PAYMENTS_TRIAL_USED`). */
   noTrial?: boolean;
+  /**
+   * This purchase attempt (16 to 64 letters, digits, - or _): the same key again is the same
+   * checkout, or `paid: true` once it's paid. Never a second one. Omitted with a `customerRef`:
+   * made from the buyer and the purchase, the same for 2 minutes.
+   */
+  idempotencyKey?: string;
 }
 
 /** What the payment provider's popup needs (`kind: 'popup'`): `src/lib/checkout-session.ts` opens it. */
@@ -109,8 +115,10 @@ export type EmbeddedCheckout =
 export interface CreatedCheckout {
   id: string;
   mode: PaymentMode;
-  /** How the buyer pays (always set): mount `EmbeddedCheckout` with it. */
+  /** How the buyer pays: mount `EmbeddedCheckout` with it. Null only with `paid`. */
   embedded: EmbeddedCheckout;
+  /** This `idempotencyKey` has already been paid: send the buyer to the thanks page, nothing was started. */
+  paid?: true;
 }
 
 /** A way to pay the buyer may choose (`listGateways`). */
@@ -174,6 +182,7 @@ export type PaymentResult<T> = {ok: true; data: T} | {ok: false; status: number;
 
 const TIMEOUT_MS = 8000;
 const KEY = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{16,64}$/;
 const CHECKOUT_ID = /^pcs_[A-Za-z0-9]{8,64}$/;
 const SUB_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const EMAIL = /^[^\s@]{1,64}@[^\s@]{1,190}$/;
@@ -290,6 +299,13 @@ export async function listGateways(requestUrl: string | URL, price: string): Pro
   return {ok: true, data: list.filter(g => g && GATEWAY.test(g.slug) && typeof g.name === 'string')};
 }
 
+/** A key for an attempt with no key of its own: the same parts in the same 2 minutes are the same key. */
+export async function checkoutAttemptKey(parts: unknown[], now: number = Date.now()): Promise<string> {
+  const text = new TextEncoder().encode(JSON.stringify([...parts, Math.floor(now / 120_000)]));
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', text));
+  return Array.from(hash.slice(0, 24), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
 /**
  * Start a checkout for one price. Answers `embedded`: how the buyer pays without leaving this
  * site (mount `EmbeddedCheckout`). The amount is the catalogue's, never yours. 409
@@ -297,6 +313,9 @@ export async function listGateways(requestUrl: string | URL, price: string): Pro
  * call again with `noTrial: true`.
  */
 export async function createCheckout(requestUrl: string | URL, input: CheckoutInput): Promise<PaymentResult<CreatedCheckout>> {
+  if (input.idempotencyKey !== undefined && !IDEMPOTENCY_KEY.test(input.idempotencyKey)) {
+    return refused('E_IDEMPOTENCY_KEY', 'idempotencyKey is 16 to 64 letters, digits, - or _.');
+  }
   if (!KEY.test(input.price ?? '')) return refused('E_PRICE_KEY', 'Unknown price.');
   const quantity = input.quantity ?? 1;
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) return refused('E_QUANTITY', 'Quantity is 1 to 99.');
@@ -315,7 +334,18 @@ export async function createCheckout(requestUrl: string | URL, input: CheckoutIn
   }
   if (input.gateway !== undefined && !GATEWAY.test(input.gateway)) return refused('E_GATEWAY', 'Unknown way to pay.');
   const {noTrial, ...rest} = input;
-  return call<CreatedCheckout>(requestUrl, 'POST', '/checkout', {...rest, quantity, metadata, ...(noTrial ? {noTrial: true} : {})});
+  const idempotencyKey =
+    input.idempotencyKey ??
+    (input.customerRef
+      ? await checkoutAttemptKey([input.customerRef, input.price, quantity, input.gateway ?? null, !!noTrial, metadata])
+      : undefined);
+  return call<CreatedCheckout>(requestUrl, 'POST', '/checkout', {
+    ...rest,
+    quantity,
+    metadata,
+    ...(noTrial ? {noTrial: true} : {}),
+    ...(idempotencyKey ? {idempotencyKey} : {}),
+  });
 }
 
 /** One checkout by id (`pcs_…`): status, amount, subscription. Works in the Preview (no events there). */

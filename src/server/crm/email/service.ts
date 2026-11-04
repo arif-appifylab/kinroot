@@ -19,6 +19,7 @@ import {type Address, type Attachment, newMessageId} from './mime';
 import {accountCredentials} from './oauth';
 import {deliver, isReservedAddress, reachesReserved} from './providers';
 import {addTracking, htmlToText, mergeFields, textToHtml} from './render';
+import {isOwnerAddress, notifyOwner, shownEmail} from '../lib/owner-account';
 import {teamAddresses} from '../lib/users';
 
 export type SendInput = {
@@ -305,10 +306,21 @@ export async function ingestMessage(db: Db, account: EmailAccount | null, incomi
 
 /**
  * Sends a plain notification email (no tracking, no timeline entry) from a
- * shared team account, else any connected account. Returns false when no
- * account can send, so callers can fall back to in-app notifications.
+ * shared team account, else any connected account. The site owner (who has no
+ * address here) gets it from the platform instead, as text (`notifyOwner`).
+ * Returns false when nobody could be sent it, so callers can fall back to
+ * in-app notifications.
  */
 export async function sendSystemEmail(db: Db, input: {to: string[]; subject: string; text: string; html?: string | null; replyTo?: string | null; attachments?: Attachment[]}) {
+  const toOwner = input.to.some(isOwnerAddress);
+  const others = input.to.filter((e) => e && !isOwnerAddress(e));
+  const owner = toOwner ? notifyOwner({subject: input.subject, text: input.text}) : Promise.resolve(false);
+  const team = others.length ? sendFromTeamAccount(db, {...input, to: others}) : Promise.resolve(false);
+  const [ownerSent, teamSent] = await Promise.all([owner, team]);
+  return ownerSent || teamSent;
+}
+
+async function sendFromTeamAccount(db: Db, input: {to: string[]; subject: string; text: string; html?: string | null; replyTo?: string | null; attachments?: Attachment[]}) {
   const account = await systemAccount(db);
   if (!account) return false;
   // Test addresses (demo users, seed data) are skipped instead of failing the whole send.
@@ -322,7 +334,8 @@ export async function sendSystemEmail(db: Db, input: {to: string[]; subject: str
     html: input.html ?? (await systemEmailHtml(db, input.text, config.siteUrl() ?? '')),
     text: input.text,
     messageId: newMessageId(account.fromEmail),
-    replyTo: input.replyTo ?? undefined,
+    // Never the owner's placeholder: a reply to it would go nowhere.
+    replyTo: shownEmail(input.replyTo) || undefined,
     attachments: input.attachments,
   });
   return true;

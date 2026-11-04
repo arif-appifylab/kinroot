@@ -22,6 +22,7 @@ import {
   maybeSweep,
   newLinkToken,
   NO_PASSWORD,
+  notForOwnerAccount,
   publicUser,
   raw,
   refreshCookieOf,
@@ -32,7 +33,7 @@ import {
   text,
 } from './kit';
 import {codeRoutes} from './code-routes';
-import {claimOwnerIfFirst, ownerAddressUnclaimed, ownerRoutes} from './owner';
+import {ownerRoutes} from './owner';
 import {securityRoutes} from './security-routes';
 import {signChallenge} from './two-factor';
 import {getAccess} from './session';
@@ -241,12 +242,6 @@ export function authRoutes(settings: AuthSettings) {
             return c.json({ok: true, message: GENERIC.registered}, 202);
           }
           await registered;
-          // Nothing is proven yet: only the no-list claim (`first`) can apply. An owner
-          // address gets a link to choose its password, and claims owner through it.
-          await claimOwnerIfFirst(c, settings, user, keys.ipHash, 'register');
-          if (await ownerAddressUnclaimed(c, settings, user.email)) {
-            background(c, issuePasswordReset(c, user, keys.ipHash));
-          }
           await startSession(c, user, keys.ipHash);
           return c.json({ok: true, user: publicUser(user), next: settings.afterSignInPath}, 201);
         }
@@ -288,12 +283,11 @@ export function authRoutes(settings: AuthSettings) {
           const {ipHash} = await keysFor(c, null);
           await audit(db, {actorUserId: row.userId, action: 'email_verified', target: ['user', row.userId], ipHash});
           const user = {id: row.userId, email: row.email};
-          // Contested (signed up twice, see /register) or an owner address: whoever
-          // registered chose the password, and that may not be the person who owns the
-          // inbox. The password is dropped (every session ends) and the inbox gets a
-          // link to choose one; for an owner address, owner goes with it.
+          // Contested (signed up twice, see /register): whoever registered chose the password,
+          // and that may not be the person who owns the inbox. The password is dropped (every
+          // session ends) and the inbox gets a link to choose one.
           const contested = row.user.passwordHash === NO_PASSWORD;
-          if (contested || (await ownerAddressUnclaimed(c, settings, user.email))) {
+          if (contested) {
             await db.user.update({
               where: {id: user.id},
               data: {passwordHash: NO_PASSWORD, sessionVersion: {increment: 1}},
@@ -307,7 +301,6 @@ export function authRoutes(settings: AuthSettings) {
               message: `Your email is confirmed. We sent you a link to choose your password. Open it within ${RESET_TTL_MINUTES} minutes to finish.`,
             });
           }
-          await claimOwnerIfFirst(c, settings, user, ipHash, 'verify');
           return c.json({ok: true, message: 'Your email is confirmed. You can sign in now.'});
         }
       )
@@ -573,8 +566,6 @@ export function authRoutes(settings: AuthSettings) {
           await refreshStore(db).revokeAllForUser(row.userId, now, 'password');
           const {ipHash} = await keysFor(c, null);
           await audit(db, {actorUserId: row.userId, action: 'password_reset', target: ['user', row.userId], ipHash});
-          // The inbox is proven AND this person chose the password: an owner address claims owner here.
-          await claimOwnerIfFirst(c, settings, {id: row.userId, email: row.user.email}, ipHash, 'reset');
           sendEmail(c, {kind: 'password_changed', to: row.user.email});
           clearSession(c);
           return c.json({ok: true, message: 'Your password is changed. Sign in with the new one.'});
@@ -597,6 +588,7 @@ export function authRoutes(settings: AuthSettings) {
         }),
         withViewer,
         requireAuth,
+        notForOwnerAccount,
         withAuthCore,
         async c => {
           const {currentPassword, newPassword} = c.req.valid('json');

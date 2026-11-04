@@ -135,6 +135,14 @@ export function maybeSweep(c: Ctx) {
 /** A stored hash no password matches (`verifyPassword` answers no, at full cost). */
 export const NO_PASSWORD = '!';
 
+/** The site owner's sign-in lives in the dashboard: nothing about it is set from inside the site. */
+export const notForOwnerAccount = async (c: Ctx, next: () => Promise<void>) => {
+  if (c.var.viewer.platformOwner) {
+    return c.json(problem('owner_account', 'Your access comes from the dashboard, so there is nothing to change here.'), 403);
+  }
+  return next();
+};
+
 export const publicUser = (user: {id: number; name: string; email: string; emailVerifiedAt: Date | null}) => ({
   id: user.id,
   name: user.name,

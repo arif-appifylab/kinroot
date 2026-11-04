@@ -3,7 +3,7 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it} from '
 import {app} from '../../../src/server/app';
 import {sendJob} from '../../../src/server/crm/lib/report-schedules';
 import {crmTick} from '../../../src/server/crm/lib/ticks';
-import {owner, resetCrm, teammate, userId} from '../support/crm';
+import {ownerAt, resetCrm, teammate, userId} from '../support/crm';
 import {Browser, configureEnv, DATABASE_URL, db} from '../support/harness';
 import {fakeResend, inJob, mailbox, mails, type Mail, resend, restoreResend} from './support-inbox';
 
@@ -44,9 +44,9 @@ const ok = async <T = any>(p: Promise<{status: number; json: Record<string, unkn
 };
 
 async function seed() {
-  own = await owner();
-  // Addresses on reserved test domains (example.com) are never emailed: the owner gets a real-looking one.
-  await db.user.update({where: {email: 'owner@example.com'}, data: {email: OWNER_EMAIL}});
+  // Addresses on reserved test domains (example.com) are never emailed, and the site owner has no
+  // address at all: the schedules' creator is an Owner at a real-looking one.
+  ({browser: own} = await ownerAt(OWNER_EMAIL));
   await own.get('/site-api/crm/auth/state');
   await ok(own.post('/site-api/crm/auth/setup', {brandName: 'Kinroot', demoData: false}));
   ({browser: member} = await teammate(own, MEMBER_EMAIL, 'MEMBER'));

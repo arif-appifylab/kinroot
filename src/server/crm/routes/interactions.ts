@@ -16,6 +16,7 @@ import {userSelect} from '../lib/users';
 import {sendEmail} from '../email/service';
 import {cancelMeetingEvents, pushMeeting} from '../calendar/service';
 import {mirrorToBooking} from '../scheduling/bookings';
+import {shownEmail} from '../lib/owner-account';
 
 const kinds = ['CALL', 'MEETING', 'EMAIL', 'SMS', 'LINKEDIN', 'WHATSAPP', 'POSTAL'] as const;
 
@@ -187,7 +188,7 @@ export const meetingsPublic = new Hono<AppEnv>().get('/meetings/:id/invite.ics',
   const people = await attendees(c.var.db, meeting.attendeeIds);
   // The organizer's address only when it is the person downloading (another member's email never leaves the server).
   const me = c.var.user;
-  const organizerEmail = meeting.author && me && meeting.author.id === me.id ? me.email : 'noreply@crm.local';
+  const organizerEmail = meeting.author && me && meeting.author.id === me.id ? shownEmail(me.email) || 'noreply@crm.local' : 'noreply@crm.local';
   const ics = buildIcs(meeting, {name: meeting.author?.name ?? settings.brandName, email: organizerEmail}, people, settings.brandName);
   return new Response(ics, {headers: {'content-type': 'text/calendar; charset=utf-8', 'content-disposition': 'attachment; filename="meeting.ics"'}});
 });

@@ -2,7 +2,7 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it} from '
 
 import {app} from '../../../src/server/app';
 import {crmTick} from '../../../src/server/crm/lib/ticks';
-import {owner, resetCrm, teammate, userId} from '../support/crm';
+import {owner, ownerAccountId, resetCrm, teammate, userId} from '../support/crm';
 import {Browser, configureEnv, DATABASE_URL, db} from '../support/harness';
 import {fakeResend, inbound as postInbound, inJob, mailbox, mails, mailsTo, restoreResend} from './support-inbox';
 
@@ -51,7 +51,7 @@ async function seed() {
   own = await owner();
   await own.get('/site-api/crm/auth/state');
   await ok(own.post('/site-api/crm/auth/setup', {brandName: 'Kinroot', demoData: false}));
-  me = await db.member.findUniqueOrThrow({where: {userId: await userId('owner@example.com')}, select: {id: true, name: true}});
+  me = await db.member.findUniqueOrThrow({where: {userId: await ownerAccountId()}, select: {id: true, name: true}});
   A = await person('ada@kinroot-port.io');
   B = await person('bea@kinroot-port.io');
   C = await person('cal@kinroot-port.io');

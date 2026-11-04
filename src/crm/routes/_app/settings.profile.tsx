@@ -5,6 +5,7 @@ import {useRef, useState} from 'react';
 import {toast} from 'sonner';
 
 import {EmailSection} from '@/components/account/email-section';
+import {OwnerAccessNote} from '@/components/account/owner-note';
 import {FormError, FormField, PendingButton, useForm} from '@/components/account/form';
 import {SettingsSection} from '@/components/settings-section';
 import {Button} from '@/components/ui/button';
@@ -32,6 +33,15 @@ const COLORS = ['#2563eb', '#0d9488', '#7c3aed', '#db2777', '#ea580c', '#16a34a'
  * devices and deleting the account are in Settings → Security.
  */
 function ProfileSettings() {
+  const {me} = useMe();
+  if (me.accountOwner) {
+    return (
+      <div>
+        <ProfileSection />
+        <OwnerAccessNote />
+      </div>
+    );
+  }
   return (
     <div>
       <ProfileSection />

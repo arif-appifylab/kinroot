@@ -1,10 +1,9 @@
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
 
 import {resetOwnerSeatForTests} from '../../src/platform/auth/owner-seat';
-import {fromBase32, stepAt, totpCode} from '../../src/platform/auth/two-factor';
 import {app} from '../../src/server/app';
 import {env} from './support/cloudflare-workers';
-import {Browser, configureEnv, DATABASE_URL, db, ownerSignedIn, ownerTickets, resetDatabase, signedIn, userId} from './support/harness';
+import {Browser, configureEnv, DATABASE_URL, db, OWNER_ID, ownerAccountId, ownerSignedIn, ownerTickets, resetDatabase, signedIn, userId} from './support/harness';
 
 /**
  * Kinroot's Settings → Accounts, Roles and the Audit log's "Sign-in & security" tab
@@ -26,12 +25,12 @@ describe.skipIf(!DATABASE_URL)('Kinroot site admin screens (integration, real Po
 
     beforeEach(async () => {
       await resetDatabase();
-      // The first account becomes the owner (no owner list outside production).
-      owner = await signedIn(app, 'owner@example.test', undefined, '203.0.113.41');
+      // The owner comes only from "View as admin" (a ticket); signing up never makes one.
+      owner = await ownerSignedIn(app, undefined, '203.0.113.41');
       admin = await signedIn(app, 'admin@example.test', undefined, '203.0.113.42');
       // A support-portal customer: an account with no site role beyond the default.
       customer = await signedIn(app, 'customer@example.test', undefined, '203.0.113.43');
-      ids = {owner: await userId('owner@example.test'), admin: await userId('admin@example.test'), customer: await userId('customer@example.test')};
+      ids = {owner: await ownerAccountId(), admin: await userId('admin@example.test'), customer: await userId('customer@example.test')};
       expect((await owner.request('PUT', `/site-api/admin/users/${ids.admin}/roles`, {roles: ['member', 'admin']})).status).toBe(200);
     });
 
@@ -79,7 +78,7 @@ describe.skipIf(!DATABASE_URL)('Kinroot site admin screens (integration, real Po
 
       const list = await admin.get('/site-api/admin/users?before=&email=&status=');
       expect(list.status).toBe(200);
-      expect((list.json.users as {email: string}[]).map((u) => u.email)).toEqual(['c•••@example.test', 'admin@example.test', 'o•••@example.test']);
+      expect((list.json.users as {email: string}[]).map((u) => u.email)).toEqual(['c•••@example.test', 'admin@example.test', ''] /* the site owner has no address here */);
       // Finding someone by address is the owner's alone: the screen hides the box, the server refuses it.
       expect((await admin.get('/site-api/admin/users?before=&email=customer%40example.test&status=')).status).toBe(403);
 
@@ -152,17 +151,15 @@ describe.skipIf(!DATABASE_URL)('Kinroot site admin screens (integration, real Po
       resetOwnerSeatForTests();
       vi.stubEnv('PROD', true);
       vi.spyOn(console, 'warn').mockImplementation(() => {});
-      env.SITE_OWNER_EMAILS = 'boss@example.test';
     });
     afterEach(() => {
       vi.unstubAllEnvs();
       vi.restoreAllMocks();
-      delete env.SITE_OWNER_EMAILS;
       env.SITE_PREVIEW = '';
     });
 
     it('signs the owner in, keeps the next address, and opens the admin screens; the ticket works once', async () => {
-      ownerTickets.set(TICKET, {email: 'boss@example.test', name: 'Boss', ownerEmails: ['boss@example.test']});
+      ownerTickets.set(TICKET, {ownerId: OWNER_ID});
       const browser = new Browser(app, '203.0.113.51');
       const res = await browser.post('/site-api/auth/owner', {ticket: TICKET, next: NEXT});
       expect(res.status).toBe(200);
@@ -182,7 +179,7 @@ describe.skipIf(!DATABASE_URL)('Kinroot site admin screens (integration, real Po
     });
 
     it('a ticket without the CSRF header is refused (the app sends it through siteFetch)', async () => {
-      ownerTickets.set(TICKET, {email: 'boss@example.test', name: 'Boss', ownerEmails: ['boss@example.test']});
+      ownerTickets.set(TICKET, {ownerId: OWNER_ID});
       const res = await new Browser(app, '203.0.113.54').request('POST', '/site-api/auth/owner', {ticket: TICKET, next: NEXT}, {'x-csrf-token': ''});
       expect(res.status).toBe(403);
       expect(ownerTickets.has(TICKET)).toBe(true);
@@ -190,31 +187,30 @@ describe.skipIf(!DATABASE_URL)('Kinroot site admin screens (integration, real Po
 
     it('in the editor Preview the session travels in headers and the owner is signed in', async () => {
       env.SITE_PREVIEW = '1';
-      ownerTickets.set(TICKET, {email: 'boss@example.test', name: 'Boss', ownerEmails: ['boss@example.test']});
+      ownerTickets.set(TICKET, {ownerId: OWNER_ID});
       const browser = new Browser(app, '203.0.113.55', 'preview');
       const res = await browser.post('/site-api/auth/owner', {ticket: TICKET, next: NEXT});
       expect(res.status).toBe(200);
       expect((await browser.get('/site-api/me')).json.roles).toContain('owner');
     });
 
-    it('an owner with two-step sign-in gets the code step first (202 + challenge)', async () => {
-      const browser = await ownerSignedIn(app, 'boss@example.test', PASSWORD, '203.0.113.56');
-      const setup = await browser.post('/site-api/auth/two-factor/setup', {password: PASSWORD});
-      expect(setup.status).toBe(200);
-      const secret = fromBase32(setup.json.secret as string)!;
-      expect((await browser.post('/site-api/auth/two-factor/enable', {code: await totpCode(secret, stepAt())})).status).toBe(200);
-
-      ownerTickets.set(TICKET, {email: 'boss@example.test', name: 'Boss', ownerEmails: ['boss@example.test']});
-      const fresh = new Browser(app, '203.0.113.57');
-      const res = await fresh.post('/site-api/auth/owner', {ticket: TICKET, next: NEXT});
-      expect(res.status).toBe(202);
-      expect(res.json).toMatchObject({twoFactor: true, next: NEXT});
-      expect(typeof res.json.challenge).toBe('string');
-      // Not signed in until the code step.
-      expect((await fresh.get('/site-api/me')).json.roles).toEqual([]);
-      const done = await fresh.post('/site-api/auth/login/two-factor', {challenge: res.json.challenge, code: await totpCode(secret, stepAt() + 1)});
-      expect(done.status).toBe(200);
-      expect((await fresh.get('/site-api/me')).json.roles).toContain('owner');
+    it('the owner account has no password, email or two-step here, and the CRM shows no address for it', async () => {
+      const browser = await ownerSignedIn(app, undefined, '203.0.113.56');
+      for (const [path, body] of [
+        ['/site-api/auth/change-password', {currentPassword: PASSWORD, newPassword: `${PASSWORD} 2`}],
+        ['/site-api/auth/two-factor/setup', {password: PASSWORD}],
+        ['/site-api/auth/email', {email: 'boss@example.test', password: PASSWORD}],
+        ['/site-api/auth/delete-account', {password: PASSWORD, confirm: 'DELETE'}],
+      ] as const) {
+        const res = await browser.post(path, body);
+        expect(res.status, path).toBe(403);
+        expect(res.json.error, path).toBe('owner_account');
+      }
+      // Kinroot: the CRM's first Owner, shown as the account owner, never with the placeholder address.
+      const state = await browser.get('/site-api/crm/auth/state');
+      expect(state.json.user).toMatchObject({role: 'OWNER', email: '', accountOwner: true});
+      const team = await browser.get('/site-api/crm/team');
+      expect(JSON.stringify(team.json)).not.toContain('owner.invalid');
     });
   });
 });

@@ -6,7 +6,6 @@ import {toHex, utf8} from './encoding';
 import {normalizeEmail, safeNext} from './input';
 import {hmacKey} from './keys';
 import {attempt, body, type Ctx, type Env, invalid, keysFor, maybeSweep, publicUser, sendEmail, settle, startSession, text} from './kit';
-import {ensureOwnerAccounts} from './owner';
 import {type AuthSettings} from './settings';
 import {signChallenge} from './two-factor';
 
@@ -87,8 +86,6 @@ export function codeRoutes(settings: AuthSettings) {
         const keys = await keysFor(c, email);
         const {stop} = await attempt(c, 'code', keys);
         if (stop) return stop;
-        // The admin's account is made before its first code (owner.ts), so the owner can always sign in.
-        await ensureOwnerAccounts(c, settings, keys.ipHash);
         const user = await c.var.db.user.findUnique({where: {email}, select: {id: true, email: true, status: true}});
         if (user && user.status === 'active') await issueCode(c, user, keys.ipHash);
         maybeSweep(c);

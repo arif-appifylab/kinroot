@@ -5,14 +5,14 @@ import {config} from './config';
 
 /**
  * The Site Cache: a small key/value cache for THIS site, kept by the platform near the Site
- * Database (docs/agent/cache.md). Server code only (Hono routes, `src/server/`). Use it for data
- * that is read often, changes rarely and is THE SAME FOR EVERY VISITOR who reads that key:
- * settings, opening hours, menus, categories, page text, product cards.
+ * Database (docs/agent/cache.md). Server code only (Hono routes, `src/server/`). Use it for reads many
+ * requests share that rarely change, and that are THE SAME FOR EVERY VISITOR who reads that key: settings,
+ * opening hours, menus, categories, page text, product cards, totals. A read here isn't billed; a query is.
  *
- *   const settings = await cache.getOrSet('store:settings', 600, () => db.storeSettings.findUnique(…));
- *   … after saving them:  await cache.del('store:settings');
+ *   const settings = await cache.getOrSet('store:settings', 7 * DAY, () => db.storeSettings.findUnique(…));
+ *   … everywhere they're saved, after the save:  await cache.del('store:settings');
  *
- * - Deployed: one HTTPS call to `https://site-cache.internal` (a few ms; the platform adds this
+ * - Deployed: one HTTPS call to `https://site-cache.internal` (~15 ms; the platform adds this
  *   site's identity, so no other site can read it). Preview and local: an in-memory stand-in
  *   with the same size limit and secret guard, empty after a restart, never the live data.
  * - It NEVER breaks a page: an outage, a slow answer (400 ms), a full cache, a bad key, or a

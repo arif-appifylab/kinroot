@@ -21,7 +21,7 @@ write your own login, token, cookie or password code.
   `enable`, `disable`, `recovery-codes`), `email`, `email/confirm`, `sessions` (GET, DELETE `:id`),
   `delete-account`. Files: `routes.ts`, `code-routes.ts`, `owner.ts`, `security-routes.ts`, `two-factor.ts`.
 - Settings (yours): `src/server/auth-settings.ts` → `registration`, `requireEmailVerification`,
-  `firstUserBecomesOwner`, `ownerEmails`, `defaultRole`, `afterSignInPath`.
+  `defaultRole`, `afterSignInPath`. None of them makes an owner.
 
 ## How a request knows the visitor
 `getViewer(request)` (once per request, memoized): access JWT cookie → HMAC verify → ONE primary-key
@@ -60,11 +60,13 @@ read of `users` (status must be `active`, `session_version` must match the token
   secrets unreadable (those users sign in with a recovery code, or an admin switches it off).
 
 ## Passwords
-PBKDF2-HMAC-SHA256, 600,000 iterations (OWASP's figure), 16-byte salt per user, NFKC-normalized,
-stored as `pbkdf2-sha256$v1$600000$<salt>$<key>`. A lower stored cost (210,000 before 0.4.2) is
-re-hashed at the next login.
+scrypt, N=2^14, r=8, p=5 (one of OWASP's settings), 16-byte salt per user, NFKC-normalized, stored as
+`scrypt$v1$16384$8$5$<salt>$<key>`. Don't change the algorithm or cost by hand: Workers refuse PBKDF2 above
+100,000 iterations and have no native Argon2, and Node doesn't refuse, so tests on your machine won't show it.
+An older `pbkdf2-sha256` hash the runtime can verify (100,000 iterations or fewer) is re-hashed at the next
+login. One it refuses is a failed password: that person signs in by email or resets their password.
 Rules: 10–128 characters, not the email's name, not a common password (`passwordProblem()`).
-Cost is ~45 ms CPU per hash: that is why the routes that hash a password a stranger chooses
+Cost is ~160 ms per hash: that is why the routes that hash a password a stranger chooses
 (login, register, forgot, resend, change) are rate-limited first. Reset and verify take a 256-bit
 single-use token and hash only after it checks out.
 
@@ -94,35 +96,30 @@ single-use token and hash only after it checks out.
 - Redirect after sign-in only to a same-site PATH (`safeNext()` / `nextPath()`): never a URL.
 - Sessions are cookies only. Never put a token in `localStorage`, a URL, a log or a response body
   (the Preview's header-carried cookies are the managed core's, Preview-only exception).
-- THE ADMIN IS MADE BY THE PLATFORM, NEVER BY YOU. The owner addresses are `ownerEmails` in
-  `src/server/auth-settings.ts` plus `SITE_OWNER_EMAILS`, which the platform sets on the live site
-  at each Publish AND in the editor Preview (the account owner and members whose role holds
-  `account:*`; `config.ownerEmails`). Each owner address gets its account, holding `owner`, with NO
-  password, made by `ensureOwnerAccounts()` (owner.ts) before its first sign-in code or one-click
-  sign-in. Never create, edit or delete that account or its role, never seed an admin in a
-  migration or `seed.sql`, never ask the owner for a password to create one.
-- HOW THE ADMIN SIGNS IN: an emailed 6-digit code (`/account/login/`, the default; `code-routes.ts`:
-  10 minutes, one use, 5 wrong tries spend it, a new code ends the older one, only a keyed hash is
-  stored, the same answer whether or not the email has an account), or ONE CLICK from the dashboard:
-  "Open live portal" on the app's page in the dashboard (`GET /site-api/auth/owner?ticket=…`) and
-  the shield in the editor Preview's bar (`/dashboard/?owner_ticket=…`, which the portal POSTs to
-  `/site-api/auth/owner`: the Preview's cookies only travel with a fetch). Either way the ticket is
-  one use, 2 minutes, spent with the platform (Site Key) and live and Preview tickets never cross.
-  A password and two-step sign-in are optional: the admin sets them in the portal (Account →
-  Security); other admins are made in the portal (Users). Tell the owner exactly that when they ask
-  how to reach the admin. Anyone else may sign in by code too. The other way to claim owner:
-  an owner address signs up here and sets its password THROUGH AN EMAILED LINK (anyone can
-  register an owner address first, so a confirmation link alone proves nothing): confirming an
-  owner address drops the registered password, ends its sessions and emails a link to choose one
-  (`setPassword: true`); that link, or Forgot password, claims owner. Signing up again on an
-  unconfirmed address keeps NEITHER password and kills its older links.
-  The owner SEAT (`auth_state.owner_user_id`) follows the owner list: when the seat holder's
-  address is no longer on it (the account changed hands), the next owner address to
-  sign in takes the seat and the old holder loses `owner` (account and other roles kept). Owners
-  added by hand in Users keep it. On the LIVE site with no owner address at all, NOBODY becomes
-  owner: a warning is logged and `/site-api/health` answers `ownerSetup: false`. Only local dev
-  and the Preview let the first account win without a list. Never weaken this (`ownerClaimMode()`,
-  `claimOwnerIfFirst()`), and never add another way to become owner.
+- THE OWNER COMES ONLY FROM THE DASHBOARD. The account's owner presses "View as admin" on the app's
+  page in the dashboard (`GET /site-api/auth/owner?ticket=…`), or the shield in the editor Preview's
+  bar (`/dashboard/?owner_ticket=…`, which the portal POSTs: the Preview's cookies only travel with a
+  fetch). The ticket is one use, 2 minutes, spent with the platform (Site Key), and live and Preview
+  tickets never cross. That is the ONE way to hold `owner`, on live, staging, the Preview and a local
+  copy holding a Site Key alike. A copy with no Site Key simply has no admin. Tell the owner that when
+  they ask how to reach the admin.
+- ANYONE ELSE IS A NORMAL USER. Signing up, confirming, resetting a password or asking for an emailed
+  code never makes an owner, whatever the address, including the owner's own email. That sign-up is a
+  separate account from the owner's. There is no first-account rule, no owner list and no setting.
+- THE OWNER ACCOUNT is made on the first click and tied to `users.platform_owner_id`, an opaque
+  id. The site never learns the owner's email or name: `users.email` holds a placeholder at
+  `owner.invalid`, which every form refuses. It has no password, email or two-step here (those routes
+  answer 403 `owner_account`), since the dashboard's sign-in protects it, and nobody can suspend,
+  demote or delete it from inside the site. Its `viewer.email` is empty: never assume a viewer has one.
+- NEVER create an owner or admin in a migration, `seed.sql` or code, never give anyone the `owner` role,
+  never ask the owner for a password, and never add another way in. That includes a "make me admin" route
+  or a hardcoded address. Reading `SITE_OWNER_EMAILS` is wrong too: it's gone on this template. To email
+  the owner, send kind `notification` with no `to`.
+- OTHER ADMINS: the owner gives people `admin` or a custom role in the portal (Users). Nobody can give
+  or take `owner` there.
+- WHEN THE SITE CHANGES HANDS: `SITE_OWNER_ID` changes at the handover deploy. Every admin right goes
+  (`owner`, `admin`, any role holding `*` or a `site:` permission), those people are signed out and stay
+  as normal users, and the old owner account is deleted (`owner-seat.ts`). Customers and data stay.
 - TWO-STEP SIGN-IN (`two-factor.ts`): TOTP (RFC 6238, 6 digits, 30 s, any authenticator app) with
   10 one-use recovery codes. The secret is stored SEALED (AES-GCM, bound to the user), each code
   works once (`totp_last_step`), recovery codes are stored hashed. With it on, `/login` answers

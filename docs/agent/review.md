@@ -71,12 +71,16 @@ signed out → 401; signed in without the permission → 403; another user's id 
   user-supplied URLs fetched by the server (SSRF).
 - Webhooks and payments: signature checked by the platform helper; handlers IDEMPOTENT (the same
   delivery twice changes nothing: a unique key or a conditional `updateMany`).
+- Anything charged or booked has an idempotency key, the same across retries. Anything limited is decided by the
+  database in one conditional statement, a unique index or a short lock, never by a read then a write, and has a test
+  running it many times at once (`orders-and-stock.md`).
 - Cache (`cache.md`): shared keys hold only what every visitor sees; no secrets; money and access
   never from the cache.
 
 ## 5. Performance (backend first)
 For every route and data-reading page on the list, count the database round trips of ONE request:
-- **Budget: at most ~5 sequential round trips per request**, ideally 1–3. Each is ~100–150 ms.
+- **Budget: at most ~5 sequential round trips per request**, ideally 1–3. Each is ~3 ms normally,
+  ~170 ms on a slow Worker instance. `Promise.all` of plain reads counts as one.
 - **No N+1, ever.** A query inside a loop, a `.map(async …)` that queries, or one query per row
   of a list is a bug, not a style choice:
   ```bash
@@ -89,7 +93,9 @@ For every route and data-reading page on the list, count the database round trip
 - **Independent reads in parallel**: `Promise.all([…])`; sequential only when one needs the other.
 - Explicit `select`, `take ≤ 100`, keyset paging, an index for every `where` + `orderBy` shape,
   no `count()` of a growing table per request (`performance.md`).
-- Read-heavy data that rarely changes: `cache.getOrSet` with a chosen TTL, cleared on save (`cache.md`).
+- A read that repeats on many requests and rarely changes, with no cache: consider `cache.md` › "Should this be cached?", because every
+  query is billed. For each cache key this task added or touched, search for every write to the tables behind it, and check each one clears it, then
+  check the key against `cache.md` › "How caches go wrong". A place that doesn't clear is a bug. So is a cached read on an edit screen, or of a price an order charges.
 - Slow or later work (emails, reports, outside calls not needed for the answer): a background
   job (`background-jobs.md`) or `waitUntil`, never in the request.
 

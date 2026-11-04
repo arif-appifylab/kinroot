@@ -8,6 +8,7 @@ import {problem} from '../../../platform/guards';
 import type {Viewer} from '../../../platform/types';
 import {PERMISSIONS} from '../../permissions';
 import type {Db} from './db';
+import {OWNER_ADDRESS} from '../lib/owner-account';
 
 /**
  * Who is using Kinroot, on top of the template's sign-in.
@@ -77,7 +78,8 @@ export const loadUser: MiddlewareHandler<AppEnv> = async (c, next) => {
         });
       }
     }
-    if (member?.active) user = {...(await touch(db, member, viewer)), email: viewer.email ?? ''};
+    // The site owner has no address here: OWNER_ADDRESS routes their mail to the platform (lib/owner-account.ts).
+    if (member?.active) user = {...(await touch(db, member, viewer)), email: viewer.platformOwner ? OWNER_ADDRESS : (viewer.email ?? '')};
   }
   c.set('user', user);
   await next();

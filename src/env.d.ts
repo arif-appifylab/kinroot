@@ -10,8 +10,7 @@
  *   SITE_KEY  a secret: the Site Key, for `/api/site/v1/...`.
  *   JWT_SECRET          a secret: signs access tokens (platform-managed, >= 32 chars).
  *   SITE_JOBS_SECRET  a secret: checks background-job deliveries (platform-managed).
- *   SITE_OWNER_EMAILS    a plain var: the site owner's email(s), comma separated.
- *                       Only these may claim the owner role on the live site.
+ *   SITE_OWNER_ID    a plain var: the platform's opaque id for the account's owner. Never an email.
  *
  * Never send a secret to the browser, log it, or write it to a file.
  */
@@ -23,7 +22,8 @@ declare namespace Cloudflare {
     SITE_KEY?: string;
     JWT_SECRET?: string;
     SITE_JOBS_SECRET?: string;
-    SITE_OWNER_EMAILS?: string;
+    SITE_OWNER_ID?: string;
+    SITE_DB_TRANSPORT?: string;
   }
 }
 

@@ -15,7 +15,7 @@ there, say so to the owner (it ships with `npm run platform -- upgrade`).
 | CSP | `security.csp` in `astro.config.mjs` | hashes for Astro's own scripts/styles; `default-src 'self'`, `connect-src 'self'`, `object-src 'none'`, `base-uri`/`form-action 'self'` |
 | Site API, app-wide | `src/server/app.ts` | `previewCookies` → `sameOrigin` → `csrf` → `bodyLimit` 64 KB → `syncPermissions`; JSON `notFound` / `onError` |
 | Site API, per route | `src/platform/guards.ts` | `validator → withViewer → requireAuth → requirePermission → withDb` |
-| Auth | `src/platform/auth/` | PBKDF2 passwords, short JWT + rotating refresh, rate limits, two-step, audit |
+| Auth | `src/platform/auth/` | scrypt passwords, short JWT + rotating refresh, rate limits, two-step, audit |
 
 ## A01 Broken access control (+ API1 object level, API5 function level, API7 SSRF)
 Template: the guards above; `requirePermission(codename, {orOwn})`, `can`, `permissionScope`
@@ -156,7 +156,7 @@ You must:
   array lengths in a body (`ids.length ≤ 100`), loop counts, `sendJobs` batch sizes.
 - **Business flows**: state changes are conditional writes (`updateMany({where: {id, status:
   'pending'}, data: {status: 'approved'}})`, `count === 0` → 409); retried actions are idempotent
-  (a unique key, `sendJob(…, {key})`); totals, prices, scores and timestamps are computed on the
+  (`idempotent()`, a unique key, `sendJob(…, {key})`; `orders-and-stock.md`); totals, prices, scores and timestamps are computed on the
   server, never taken from the body.
 - Public lookups answer the same for "exists" and "doesn't" (sign-up, invites, "is this taken").
 

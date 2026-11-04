@@ -16,6 +16,7 @@ import {getChatSettings, queueVisitorEmail, saveChatSettings, sendTranscript} fr
 import {closeConversation} from '../inbox/conversations';
 import {loadConversation, who} from './inbox';
 import {checkUpload, completeUpload, startUpload, uploadBody} from '../lib/uploads';
+import {shownEmail} from '../lib/owner-account';
 
 /**
  * Website chat, agent side (module 10b), next to the inbox routes: chat
@@ -62,7 +63,7 @@ export const inboxChat = new Hono<AppEnv>()
     // Saved replies may use merge fields ({{contact.first_name}}…), filled here like on emails.
     const contact = t.contactId ? await db.contact.findUnique({where: {id: t.contactId}, include: {companies: {include: {company: true}, orderBy: {isPrimary: 'desc'}, take: 1}}}) : null;
     const deal = t.dealId ? await db.deal.findUnique({where: {id: t.dealId}}) : null;
-    const text = mergeFields(input.text.trim(), {contact, company: contact?.companies[0]?.company ?? null, deal, me: {name: me.name, email: me.email}});
+    const text = mergeFields(input.text.trim(), {contact, company: contact?.companies[0]?.company ?? null, deal, me: {name: me.name, email: shownEmail(me.email)}});
     const message = await sendChannelMessage(db, t, {text, fileIds: files.map((f) => f.id), senderId: me.id});
     let thread = await db.emailThread.update({where: {id: t.id}, data: {unread: false}});
     if (t.channel === 'chat') await queueVisitorEmail(db, thread, publicOrigin(c.req.raw));

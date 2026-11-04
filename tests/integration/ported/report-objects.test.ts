@@ -1,7 +1,7 @@
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {app} from '../../../src/server/app';
-import {owner, resetCrm, teammate, userId} from '../support/crm';
+import {owner, ownerAccountId, resetCrm, teammate, userId} from '../support/crm';
 import {Browser, configureEnv, DATABASE_URL, db} from '../support/harness';
 
 /**
@@ -31,7 +31,7 @@ async function seed() {
   own = await owner();
   await own.get('/site-api/crm/auth/state');
   ({browser: mem} = await teammate(own, 'report.member@example.com'));
-  me = await db.member.findUniqueOrThrow({where: {userId: await userId('owner@example.com')}, select: {id: true, name: true}});
+  me = await db.member.findUniqueOrThrow({where: {userId: await ownerAccountId()}, select: {id: true, name: true}});
   mu = await db.member.findUniqueOrThrow({where: {userId: await userId('report.member@example.com')}, select: {id: true, name: true}});
 
   company = await db.company.create({data: {name: 'Acme Port'}, select: {id: true, name: true}});

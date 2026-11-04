@@ -6,7 +6,7 @@ Cloudflare Worker:
 - **Pages**: a home page made of sections and an about page (prerendered, served as files), a
   **blog** written as Markdown files (`src/content/blog/`, one page per post), and a **job board** with search and detail pages;
 - **accounts of its own**: sign-up with email confirmation, sign-in, password reset, "sign out
-  everywhere" — stored in your Site Database, secured with PBKDF2 passwords, short-lived signed
+  everywhere" — stored in your Site Database, secured with scrypt passwords, short-lived signed
   tokens, rotating refresh tokens and rate limits;
 - **roles and permissions**: owner, admin and member out of the box, custom roles, and admin
   screens for users, roles and an activity log;
@@ -26,10 +26,8 @@ Pick **Astro app** when you create a site in the dashboard (or turn on "make it 
 you like in the editor (or ask your AI agent), then **Publish**.
 
 **Enable the Site Database first.** This project ships migrations; a version with migrations is
-refused until the site has a database. The platform gives the live site your account owner's email
-at each Publish, so only that address (plus any you add to `ownerEmails` in
-`src/server/auth-settings.ts`) can claim the owner role: the first stranger to sign up can't. With
-no owner email at all, nobody becomes owner on the live site.
+refused until the site has a database. Only your account's owner can open the admin, with **View as
+admin** in the dashboard. Anyone who signs up is a normal user, whatever email they use.
 
 The platform sees `astro` and `@astrojs/cloudflare`, installs with `npm ci`, runs
 `npm run build` (`prisma generate && astro build`), applies new migrations to your live database,
@@ -53,9 +51,16 @@ Add a Markdown file to `src/content/blog/` (`my-post.md` → `/blog/my-post/`) w
 
 ## Accounts
 
-- The **owner** is the first person to confirm an owner email: your account owner's
-  email (set by the platform at each Publish) or an address in `ownerEmails`. Locally and in the
-  editor Preview, with no owner email, the first person to confirm becomes owner. Owners and admins manage users at `/dashboard/users` and roles at `/dashboard/roles`.
+- The **owner** is your account's owner, who opens Kinroot with **View as admin** in the dashboard or the
+  editor (it lands on `/crm/`). There's no owner sign-up, password or owner list, and the owner's account
+  has no email address on the site: Kinroot shows it as "Account owner" and emails the owner through the
+  platform. The owner invites the team in Settings → Team and manages site accounts and roles in
+  Settings → Accounts and Roles.
+- **On your machine** there is an owner only if this copy holds the site's Site Key (`SITE_URL` and
+  `SITE_KEY` in `.env`): the owner route (`/site-api/auth/owner?ticket=…`) spends a "View as admin"
+  ticket with the platform, as live and the Preview do. Without a Site Key there is no owner here, and
+  accounts you sign up locally are normal users who join Kinroot by invite. (A local database made
+  before this template version keeps its old owner while `SITE_OWNER_ID` is unset.)
 - Confirmation and password-reset emails are sent by the platform on your site's behalf.
 - Change how sign-up works in `src/server/auth-settings.ts`.
 

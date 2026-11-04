@@ -5,7 +5,7 @@ import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 import {getDb} from '../../../src/platform/db';
 import {inRequestScope} from '../../../src/platform/request-scope';
 import {app} from '../../../src/server/app';
-import {owner, resetCrm, teammate, userId} from '../support/crm';
+import {owner, ownerAccountId, resetCrm, teammate, userId} from '../support/crm';
 import {type Browser, configureEnv, DATABASE_URL, db, ORIGIN} from '../support/harness';
 
 /**
@@ -94,7 +94,7 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     own = await owner();
     await own.get('/site-api/crm/auth/state');
     await ok(own.post('/site-api/crm/auth/setup', {brandName: 'Kinroot', demoData: false}));
-    me = await db.member.findUniqueOrThrow({where: {userId: await userId('owner@example.com')}, select: {id: true}});
+    me = await db.member.findUniqueOrThrow({where: {userId: await ownerAccountId()}, select: {id: true}});
     const k1 = await ok(own.post('/site-api/crm/data-in/keys', {name: 'Website'}), 201);
     KEY = k1.plain;
     keyId = k1.key.id;
@@ -369,9 +369,11 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
   it('answers a repeated Idempotency-Key with the stored answer and runs the action once', async () => {
     const idemEmail = 'idem@client-port.io';
     const body = {email: idemEmail, firstName: 'Ida'};
-    const i1 = await call('/contacts', body, {idem: 'order-1'});
     // Re-signed with another time (the same body signed in the same second is a reused signature).
-    const i2 = await call('/contacts', body, {idem: 'order-1', t: now() - 1});
+    // One clock reading for both: a second ticking between the calls must not make them equal.
+    const t0 = now();
+    const i1 = await call('/contacts', body, {idem: 'order-1', t: t0});
+    const i2 = await call('/contacts', body, {idem: 'order-1', t: t0 - 1});
     expect([i1.status, i2.status]).toEqual([201, 201]);
     expect(canon(i2.data)).toBe(canon(i1.data));
     expect(i2.headers.get('idempotent-replayed')).toBe('true');

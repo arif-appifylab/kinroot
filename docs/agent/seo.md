@@ -52,6 +52,9 @@ portal and the Site API stay out of search.
   test or per-user page.
 - A page whose URL carries a secret (a reset token) also passes `secretInUrl` (no Referer, no
   canonical).
+- A list page's rows come as JSON, so search engines may not see them. Its title, description and intro text go in the
+  shell, and every item has its own page in `/sitemap.xml`. A short list that should rank by itself (a small category)
+  is server-rendered instead, whole, at its own path (`/shop/plants/`, not `?category=plants`).
 - Never put visitor data in a prerendered page (`AGENTS.md`).
 
 ## Sitemap, robots.txt, RSS (this site's own; keep all three)

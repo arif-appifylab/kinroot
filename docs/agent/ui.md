@@ -53,6 +53,8 @@ piece live. Read its code (`src/portal/screens/components.tsx`) for usage.
 | Create / edit / details | `Drawer onSubmit footer` | long forms; the drawer IS the `<form>` |
 | Destructive confirm | `useConfirm()({title, body, confirmLabel, action})` | dialog stays open, pending, shows the error |
 | Result of an action | `useToast().success('Job posted.')` | errors that need fixing stay in place, not in a toast |
+| Page loading | built in (`src/lib/page-progress.ts`): the bar at the top, in `--accent` | public pages and dashboard, nothing to add; never add another, and don't call it around a `fetch` on the same page |
+| Public list page | `bindListPage` (`src/lib/list-page.ts`), `.list-skeleton` | a static shell with JSON rows: `performance.md` "List pages" |
 | States | `EmptyState icon title action`, `LoadingBlock`, `Skeleton`, `Notice tone`, `ErrorNote` | every list: loading, empty (with its action), error |
 | Icons | `<Icon name>` (`ICON_NAMES`) | decorative; add paths from lucide.dev to `ui/icon.tsx` |
 

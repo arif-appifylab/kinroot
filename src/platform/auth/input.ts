@@ -9,6 +9,8 @@ const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]{1,189}\.[^\s@.]{2,63}$/;
 /** Trimmed, lower-cased, or null when it cannot be an email address. */
 export function normalizeEmail(value: unknown): string | null {
   const email = text(value, 254).toLowerCase();
+  // The owner account's placeholder address (owner.ts) is never accepted from a person.
+  if (email.endsWith('@owner.invalid')) return null;
   return email.length <= 254 && EMAIL_RE.test(email) ? email : null;
 }
 

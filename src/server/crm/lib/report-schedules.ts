@@ -16,6 +16,7 @@ import {htmlToText} from '../email/render';
 import {sendSystemEmail, systemAccount} from '../email/service';
 import {resultCsv} from '../routes/reports';
 import {audit} from './audit';
+import {isOwnerAddress} from './owner-account';
 import {emit} from './events';
 import {userScope} from './http';
 import {deleteInChunks, enqueue} from './jobs';
@@ -276,14 +277,14 @@ export async function deliverScheduleSend(db: Db, sendId: string, opts: {final: 
   const s = send.schedule;
   await db.reportScheduleSend.update({where: {id: send.id}, data: {attempts: {increment: 1}}});
 
-  if (!(await systemAccount(db))) {
-    return finish(db, send, s, {status: 'no_mailbox', error: 'No mailbox to send from: connect a shared team email account in Settings → Email', delivered: 0, recipients: 0}, opts.actor);
-  }
-
   let recipients: string[] = [];
   try {
     recipients = await recipientsOf(db, s);
     if (!recipients.length) throw new ScheduleError('No recipients left');
+    // The site owner is emailed by the platform; everyone else needs a mailbox to send from.
+    if (recipients.some((r) => !isOwnerAddress(r)) && !(await systemAccount(db))) {
+      return finish(db, send, s, {status: 'no_mailbox', error: 'No mailbox to send from: connect a shared team email account in Settings → Email', delivered: 0, recipients: 0}, opts.actor);
+    }
     const email = await renderScheduleEmail(db, s, send.slotAt.getTime(), {slot: send.manual ? undefined : send.slotAt.getTime()});
     const done = new Set(send.delivered);
     const base = origin(s);

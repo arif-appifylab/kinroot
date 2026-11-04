@@ -10,7 +10,7 @@ import {ipKey, rateLimit} from '../../src/server/crm/lib/rate-limit';
 import {csatToken} from '../../src/server/crm/lib/tickets';
 import {manageToken} from '../../src/server/crm/scheduling/bookings';
 import {crmDb, inScope, outside} from './ported/support';
-import {fakeStorage, owner, resetCrm, teammate} from './support/crm';
+import {fakeStorage, owner, ownerMemberId, resetCrm, teammate} from './support/crm';
 import {Browser, configureEnv, DATABASE_URL, db} from './support/harness';
 
 /**
@@ -62,7 +62,7 @@ describe.skipIf(!DATABASE_URL)('Kinroot public hardening (integration, real Post
     const {browser: adminA} = await teammate(own, 'admin.a@example.com', 'ADMIN');
     await teammate(own, 'admin.b@example.com', 'ADMIN');
     await teammate(own, 'member.m@example.com', 'MEMBER');
-    const [ownerId, adminB, memberM] = await Promise.all([memberId('owner@example.com'), memberId('admin.b@example.com'), memberId('member.m@example.com')]);
+    const [ownerId, adminB, memberM] = await Promise.all([ownerMemberId(), memberId('admin.b@example.com'), memberId('member.m@example.com')]);
 
     expect((await adminA.request('PATCH', `/site-api/crm/team/${adminB}`, {active: false})).status).toBe(404);
     expect((await adminA.request('PATCH', `/site-api/crm/team/${adminB}`, {role: 'MEMBER'})).status).toBe(404);

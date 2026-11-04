@@ -5,15 +5,12 @@ import {type AuthSettings, DEFAULT_AUTH_SETTINGS} from '../platform/auth';
  * `src/platform/auth/` reads it). Every option is explained in
  * `src/platform/auth/settings.ts` and docs/agent/auth.md.
  *
- * Who may become owner: The platform hands the live site the account owner's
- * email at each Publish (`SITE_OWNER_EMAILS`); add more addresses in
- * `ownerEmails`. On the live site, with no owner email at all, nobody becomes
- * owner (the first person to sign up never does).
+ * Nothing here makes an owner: the owner comes only from "View as admin" in the dashboard
+ * (src/platform/auth/owner.ts). Anyone signing up, with any address, is a normal user.
  */
 export const authSettings: AuthSettings = {
   ...DEFAULT_AUTH_SETTINGS,
   // registration: 'open',
   // requireEmailVerification: true,
-  // ownerEmails: ['owner@example.com'],
   // afterSignInPath: '/dashboard',
 };

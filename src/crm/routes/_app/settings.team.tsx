@@ -87,7 +87,7 @@ function TeamSettings() {
                   {u.invited && <Badge tone="amber">Invite pending</Badge>}
                   {!u.active && <Badge tone="neutral">Deactivated</Badge>}
                 </div>
-                <p className="truncate text-xs text-muted-foreground">{u.email} · {u.lastSeenAt ? `last seen ${ago(u.lastSeenAt)}` : 'never signed in'}</p>
+                <p className="truncate text-xs text-muted-foreground">{u.accountOwner ? 'Account owner' : u.email} · {u.lastSeenAt ? `last seen ${ago(u.lastSeenAt)}` : 'never signed in'}</p>
               </div>
               {isAdmin && u.role !== 'OWNER' && u.id !== me.id ? (
                 <div className="flex items-center gap-2">

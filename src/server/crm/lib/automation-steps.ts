@@ -35,6 +35,7 @@ import {assignTicket, changePriority, changeStatus, createTicket} from './ticket
 import {signPayload} from './webhooks';
 import {memberWithEmail} from './users';
 import {WEBHOOK_SERVICE_NAMES, webhookLabel, webhookTarget} from '@/lib/webhook-targets';
+import {shownEmail} from './owner-account';
 
 const DAY = 86_400_000;
 
@@ -488,7 +489,7 @@ const EXECUTORS: Record<Step['type'], Executor> = {
       accountId = account.id;
       me = owner;
     }
-    const m = mergeInput(ctx, {name: me.name, email: me.email});
+    const m = mergeInput(ctx, {name: me.name, email: shownEmail(me.email)});
     const subject = fill(step.subject, m, {keepStandard: true}).slice(0, 300);
     const html = fill(step.html, m, {html: true, keepStandard: true});
     const shownSubject = fill(step.subject, m);

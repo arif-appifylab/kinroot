@@ -26,6 +26,8 @@ export interface Viewer {
   /** The viewer's OWN email. Never put another user's email in a viewer. */
   email: string | null;
   emailVerified: boolean;
+  /** The site owner, who comes from the dashboard: their sign-in isn't managed here (auth/owner.ts). */
+  platformOwner?: boolean;
 }
 
 /** What a signed-in viewer may do: their role slugs and every codename those roles grant. */
@@ -38,6 +40,8 @@ export interface Access {
 export interface AdminUser {
   id: number;
   email: string;
+  /** The site owner, from the dashboard: not editable here. */
+  platformOwner: boolean;
   name: string;
   status: string;
   emailVerified: boolean;

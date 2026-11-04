@@ -90,10 +90,12 @@ describe.skipIf(!DATABASE_URL)('Kinroot team (integration, real Postgres)', () =
     const seenByMaya = (await maya.get('/site-api/crm/team')).json.users as {name: string; email: string}[];
     expect(seenByMaya.find(u => u.name === 'maya')!.email).toBe('maya@example.com');
     expect(seenByMaya.find(u => u.name === 'sam')!.email).toBe('s•••@example.com');
-    expect(seenByMaya.find(u => u.name === 'owner')!.email).toBe('o•••@example.com');
+    // The site owner's account has no address on the site: none is shown, to anyone.
+    expect(seenByMaya.find(u => u.name === 'Site owner')).toMatchObject({email: '', accountOwner: true});
 
     const seenByOwner = (await ownerBrowser.get('/site-api/crm/team')).json.users as {name: string; email: string}[];
     expect(seenByOwner.find(u => u.name === 'sam')!.email).toBe('sam@example.com');
+    expect(JSON.stringify(seenByOwner)).not.toContain('owner.invalid');
   });
 
   it('keeps viewers read-only and deactivated members out', async () => {

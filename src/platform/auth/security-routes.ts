@@ -4,7 +4,6 @@ import {renderSVG} from 'uqr';
 import {cache, userKey} from '../cache';
 import {problem, requireAuth, withAuthCore, withViewer} from '../guards';
 import {audit} from './audit';
-import {SYSTEM_ROLES} from './codenames';
 import {ACCESS_COOKIE, cookieName, readCookie} from './cookies';
 import {emailAccepted, EMAIL_NOT_REAL} from './email-check';
 import {sha256Hex} from './encoding';
@@ -27,8 +26,7 @@ import {
   sendEmail,
   settle,
   startSession,
-  text,
-} from './kit';
+  text, notForOwnerAccount} from './kit';
 import {PASSWORD_LIMITS, verifyPassword} from './password';
 import {refreshStore} from './store';
 import {type AuthSettings} from './settings';
@@ -218,7 +216,7 @@ export function securityRoutes(settings: AuthSettings) {
         });
       })
 
-      .post('/two-factor/setup', passwordBody, withViewer, requireAuth, withAuthCore, async c => {
+      .post('/two-factor/setup', passwordBody, withViewer, requireAuth, notForOwnerAccount, withAuthCore, async c => {
         const viewer = c.var.viewer;
         const refused = await confirmPassword(c, viewer.id!, c.req.valid('json').password, 'password');
         if (refused) return refused;
@@ -246,6 +244,7 @@ export function securityRoutes(settings: AuthSettings) {
         }),
         withViewer,
         requireAuth,
+        notForOwnerAccount,
         withAuthCore,
         async c => {
           const id = c.var.viewer.id!;
@@ -270,7 +269,7 @@ export function securityRoutes(settings: AuthSettings) {
         }
       )
 
-      .post('/two-factor/disable', passwordBody, withViewer, requireAuth, withAuthCore, async c => {
+      .post('/two-factor/disable', passwordBody, withViewer, requireAuth, notForOwnerAccount, withAuthCore, async c => {
         const id = c.var.viewer.id!;
         const refused = await confirmPassword(c, id, c.req.valid('json').password, 'password');
         if (refused) return refused;
@@ -286,7 +285,7 @@ export function securityRoutes(settings: AuthSettings) {
         return c.json({ok: true});
       })
 
-      .post('/two-factor/recovery-codes', passwordBody, withViewer, requireAuth, withAuthCore, async c => {
+      .post('/two-factor/recovery-codes', passwordBody, withViewer, requireAuth, notForOwnerAccount, withAuthCore, async c => {
         const id = c.var.viewer.id!;
         const refused = await confirmPassword(c, id, c.req.valid('json').password, 'password');
         if (refused) return refused;
@@ -308,6 +307,7 @@ export function securityRoutes(settings: AuthSettings) {
         }),
         withViewer,
         requireAuth,
+        notForOwnerAccount,
         withAuthCore,
         async c => {
           const id = c.var.viewer.id!;
@@ -434,6 +434,7 @@ export function securityRoutes(settings: AuthSettings) {
         body(v => ({password: raw(v.password).slice(0, PASSWORD_LIMITS.max * 2), confirm: text(v.confirm, 16)})),
         withViewer,
         requireAuth,
+        notForOwnerAccount,
         withAuthCore,
         async c => {
           const id = c.var.viewer.id!;
@@ -445,21 +446,6 @@ export function securityRoutes(settings: AuthSettings) {
           const refused = await confirmPassword(c, id, password, 'delete');
           if (refused) return refused;
 
-          const owner = await db.role.findUnique({where: {slug: SYSTEM_ROLES.OWNER}, select: {id: true}});
-          if (owner) {
-            const isOwner = await db.userRole.findUnique({where: {userId_roleId: {userId: id, roleId: owner.id}}, select: {userId: true}});
-            if (isOwner) {
-              const others = await db.userRole.count({
-                where: {roleId: owner.id, userId: {not: id}, user: {status: 'active'}},
-              });
-              if (others === 0) {
-                return c.json(
-                  problem('last_owner', 'You are the only owner. Make someone else an owner in Users first.'),
-                  409
-                );
-              }
-            }
-          }
           const {ipHash} = await keysFor(c, null);
           await db.authState.updateMany({where: {id: 1, ownerUserId: id}, data: {ownerUserId: null}});
           // Cascades: roles, devices, links, codes. Content the user made (jobs…) stays.

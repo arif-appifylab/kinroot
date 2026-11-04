@@ -5,14 +5,14 @@ import {Button} from '@/components/ui/button';
 import {Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog';
 import {Checkbox} from '@/components/ui/form';
 import {Skeleton} from '@/components/ui/misc';
-import {type AdminUser, siteApi, siteRolesQuery} from '@/lib/site-admin';
+import {type AdminUser, OWNER_ROLE, siteApi, siteRolesQuery} from '@/lib/site-admin';
 
 import {ErrorNote, PendingButton} from './common';
 
 /**
  * Pick an account's site roles (`PUT /site-api/admin/users/:id/roles`, site:user:update; the list
  * needs site:role:read). The server refuses roles you could not grant yourself, touching someone
- * with more access than you, and taking owner from the last owner; its words show here.
+ * with more access than you, and anything about owner; its words show here.
  */
 export function UserRolesDialog({user, self, onClose, onSaved}: {user: AdminUser; self: boolean; onClose: () => void; onSaved: (user: AdminUser) => void}) {
   const ids = useId();
@@ -46,7 +46,8 @@ export function UserRolesDialog({user, self, onClose, onSaved}: {user: AdminUser
             ) : (
               <fieldset className="grid gap-2" disabled={save.isPending}>
                 <legend className="mb-2 text-sm font-semibold text-slate-700">Site roles</legend>
-                {roles.data?.roles.map((role) => {
+                {/* Owner comes only from the dashboard ("View as admin"): nobody can give or take it here. */}
+                {roles.data?.roles.filter((role) => role.slug !== OWNER_ROLE).map((role) => {
                   const id = `${ids}-${role.slug}`;
                   return (
                     <label key={role.slug} htmlFor={id} className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-100 p-3 hover:bg-slate-50 has-[button:disabled]:cursor-not-allowed">

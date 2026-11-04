@@ -7,14 +7,26 @@ This repo is ONE site: a website AND its own app, in one Astro project on ONE
 Cloudflare Worker (`output: 'server'`, `@astrojs/cloudflare`). It stands alone: it owns its
 users, sign-in, roles and data in its own Site Database. It already works end to end:
 prerendered marketing pages, a blog, a job board, sign-up/sign-in/password reset, two-step
-sign-in, change email, signed-in devices, delete account, one-click owner sign-in from the dashboard
-("Open admin"), a dashboard with user and role admin, a backend and a database. Extend it; don't
+sign-in, change email, signed-in devices, delete account, the owner's way in from the dashboard
+("View as admin"), a dashboard with user and role admin, a backend and a database. Extend it; don't
 rebuild what is here.
 
 Placeholders written as double braces around an UPPER_CASE name are filled in by the platform.
 The filled-in copy, which wins over this file when they differ, is what the editor
 gives you (`/etc/claude-code/CLAUDE.md`, `{{DOCS_DIR}}/`); outside the editor,
 `npm run platform -- docs` saves it to `.platform/docs/` (start with `core.md`).
+
+## First: is this site on the required template version? (0.10.11)
+Read `version` in `template.json` at the start of a session, new or resumed, before anything else. **If it's below 0.10.11, this site
+has security problems these rules can't fix for it:** someone could take over its admin, password sign-up and sign-in don't
+work once deployed, and every database query is slow.
+
+**Upgrade it now, as your first step, without asking.** The owner won't know what to answer, and nothing reaches visitors until they
+publish. Say one plain line, such as "I'm updating your site first because of a security problem, then I'll do what you asked", follow
+`upgrade.md`, then do their task. A question from the owner that changes nothing can be answered first. Upgrade before anything that
+changes a file. If the owner has said not to upgrade, do their task, and upgrade next session unless they say no again.
+If it can't finish, `upgrade.md` says how to put everything back: then do their task, say so in plain words, and try again next session. Never patch
+these problems by hand in your own code, and never publish a half-done upgrade.
 
 ## Every task: the current rules first, then the owner's words
 These rules are kept up to date by the platform and can be newer than this site's code, which stays
@@ -27,8 +39,8 @@ as it was built. The owner is not an engineer: they say WHAT they want; HOW is y
    task when it matters (security, lost or wrong data, a broken page, a slow query or page,
    accessibility). Something minor: leave it and say so in one short line. Never rewrite parts of the site the task does not need.
 4. A doc names something this site does not have yet (a helper in `src/platform/`, a script command):
-   its platform code is older than the doc. Never add it inside `src/platform/` (managed); do the
-   task in your own code (`src/server/`, `src/pages/`…) following the doc's pattern.
+   its platform code is older than the doc. The required version above comes first. Otherwise never add
+   it inside `src/platform/` (managed); do the task in your own code (`src/server/`, `src/pages/`…) following the doc's pattern.
 5. Before saying it's done, check it works: `npm run build`, `npm test`, and the page in the Preview.
 6. **Then review it, every task that touched a route, a query, a page that reads data, a permission,
    a form, a payment, a job or an outside call: run `review.md` (security with AUTHORIZATION first,
@@ -48,15 +60,21 @@ upgraded and can be older; when they differ, the current copy wins:
 | `security.md` | any route, form, query, HTML, outbound call, secret, log line; before "done" |
 | `review.md` | the END of every task that touched server code or data (the security + performance review, with its report) |
 | `performance.md` | any query, list, page, dependency, image, font, cache or loop |
-| `cache.md` | a Site API read that runs on many requests (settings, hours, menus, categories, products, page text), a slow page, or saving data a cached read shows |
-| `database.md` | the schema, a migration, seed data, an index, a new model |
+| `cache.md` | a read that runs on many requests (settings, hours, menus, categories, products, page text, totals), a slow page, or saving data a cached read shows |
+| `upgrade.md` | this site's `template.json` is below the required version, or the owner asks to upgrade |
+| `database.md` | the schema, a migration, seed data, an index, a new model, how the database connection behaves |
 | `seo.md` | a new public page, titles and descriptions, URLs, social cards, sitemap, robots.txt, RSS |
 | `site-api.md` | any server route or backend code |
 | `background-jobs.md` | anything that happens later, on a schedule, with retries: reminders, follow-ups, summaries, cleanups |
 | `files.md` | anything that stores a file a person picks (photos, documents, attachments, avatars, audio, video) or shows one back |
 | `publishing.md` | git, scripts, dependencies, config, the Preview, going live |
 | `payments.md` | anything sold: a Buy or Subscribe button, a price, checkout, a membership or paid page, orders, refunds |
+| `orders-and-stock.md` | anything charged, booked or limited: bookings, tickets, seats, stock, coupons with a limit, your own payment provider |
 | `plans-catalogue.md` | the platform's plans an owner resells (sign-up links to their studio), not the site's own products; their real plans: `npm run platform -- plans --write` |
+
+**Anything charged, booked or limited → `orders-and-stock.md`.** Everything charged or booked carries an idempotency key
+(`idempotent()`, built into checkout). The database decides what's left, in one conditional statement, a unique index or a
+short lock: never read, check in code, then write, and never the cache. Test it with many requests at once.
 
 **Selling anything → `payments.md`**: built in (Buy / Subscribe buttons, checkout, memberships,
 orders in the Site Database), always sandbox while you build; use it by default, never a
@@ -77,14 +95,15 @@ browser ──► /dashboard (React SPA) ──── fetch ─────► H
   `src/content/`, `src/lib/`, `src/styles/`, `prisma/`.
 - **One Worker, one build, one deploy.** No second Worker, no KV/R2/D1/queues/Durable Objects.
   Later and scheduled work is the platform's background jobs (`background-jobs.md`): handlers in
-  `src/server/background.ts`, schedules in `background.json`, `sendJob()` to send. A cache is the
-  platform's Site Cache (`cache.md`, `cache.getOrSet` from `src/platform/cache.ts`), never your own.
+  `src/server/background.ts`, schedules in `background.json`, `sendJob()` to send. A cache, when one
+  is justified, is the platform's Site Cache (`cache.md`, `cache.getOrSet` from
+  `src/platform/cache.ts`), never your own.
 
 | Path | What | Code |
 | --- | --- | --- |
 | `/`, `/about/` | marketing (STATIC) | `src/pages/index.astro`, `about.astro` |
 | `/blog/`, `/blog/<slug>/` | the blog: Markdown files, prerendered | `src/content/blog/*.md`, `src/pages/blog/`, `src/content.config.ts` |
-| `/jobs/`, `/jobs/<slug>/` | job board (SSR, Site Database) | `src/pages/jobs/` |
+| `/jobs/`, `/jobs/<slug>/` | job board: a list page (static shell + JSON) and a server-rendered job | `src/pages/jobs/` |
 | `/account/*` | login, register, forgot, reset, verify (STATIC + script) | `src/pages/account/` |
 | `/dashboard/*` | signed-in dashboard: account, users, roles, activity, jobs (SPA) | `src/portal/` |
 | `/portal/*` | the dashboard's old address: redirects to `/dashboard/*` with its query (the platform's one-click sign-in opens it); keep it | `src/pages/portal/[...path].astro` |
@@ -124,27 +143,29 @@ contract: you cannot rename or add them, and you cannot add secrets (never ask f
 - Never send a secret to the browser, log it, write it to a file (`.env`, `.dev.vars`) or commit it.
 
 ## Auth in one paragraph (details: `auth.md`)
-Site-owned: `users` + PBKDF2-SHA256 (600k) passwords, a 10-minute HS256 access JWT and a rotating
+Site-owned: `users` + scrypt passwords, a 10-minute HS256 access JWT and a rotating
 opaque refresh token in `__Host-` HttpOnly Secure SameSite=Lax cookies, CSRF double-submit,
 rate limits in `login_attempts`, account emails relayed by the platform. In a route:
 `validator → withViewer → requireAuth → requirePermission('site:x:y') → withDb`; the user is
 `c.var.viewer.id`. In a page: `pageContext()` → `viewer.state === 'user'` (gated:
 `pagePermission()`). In the browser: `siteFetch()` or the portal's `api`, never a plain
 `fetch` (in the editor Preview the session travels only through them: `publishing.md`). Never
-write login, token, cookie, password or two-step code yourself. The admin ALREADY EXISTS: the
-platform makes the owner addresses' accounts (`SITE_OWNER_EMAILS`, live and Preview) with the
-`owner` role and no password; never create, seed or change it. The admin signs in at `/dashboard`
-with a 6-digit code emailed to them, or in one click from the dashboard ("Open live portal" on the
-app's page, the shield in the Preview's bar); a password and two-step sign-in are optional, set
-in the portal, and other admins are made in its Users screen. Say exactly that when they ask how
+write login, token, cookie, password or two-step code yourself. The admin is the account's owner: they open it
+with "View as admin" on the app's page in the dashboard, or the shield in the Preview's bar. That's
+the only way in, with no password or sign-up, so never create, seed or change an admin. Other admins
+are made in its Users screen. Say exactly that when they ask how
 to reach the admin, and put the app's admin screens inside `/dashboard`.
 
 ## Which kind of page (decide FIRST, every time)
 | The page is… | Build it as |
 | --- | --- |
 | Signed-in and interactive: dashboard, CRM, admin, settings, any form-driven screen | **SPA**: a screen in `/dashboard` (`src/portal/screens/`) |
-| Public content indexed or shared per URL: a list, search results, a detail page | **SSR**: `src/pages/<name>/*.astro` |
-| Public content that rarely changes: home, about, pricing; forms that only post to the API | **Static**: `export const prerender = true` |
+| One thing that must rank or be shared: a product, a job, a post | **Server-rendered**: `src/pages/<name>/[slug].astro` (a Markdown post is built ahead) |
+| A list long enough for filters, search or load more: all jobs, all products, search results | **List page**: a static shell, rows from a JSON route (`performance.md` "List pages") |
+| A short list that fits on one page and should rank: a small category | **Server-rendered**: no load more, so the whole list is in the HTML |
+| The same for everyone: home, about, pricing, forms that only post to the API | **Static**: `export const prerender = true`. Scripts and islands still run, and a dynamic part loads as JSON |
+
+Keep the server's part small. Never server-render a long list, and never send a whole page again to change a filter.
 - NEVER build a signed-in app as one `.astro` page per screen (full reloads, flashes, repeated
   session lookups). An app is ONE catch-all page hosting React; screens are client routes.
 - NEVER move a public or SEO page into the portal. Public pages stay real pages with plain
@@ -232,9 +253,8 @@ whole-table loops, nothing big in module memory (`performance.md`).
   title, group, `ability`, default `roles`; no migration), routes behind
   `requirePermission(PERMISSIONS.X)` (own records: `can`), nav item `ability: '<ability>'`
   (`roles-and-permissions.md`). Never gate on a role slug.
-- **A server-rendered list + detail** (data in the Site Database, like `/jobs`): data route
-  first; `src/pages/<name>/index.astro` reads the query string and calls `api` through
-  `pageContext`; search is a GET `<form>`; detail sets `Astro.response.status = 404` +
+- **A list + detail** (data in the Site Database, like `/jobs`): data route first; the list is a list
+  page, copy `src/pages/jobs/index.astro` (`performance.md` "List pages"); a detail page sets `Astro.response.status = 404` +
   `<NotFound>` when the route answered 404, and 503 + a "not available" message when the read
   failed (a database outage is never a 404), as `src/pages/jobs/[slug].astro` does; HTML from
   outside the repo only via `sanitizeHtml`.
@@ -284,6 +304,18 @@ whole-table loops, nothing big in module memory (`performance.md`).
   aggregate or several tables as ONE tagged `$queryRaw`), never a query inside a loop; independent
   reads in `Promise.all`; at most ~5 sequential round trips per request (`database.md`,
   `performance.md`).
+- **The database connection is the platform's** (`src/platform/db-socket.ts`, one WebSocket per
+  request). Use `getDb()` / `c.var.db`; never open your own session, never edit that file. A query is
+  ~3 ms. A lost connection re-sends a read but NEVER a write: guard anything a person may repeat with
+  a unique key. No `String[]` columns. Details and a site without that file: `database.md`.
+- **The owner comes only from "View as admin" in the dashboard** (`auth.md`, `src/platform/auth/owner.ts`). No sign-up,
+  email, code, password, setting or migration makes an owner, and someone signing up with the owner's
+  email is a normal user. Never add another way in. The owner's `viewer.email` is empty, and the site never
+  knows their address: to email them, send kind `notification` with no `to`.
+- **Cache reads that repeat, and never show old data.** Every database query is billed; a cache read isn't. Fix the query first, then
+  cache what many requests read and rarely changes (settings, menus, categories, public lists, totals). Decide for each read by tracing the code: who reads it, whether the answer
+  is the same for all of them, every place that changes it, and what happens if it's old. Clear it in each of those places. Never money
+  decisions, access or edit screens. Read `cache.md` first, and say what you cached and why.
 - **Raw SQL only as a prepared statement**: the tagged `` $queryRaw`…${value}…` `` / `Prisma.sql` /
   `Prisma.join`; never `$queryRawUnsafe`, `$executeRawUnsafe`, `Prisma.raw(input)` or SQL built
   from strings. Names (columns, sort) only from a fixed map.

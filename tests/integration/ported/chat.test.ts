@@ -4,7 +4,7 @@ import {app} from '../../../src/server/app';
 import {agentCameOnline} from '../../../src/server/crm/inbox/chat';
 import {crmTick} from '../../../src/server/crm/lib/ticks';
 import {env} from '../support/cloudflare-workers';
-import {fakeStorage, owner, resetCrm, teammate, userId} from '../support/crm';
+import {fakeStorage, owner, ownerAccountId, resetCrm, teammate, userId} from '../support/crm';
 import {Browser, configureEnv, DATABASE_URL, db, ORIGIN} from '../support/harness';
 import {fakeResend, inbound, inJob, mailbox, mails, mailsTo, restoreResend} from './support-inbox';
 
@@ -93,7 +93,7 @@ async function seed() {
   own = await owner();
   await own.get('/site-api/crm/auth/state');
   await ok(own.post('/site-api/crm/auth/setup', {brandName: 'Kinroot', demoData: false}));
-  me = await db.member.findUniqueOrThrow({where: {userId: await userId('owner@example.com')}, select: {id: true, name: true}});
+  me = await db.member.findUniqueOrThrow({where: {userId: await ownerAccountId()}, select: {id: true, name: true}});
   team = await mailbox(own, {fromName: 'Acme team', fromEmail: 'chat-team@kinroot-port.io', shared: true, replyTo: TEAM_IN});
   await saveInbox({teamAccounts: 'all', access: 'everyone', memberIds: [], visibility: 'all', assignment: 'manual', roundRobinIds: [], autoAssignReplies: true, autoCloseDays: null, blockedAddresses: [], blockedDomains: []});
   chatSettings = (await ok(own.get('/site-api/crm/inbox/chat/settings'))).settings;
