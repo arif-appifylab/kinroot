@@ -8,6 +8,7 @@ import {getChatSettings} from '../inbox/chat';
 import {linkPaths, uniqueLinkSlug} from '../scheduling/links';
 import {audit} from './audit';
 import {getTicketSettings} from './tickets';
+import {numbers} from './json-list';
 
 const KEY = 'website';
 
@@ -32,7 +33,7 @@ export async function websiteChoices(db: Db) {
   const paths = await linkPaths(db, links);
   return {
     forms,
-    links: links.map((l) => ({id: l.id, name: l.name, path: paths.get(l.id)!, description: l.description, minutes: l.durations[0] ?? 30})),
+    links: links.map((l) => ({id: l.id, name: l.name, path: paths.get(l.id)!, description: l.description, minutes: numbers(l.durations)[0] ?? 30})),
   };
 }
 

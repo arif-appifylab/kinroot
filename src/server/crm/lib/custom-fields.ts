@@ -2,6 +2,7 @@ import {HTTPException} from 'hono/http-exception';
 
 import type {EntityType} from '../../../generated/prisma/client';
 import type {Db} from '../kit/db';
+import {strings} from './json-list';
 
 /** Keeps only defined custom fields, coerces by type, merges onto existing values. */
 export async function cleanCustom(
@@ -32,10 +33,10 @@ export async function cleanCustom(
         out[def.key] = raw === true || raw === 'true';
         break;
       case 'MULTISELECT':
-        out[def.key] = (Array.isArray(raw) ? raw : [raw]).map(String).filter((v) => def.options.includes(v));
+        out[def.key] = (Array.isArray(raw) ? raw : [raw]).map(String).filter((v) => strings(def.options).includes(v));
         break;
       case 'SELECT':
-        if (!def.options.includes(String(raw))) throw new HTTPException(400, {message: `${def.label}: unknown option`});
+        if (!strings(def.options).includes(String(raw))) throw new HTTPException(400, {message: `${def.label}: unknown option`});
         out[def.key] = String(raw);
         break;
       default:

@@ -11,6 +11,7 @@ import {CRM_APP} from '../kit/config';
 import type {Db} from '../kit/db';
 import {mergeFields, type MergeContext} from '../email/render';
 import {segmentWhere} from './segments';
+import {strings} from './json-list';
 
 export type DealWithStage = Deal & {stage: Stage};
 
@@ -167,7 +168,7 @@ const DAY = 86_400_000;
 export async function fieldsFor(db: Db, target: Target): Promise<RecordField[]> {
   if (target === 'ticket') return RECORD_FIELDS.ticket;
   const defs = await db.customFieldDef.findMany({where: {entity: ENTITY_OF[target]}, select: {key: true, label: true, type: true, options: true}});
-  return [...RECORD_FIELDS[target], ...customRecordFields(defs)];
+  return [...RECORD_FIELDS[target], ...customRecordFields(defs.map((d) => ({...d, options: strings(d.options)})))];
 }
 
 export function fieldValue(rec: unknown, key: string): unknown {

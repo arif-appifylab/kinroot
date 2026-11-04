@@ -29,6 +29,7 @@ import {rememberOption} from './settings';
 import {createTicket} from './tickets';
 import {formConversation} from '../inbox/forms';
 import {bookFormSlots, checkFormSlots} from '../scheduling/form-booking';
+import {strings} from './json-list';
 
 export const formSettings = (form: Pick<Form, 'settings'>): FormSettings => ({...defaultSettings(), ...(form.settings as Partial<FormSettings>)});
 export const formFields = (form: Pick<Form, 'fields'>) => (form.fields ?? []) as FormField[];
@@ -202,7 +203,7 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput) {
       const customValue = Object.keys(custom).length ? await cleanCustom(db, 'CONTACT', custom, contact.custom).catch(() => undefined) : undefined;
       const patch = {
         ...contactData,
-        tags: tags.length ? [...new Set([...contact.tags, ...tags])] : undefined,
+        tags: tags.length ? [...new Set([...strings(contact.tags), ...tags])] : undefined,
         lifecycleStage: stage && STAGE_RANK[stage] > STAGE_RANK[contact.lifecycleStage] ? stage : undefined,
         ownerId: contact.ownerId ?? ownerId,
       };

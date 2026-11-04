@@ -34,7 +34,7 @@ export async function emit(db: Db, type: EventType, input: EmitInput) {
         data: JSON.parse(JSON.stringify(input.data ?? {})) as Prisma.InputJsonValue,
       },
     });
-    const hooks = await db.webhook.findMany({where: {active: true, OR: [{events: {has: type}}, {events: {has: '*'}}]}, select: {id: true}});
+    const hooks = await db.webhook.findMany({where: {active: true, OR: [{events: {array_contains: [type]}}, {events: {array_contains: ['*']}}]}, select: {id: true}});
     if (hooks.length) {
       await db.webhookDelivery.createMany({data: hooks.map((hook) => ({webhookId: hook.id, eventId: event.id, eventType: type}))});
       await enqueue(db, 'webhook.deliver', {eventId: event.id});
@@ -64,7 +64,7 @@ export async function emitMany(db: Db, type: EventType, inputs: EmitInput[]) {
     });
     await queueScoring(db, events.map((e) => ({id: e.id, type})));
     await queueAutomations(db, events.map((e) => ({id: e.id, type})));
-    const hooks = await db.webhook.findMany({where: {active: true, OR: [{events: {has: type}}, {events: {has: '*'}}]}, select: {id: true}});
+    const hooks = await db.webhook.findMany({where: {active: true, OR: [{events: {array_contains: [type]}}, {events: {array_contains: ['*']}}]}, select: {id: true}});
     if (!hooks.length) return;
     await db.webhookDelivery.createMany({data: hooks.flatMap((hook) => events.map((event) => ({webhookId: hook.id, eventId: event.id, eventType: type})))});
     // One job per few events, about DELIVERIES_PER_JOB deliveries each (all hooks of an event in the same job).

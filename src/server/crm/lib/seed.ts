@@ -3,6 +3,7 @@ import type {Db} from '../kit/db';
 import {GALLERY, STARTER_TEMPLATE_IDS} from '@/lib/email-gallery';
 import {fromGallery} from '../email/templates';
 import {changeStatus, createTicket} from './tickets';
+import {strings} from './json-list';
 
 /**
  * A sample teammate who owns part of the demo data. Not an account: nobody signs in as them (the
@@ -206,7 +207,7 @@ export async function seedApp(db: Db, ownerId: string, demo: boolean) {
         text: [i.title, i.body].filter(Boolean).join('\n'),
         data: {
           kind: i.kind, title: i.title, body: i.body, outcome: i.outcome, direction: i.direction, durationMin: i.durationMin, location: i.location, occurredAt: i.occurredAt.toISOString(),
-          attendees: i.attendeeIds.map((id) => {
+          attendees: strings(i.attendeeIds).map((id) => {
             const p = contacts.find((c) => c.id === id)!;
             return {id, name: `${p.firstName} ${p.lastName ?? ''}`.trim()};
           }),

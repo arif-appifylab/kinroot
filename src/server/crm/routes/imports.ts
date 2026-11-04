@@ -12,6 +12,7 @@ import {addNewOptions, errorCsv, queuePhase} from '../lib/imports';
 import {notFound, valid} from '../lib/http';
 import {purgeFiles, readBytes} from '../kit/storage';
 import {checkUpload, completeUpload, startUpload, uploadBody} from '../lib/uploads';
+import {strings, withStrings} from '../lib/json-list';
 
 const entity = z.enum(['contact', 'company', 'deal']);
 
@@ -80,7 +81,7 @@ export const imports = new Hono<AppEnv>()
     if (!parsed.headers.some(Boolean)) return refuse(400, 'The first row should hold the column names');
     if (!parsed.rows.length) return refuse(400, 'The file has a header but no rows');
     if (parsed.rows.length > MAX_IMPORT_ROWS) return refuse(413, `Up to ${MAX_IMPORT_ROWS.toLocaleString('en-US')} rows per import. Split the file and import the parts.`);
-    const defs = await db.customFieldDef.findMany({where: {entity: IO_ENTITIES[form.entity].fieldEntity}});
+    const defs = (await db.customFieldDef.findMany({where: {entity: IO_ENTITIES[form.entity].fieldEntity}})).map((d) => withStrings(d, 'options'));
     const listId = form.listId || null;
     const imp = await db.import.create({
       data: {
@@ -115,8 +116,8 @@ export const imports = new Hono<AppEnv>()
     if (!['draft', 'ready', 'validating'].includes(imp.status)) throw new HTTPException(400, {message: 'This import has already run'});
     const {mapping, options} = c.req.valid('json');
     const kind = imp.entity as IoEntity;
-    if (mapping.length !== imp.headers.length) throw new HTTPException(400, {message: 'Map every column (or skip it)'});
-    const defs = await db.customFieldDef.findMany({where: {entity: IO_ENTITIES[kind].fieldEntity}});
+    if (mapping.length !== strings(imp.headers).length) throw new HTTPException(400, {message: 'Map every column (or skip it)'});
+    const defs = (await db.customFieldDef.findMany({where: {entity: IO_ENTITIES[kind].fieldEntity}})).map((d) => withStrings(d, 'options'));
     const targets = new Map(importTargets(kind, defs).map((t) => [t.key, t]));
     const used = mapping.filter((m): m is string => !!m);
     for (const key of used) if (!targets.has(key)) throw new HTTPException(400, {message: `Unknown field "${key}"`});

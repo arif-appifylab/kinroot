@@ -451,7 +451,7 @@ model Company {
   country        String?
   linkedin       String?
   description    String?
-  tags           String[]  @default([])
+  tags           Json  @default("[]")
   custom         Json      @default("{}")
   ownerId        String?
   owner          Member?   @relation("CompanyOwner", fields: [ownerId], references: [id], onDelete: SetNull)
@@ -475,6 +475,7 @@ model Company {
   @@index([ownerId])
   @@index([createdAt(sort: Desc), id(sort: Desc)]) // list default order, newest first (P2-24)
   @@index([lastActivityAt]) // sort by last activity; "no activity for N days" automation trigger (P2-24)
+  @@index([tags(ops: JsonbPathOps)], type: Gin) // tag filters (@> containment)
 }
 
 model Contact {
@@ -492,7 +493,7 @@ model Contact {
   city           String?
   country        String?
   source         String?
-  tags           String[]       @default([])
+  tags           Json       @default("[]")
   custom         Json           @default("{}")
   ownerId        String?
   owner          Member?        @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: SetNull)
@@ -529,6 +530,7 @@ model Contact {
   @@index([lastName, firstName])
   @@index([createdAt(sort: Desc), id(sort: Desc)]) // list default order, newest first (P2-24)
   @@index([lastActivityAt]) // sort by last activity; "no activity for N days" automation trigger (P2-24)
+  @@index([tags(ops: JsonbPathOps)], type: Gin) // tag filters (@> containment)
 }
 
 model ContactCompany {
@@ -597,7 +599,7 @@ model Deal {
   company           Company?   @relation(fields: [companyId], references: [id], onDelete: SetNull)
   ownerId           String?
   owner             Member?    @relation("DealOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  tags              String[]   @default([])
+  tags              Json   @default("[]")
   custom            Json       @default("{}")
   type              String? // New business | Existing business
   priority          String? // Low | Medium | High
@@ -625,6 +627,7 @@ model Deal {
   @@index([companyId])
   @@index([createdAt(sort: Desc), id(sort: Desc)]) // list default order, newest first (P2-24)
   @@index([lastActivityAt]) // sort by last activity; "no activity for N days" automation trigger (P2-24)
+  @@index([tags(ops: JsonbPathOps)], type: Gin) // tag filters (@> containment)
 }
 
 // Every company on a deal. Deal.companyId mirrors the primary one.
@@ -797,7 +800,7 @@ model Interaction {
   direction    String? // INBOUND | OUTBOUND
   locationType String? // VIDEO | PHONE | IN_PERSON | OTHER (meetings)
   location     String? // meeting link, phone number or address
-  attendeeIds  String[]        @default([]) // contact ids
+  attendeeIds  Json        @default("[]") // contact ids
   authorId     String?
   author       Member?         @relation(fields: [authorId], references: [id], onDelete: SetNull)
   contactId    String?
@@ -962,9 +965,9 @@ model EmailMessage {
   status        EmailStatus
   fromEmail     String
   fromName      String?
-  to            String[]
-  cc            String[]       @default([])
-  bcc           String[]       @default([])
+  to            Json
+  cc            Json       @default("[]")
+  bcc           Json       @default("[]")
   subject       String
   html          String?
   text          String?
@@ -1012,7 +1015,7 @@ model ChannelMessage {
   kind           String               @default("text") // text | auto (automatic notice such as the offline message)
   status         ChannelMessageStatus @default(SENT)
   text           String               @default("") // plain text, never HTML
-  fileIds        String[]             @default([]) // File rows (purpose "chat"), served by signed links
+  fileIds        Json             @default("[]") // File rows (purpose "chat"), served by signed links
   identityId     String? // inbound: who sent it
   identity       ChannelIdentity?     @relation(fields: [identityId], references: [id], onDelete: SetNull)
   senderId       String? // outbound: the team member
@@ -1120,7 +1123,7 @@ model CustomFieldDef {
   key       String
   label     String
   type      FieldType
-  options   String[]   @default([])
+  options   Json   @default("[]")
   position  Int        @default(0)
   required  Boolean    @default(false)
   createdAt DateTime   @default(now())
@@ -1171,7 +1174,7 @@ model Webhook {
   id             String    @id @default(cuid())
   url            String
   description    String?
-  events         String[]  @default([]) // event types; "*" = every event
+  events         Json  @default("[]") // event types; "*" = every event
   secret         String // AES-GCM encrypted signing secret
   active         Boolean   @default(true)
   failures       Int       @default(0) // consecutive failed deliveries
@@ -1531,7 +1534,7 @@ model Goal {
   metric    String // won_revenue | deals_won | activities
   period    String    @default("MONTH") // MONTH | QUARTER
   target    Float
-  kinds     String[]  @default([]) // activities: CALL | MEETING | EMAIL (empty = all three)
+  kinds     Json  @default("[]") // activities: CALL | MEETING | EMAIL (empty = all three)
   userId    String?
   user      Member?   @relation(fields: [userId], references: [id], onDelete: Cascade)
   startsAt  DateTime  @default(now())
@@ -1581,7 +1584,7 @@ model Ticket {
   category                String?
   queue                   String? // team queue, e.g. "Billing"
   source                  TicketSource   @default(MANUAL)
-  tags                    String[]       @default([])
+  tags                    Json       @default("[]")
   assigneeId              String?
   assignee                Member?        @relation("TicketAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   contactId               String?
@@ -1614,6 +1617,7 @@ model Ticket {
   @@index([companyId])
   @@index([dealId])
   @@index([lastMessageAt])
+  @@index([tags(ops: JsonbPathOps)], type: Gin) // tag filters (@> containment)
 }
 
 // The ticket thread: public replies (emailed), internal notes and events
@@ -1632,7 +1636,7 @@ model TicketMessage {
   fromEmail      String? // customer replies
   fromName       String?
   emailMessageId String? // EmailMessage sent or received for this reply
-  fileIds        String[] @default([]) // File rows (purpose "ticket")
+  fileIds        Json @default("[]") // File rows (purpose "ticket")
   data           Json     @default("{}") // events: {type, from, to, …}
   createdAt      DateTime @default(now())
 
@@ -1671,11 +1675,11 @@ model BookingLink {
   kind         String   @default("personal") // personal | team
   userId       String? // owner (personal) or creator (team)
   user         Member?  @relation(fields: [userId], references: [id], onDelete: SetNull)
-  hostIds      String[] @default([]) // team links: users in the rotation
+  hostIds      Json @default("[]") // team links: users in the rotation
   slug         String
   name         String
   description  String?
-  durations    Int[]    @default([30]) // minutes; the first one is preselected
+  durations    Json    @default("[30]") // minutes; the first one is preselected
   timezone     String   @default("UTC") // the timezone `availability` is written in
   availability Json     @default("{}")
   bufferBefore Int      @default(0)
@@ -1741,7 +1745,7 @@ model CalendarConnection {
   email            String
   credentials      String // encrypted OAuth tokens, never returned to the browser
   calendars        Json      @default("[]") // [{id, name, primary, writable}] as last listed
-  busyCalendarIds  String[]  @default([]) // checked for conflicts on booking pages
+  busyCalendarIds  Json  @default("[]") // checked for conflicts on booking pages
   targetCalendarId String? // where new meetings are written (null = primary)
   isDefault        Boolean   @default(false) // the connection new meetings are written to
   syncMeetings     Boolean   @default(true) // log events with known contacts as meetings
@@ -1912,7 +1916,7 @@ model DeletedRecord {
   detail        String? // email, domain, value, ticket number… for the bin list
   counts        Json     @default("{}") // {note: 3, task: 1, …} for the bin list
   snapshot      Json // {v, record, rows: {table: row[]}, relink: {"table.column": id[]}, files: […]}
-  fileIds       String[] @default([])
+  fileIds       Json @default("[]")
   deletedById   String?
   deletedByName String?
   deletedAt     DateTime @default(now())
@@ -1931,7 +1935,7 @@ model DuplicatePair {
   entity        String // contact | company
   aId           String
   bId           String
-  reasons       String[]  @default([]) // see DUPLICATE_REASONS in src/lib/hygiene.ts
+  reasons       Json  @default("[]") // see DUPLICATE_REASONS in src/lib/hygiene.ts
   score         Int // confidence 0-100
   status        String    @default("open") // open | dismissed
   dismissedById String?
@@ -2065,7 +2069,7 @@ model Import {
   errorFile   File?     @relation("ImportErrors", fields: [errorFileId], references: [id], onDelete: SetNull)
   userId      String?
   user        Member?   @relation(fields: [userId], references: [id], onDelete: SetNull)
-  headers     String[]  @default([])
+  headers     Json  @default("[]")
   delimiter   String    @default(",")
   mapping     Json      @default("[]") // target per column index (null = skip)
   options     Json      @default("{}") // ImportOptions in src/lib/import-export.ts
@@ -2114,7 +2118,7 @@ model Export {
   userId       String?
   user         Member?       @relation(fields: [userId], references: [id], onDelete: SetNull)
   filters      Json          @default("{}")
-  columns      String[]      @default([])
+  columns      Json      @default("[]")
   listId       String?
   fileName     String
   fileId       String?
@@ -2150,8 +2154,8 @@ model ReportSchedule {
   monthDay    Int? // monthly: 1–31 (clamped to short months), -1 = last day
   time        String     @default("09:00") // HH:MM, wall clock in `timezone`
   timezone    String     @default("UTC")
-  userIds     String[] // team members
-  emails      String[] // external addresses
+  userIds     Json // team members
+  emails      Json // external addresses
   subject     String?
   note        String?
   range       String     @default("report") // report = its own range | previous = the period since the last send
@@ -2183,7 +2187,7 @@ model ReportScheduleSend {
   slotAt     DateTime
   manual     Boolean        @default(false)
   status     String         @default("pending") // pending | sent | failed | no_mailbox
-  delivered  String[]
+  delivered  Json
   recipients Int            @default(0)
   attempts   Int            @default(0)
   error      String?

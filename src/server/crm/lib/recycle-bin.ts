@@ -4,6 +4,7 @@ import type {Db} from '../kit/db';
 import {logActivity} from './activity';
 import {emit} from './events';
 import {purgeFiles} from '../kit/storage';
+import {strings} from './json-list';
 
 /**
  * Recycle bin. Deleting a contact, company, deal, ticket, form, list or inbox conversation goes
@@ -216,7 +217,7 @@ async function collectTickets(db: Db, ids: string[]): Promise<Collected> {
   const messages = await model(db, 'ticketMessage').findMany({where: {ticketId: {in: ids}}});
   attach(out, 'ticketId', 'ticketMessage', messages);
   // Ticket timeline entries point at the ticket through data.ticketId (not a foreign key).
-  const activityIds = await db.$queryRaw<{id: string}[]>`SELECT id FROM "Activity" WHERE type LIKE 'ticket\\_%' AND data->>'ticketId' = ANY(${ids})`;
+  const activityIds = ids.length ? await db.$queryRaw<{id: string}[]>`SELECT id FROM "Activity" WHERE type LIKE 'ticket\\_%' AND data->>'ticketId' IN (${Prisma.join(ids)})` : [];
   if (activityIds.length) {
     const activities = (await db.activity.findMany({where: {id: {in: activityIds.map((a) => a.id)}}})) as unknown as Row[];
     const comments = (await db.activityComment.findMany({where: {activityId: {in: activities.map((a) => a.id as string)}}})) as unknown as Row[];
@@ -225,11 +226,11 @@ async function collectTickets(db: Db, ids: string[]): Promise<Collected> {
     attachComments(out, withTicket, comments, '__ticketId');
     out.alsoDelete.push({table: 'activity', ids: activities.map((a) => a.id as string)});
   }
-  const fileIds = messages.flatMap((m) => m.fileIds as string[]);
+  const fileIds = messages.flatMap((m) => strings(m.fileIds as Prisma.JsonValue));
   if (fileIds.length) {
     const files = await db.file.findMany({where: {id: {in: fileIds}, purpose: 'ticket'}, select: {id: true, purpose: true, contactId: true, companyId: true, dealId: true}});
     for (const m of messages) {
-      const mine = files.filter((f) => (m.fileIds as string[]).includes(f.id)).map((f) => ({...f, trashed: true}));
+      const mine = files.filter((f) => strings(m.fileIds as Prisma.JsonValue).includes(f.id)).map((f) => ({...f, trashed: true}));
       if (mine.length) out.files.set(m.ticketId as string, [...(out.files.get(m.ticketId as string) ?? []), ...mine]);
     }
   }
@@ -263,11 +264,11 @@ async function collectConversations(db: Db, ids: string[]): Promise<Collected> {
   const chat = await model(db, 'channelMessage').findMany({where: {threadId: {in: ids}}});
   attach(out, 'threadId', 'channelMessage', chat);
   // Chat files belong to their message only: parked as "trash" with the entry, back to "chat" on restore.
-  const fileIds = chat.flatMap((m) => m.fileIds as string[]);
+  const fileIds = chat.flatMap((m) => strings(m.fileIds as Prisma.JsonValue));
   if (fileIds.length) {
     const files = await db.file.findMany({where: {id: {in: fileIds}, purpose: 'chat'}, select: {id: true, purpose: true, contactId: true, companyId: true, dealId: true}});
     for (const m of chat) {
-      const mine = files.filter((f) => (m.fileIds as string[]).includes(f.id)).map((f) => ({...f, trashed: true}));
+      const mine = files.filter((f) => strings(m.fileIds as Prisma.JsonValue).includes(f.id)).map((f) => ({...f, trashed: true}));
       if (mine.length) out.files.set(m.threadId as string, [...(out.files.get(m.threadId as string) ?? []), ...mine]);
     }
   }
@@ -512,7 +513,7 @@ async function afterRestore(db: Db, entity: BinEntity, record: Row, actor: BinAc
 /** Deletes bin entries for good: their parked files, follows and duplicate pairs go too. */
 export async function purgeBinEntries(db: Db, entries: Pick<DeletedRecord, 'id' | 'entity' | 'recordId' | 'fileIds'>[]) {
   if (!entries.length) return 0;
-  const fileIds = entries.flatMap((e) => e.fileIds);
+  const fileIds = entries.flatMap((e) => strings(e.fileIds));
   const recordIds = entries.map((e) => e.recordId);
   const follows = entries.filter((e) => e.entity === 'contact' || e.entity === 'company' || e.entity === 'deal');
   // Stored bytes first (storage is not part of the transaction), then the rows that pointed at them.

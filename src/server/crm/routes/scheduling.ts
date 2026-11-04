@@ -12,6 +12,7 @@ import {notFound, optStr, ownerScope, valid} from '../lib/http';
 import {userSelect} from '../lib/users';
 import {cancelBooking, manageUrl} from '../scheduling/bookings';
 import {ensureProfile, linkPath, linkPaths, uniqueHandle, uniqueLinkSlug} from '../scheduling/links';
+import {strings} from '../lib/json-list';
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const HHMM_END = /^(([01]\d|2[0-3]):[0-5]\d|24:00)$/;
@@ -87,7 +88,7 @@ export const scheduling = new Hono<AppEnv>()
   .get('/links', async (c) => {
     const me = currentUser(c);
     const rows = await c.var.db.bookingLink.findMany({
-      where: isAdmin(me) ? {OR: [{kind: 'team'}, {userId: me.id}]} : {OR: [{userId: me.id}, {kind: 'team', hostIds: {has: me.id}}]},
+      where: isAdmin(me) ? {OR: [{kind: 'team'}, {userId: me.id}]} : {OR: [{userId: me.id}, {kind: 'team', hostIds: {array_contains: [me.id]}}]},
       include: {user: {select: userSelect}},
       orderBy: [{kind: 'asc'}, {createdAt: 'asc'}],
     });
@@ -100,7 +101,7 @@ export const scheduling = new Hono<AppEnv>()
   .get('/links/:id', async (c) => {
     const me = currentUser(c);
     const link = await c.var.db.bookingLink.findUnique({where: {id: c.req.param('id')}, include: {user: {select: userSelect}}});
-    if (!link || (!canManage(me, link) && !link.hostIds.includes(me.id))) throw notFound('Booking link');
+    if (!link || (!canManage(me, link) && !strings(link.hostIds).includes(me.id))) throw notFound('Booking link');
     return c.json({link: {...(await withPath(c, link)), user: link.user, canEdit: canManage(me, link)}});
   })
 

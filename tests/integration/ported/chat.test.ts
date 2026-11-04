@@ -258,7 +258,7 @@ describe.skipIf(!DATABASE_URL)('Ported: website live chat (integration, real Pos
     let tagged = false;
     let points = 0;
     for (let i = 0; i < 20 && !(tagged && points); i++) {
-      tagged = (await db.contact.findUniqueOrThrow({where: {id: scored.id}})).tags.includes('chat-auto');
+      tagged = ((await db.contact.findUniqueOrThrow({where: {id: scored.id}})).tags as string[]).includes('chat-auto');
       points = (await db.scoreEvent.aggregate({where: {contactId: scored.id, ruleId: rule.id}, _sum: {points: true}}))._sum.points ?? 0;
       if (!(tagged && points)) await new Promise(r => setTimeout(r, 50));
     }

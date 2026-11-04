@@ -2,7 +2,7 @@ import {Hono} from 'hono';
 import {HTTPException} from 'hono/http-exception';
 import {z} from 'zod';
 
-import type {Prisma} from '../../../generated/prisma/client';
+import {Prisma} from '../../../generated/prisma/client';
 import {currentUser, type AppEnv} from '../kit/guards';
 import {customDiff, diff, logActivity} from '../lib/activity';
 import {audit, auditMany} from '../lib/audit';
@@ -18,6 +18,7 @@ import {moveToBin} from '../lib/recycle-bin';
 import {listContactWhere} from '../lib/segments';
 import {rememberOption} from '../lib/settings';
 import {userSelect} from '../lib/users';
+import {strings} from '../lib/json-list';
 
 const lifecycle = z.enum(['LEAD', 'QUALIFIED', 'OPPORTUNITY', 'CUSTOMER', 'CHURNED', 'OTHER']);
 
@@ -67,7 +68,7 @@ export function contactWhere(q: Record<string, string | undefined>): Prisma.Cont
     }));
   }
   if (q.ownerId) where.ownerId = q.ownerId === 'none' ? null : q.ownerId;
-  if (q.tag) where.tags = {has: q.tag};
+  if (q.tag) where.tags = {array_contains: [q.tag]};
   if (q.lifecycleStage) where.lifecycleStage = q.lifecycleStage as Prisma.ContactWhereInput['lifecycleStage'];
   if (q.source) where.source = q.source;
   if (q.companyId) where.companies = {some: {companyId: q.companyId}};
@@ -205,11 +206,15 @@ export const contacts = new Hono<AppEnv>()
       if (!stage.success) throw new HTTPException(400, {message: 'Pick a lifecycle stage'});
       await db.contact.updateMany({where, data: {lifecycleStage: stage.data}});
     }
-    if ((action === 'tag' || action === 'untag') && value) {
-      await Promise.all(before.map((r) => db.contact.update({
-        where: {id: r.id},
-        data: {tags: action === 'tag' ? [...new Set([...r.tags, value])] : r.tags.filter((t) => t !== value)},
-      })));
+    if ((action === 'tag' || action === 'untag') && value && before.length) {
+      // ONE set-based statement for the whole selection (not one update per record). It acts only on
+      // `before`, the records this user may see (`where` carries the owner scope), and skips records
+      // that already have (tag) / don't have (untag) the tag.
+      const ids = Prisma.join(before.map((r) => r.id));
+      const tag = Prisma.sql`jsonb_build_array(${value}::text)`;
+      await (action === 'tag'
+        ? db.$executeRaw`UPDATE "Contact" SET "tags" = "tags" || ${tag}, "updatedAt" = ${new Date()} WHERE "id" IN (${ids}) AND NOT ("tags" @> ${tag})`
+        : db.$executeRaw`UPDATE "Contact" SET "tags" = "tags" - ${value}::text, "updatedAt" = ${new Date()} WHERE "id" IN (${ids}) AND "tags" @> ${tag}`);
     }
     if (action !== 'delete') await queueRescore(db, before.map((r) => r.id));
     if (action !== 'delete') {
@@ -277,7 +282,7 @@ export const contacts = new Hono<AppEnv>()
     const dropId = dropped.id;
     const merged = {
       ...data,
-      tags: [...new Set([...survivor.tags, ...dropped.tags])],
+      tags: [...new Set([...strings(survivor.tags), ...strings(dropped.tags)])],
       custom: {...(dropped.custom as object), ...(survivor.custom as object)},
       emailOptOut: survivor.emailOptOut || dropped.emailOptOut,
     };
@@ -305,7 +310,8 @@ export const contacts = new Hono<AppEnv>()
       db.booking.updateMany({where: {contactId: dropId}, data: {contactId: keepId}}),
       // Automation history (and so re-enrollment) follows the survivor.
       db.automationRun.updateMany({where: {object: 'contact', recordId: dropId}, data: {recordId: keepId}}),
-      db.$executeRaw`UPDATE "Interaction" SET "attendeeIds" = ARRAY(SELECT DISTINCT unnest(array_replace("attendeeIds", ${dropId}, ${keepId}))) WHERE ${dropId} = ANY("attendeeIds")`,
+      // Meetings the dropped contact attended list the survivor instead (once).
+      db.$executeRaw`UPDATE "Interaction" SET "attendeeIds" = (SELECT COALESCE(jsonb_agg(DISTINCT CASE WHEN a.v = ${dropId}::text THEN ${keepId}::text ELSE a.v END), '[]'::jsonb) FROM jsonb_array_elements_text("attendeeIds") AS a(v)) WHERE "attendeeIds" @> jsonb_build_array(${dropId}::text)`,
       db.$executeRaw`INSERT INTO "Follow" ("userId", "entity", "recordId", "createdAt") SELECT "userId", "entity", ${keepId}, "createdAt" FROM "Follow" WHERE "entity" = 'CONTACT' AND "recordId" = ${dropId} ON CONFLICT DO NOTHING`,
       db.follow.deleteMany({where: {entity: 'CONTACT', recordId: dropId}}),
       ...dropped.companies
@@ -340,6 +346,7 @@ export const contacts = new Hono<AppEnv>()
       data: {
         ...fields,
         custom: src.custom as Prisma.InputJsonValue,
+        tags: strings(src.tags),
         firstName: src.firstName,
         lastName: `${src.lastName ?? ''} (copy)`.trim(),
         lastActivityAt: new Date(),
@@ -364,7 +371,7 @@ export const contacts = new Hono<AppEnv>()
     const [notes, tasks, interactions, emails, activities] = await Promise.all([
       db.note.findMany({where: {contactId: id}, orderBy: {createdAt: 'asc'}}),
       db.task.findMany({where: {contactId: id}, orderBy: {createdAt: 'asc'}}),
-      db.interaction.findMany({where: {OR: [{contactId: id}, {attendeeIds: {has: id}}]}, orderBy: {occurredAt: 'asc'}}),
+      db.interaction.findMany({where: {OR: [{contactId: id}, {attendeeIds: {array_contains: [id]}}]}, orderBy: {occurredAt: 'asc'}}),
       db.emailMessage.findMany({
         where: {contactId: id},
         orderBy: {sentAt: 'asc'},

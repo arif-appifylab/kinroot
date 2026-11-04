@@ -65,7 +65,7 @@ describe.skipIf(!DATABASE_URL)('Kinroot import and export (integration, real Pos
     expect(finished.status).toBe('done');
     const people = await db.contact.findMany({select: {firstName: true, email: true, tags: true}, orderBy: {firstName: 'asc'}});
     expect(people.map(p => p.email)).toEqual(['ada@example.com', 'alan@example.com']);
-    expect(people.every(p => p.tags.includes('imported'))).toBe(true);
+    expect(people.every(p => (p.tags as string[]).includes('imported'))).toBe(true);
   });
 
   it("exports a CSV only its owner downloads, with formulas defused", async () => {

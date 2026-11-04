@@ -5,6 +5,7 @@ import {z} from 'zod';
 import {requireRole, type AppEnv} from '../kit/guards';
 import {audit} from '../lib/audit';
 import {valid} from '../lib/http';
+import {withStrings} from '../lib/json-list';
 
 const entity = z.enum(['CONTACT', 'COMPANY', 'DEAL']);
 const fieldBody = z.object({
@@ -22,7 +23,7 @@ export const fields = new Hono<AppEnv>()
   .get('/', valid('query', z.object({entity: entity.optional()})), async (c) => {
     const {entity: e} = c.req.valid('query');
     const rows = await c.var.db.customFieldDef.findMany({where: e ? {entity: e} : {}, orderBy: [{entity: 'asc'}, {position: 'asc'}]});
-    return c.json({rows});
+    return c.json({rows: rows.map((r) => withStrings(r, 'options'))});
   })
 
   .post('/', requireRole('ADMIN'), valid('json', fieldBody), async (c) => {
@@ -36,13 +37,13 @@ export const fields = new Hono<AppEnv>()
     const position = await db.customFieldDef.count({where: {entity: body.entity}});
     const field = await db.customFieldDef.create({data: {...body, key, position}});
     await audit(db, c, {action: 'custom_field.created', entity: 'custom_field', recordId: field.id, label: `${field.entity.toLowerCase()} · ${field.label}`, meta: {type: field.type}});
-    return c.json({field}, 201);
+    return c.json({field: withStrings(field, 'options')}, 201);
   })
 
   .patch('/:id', requireRole('ADMIN'), valid('json', fieldBody.omit({entity: true, type: true}).partial().extend({position: z.number().int().optional()})), async (c) => {
     const field = await c.var.db.customFieldDef.update({where: {id: c.req.param('id')}, data: c.req.valid('json')});
     if (Object.keys(c.req.valid('json')).some((k) => k !== 'position')) await audit(c.var.db, c, {action: 'custom_field.updated', entity: 'custom_field', recordId: field.id, label: `${field.entity.toLowerCase()} · ${field.label}`, meta: c.req.valid('json')});
-    return c.json({field});
+    return c.json({field: withStrings(field, 'options')});
   })
 
   // Values stay in each record's `custom` JSON; they simply stop being shown.

@@ -17,6 +17,7 @@ import {sendEmail} from '../email/service';
 import {cancelMeetingEvents, pushMeeting} from '../calendar/service';
 import {mirrorToBooking} from '../scheduling/bookings';
 import {shownEmail} from '../lib/owner-account';
+import {strings} from '../lib/json-list';
 
 const kinds = ['CALL', 'MEETING', 'EMAIL', 'SMS', 'LINKEDIN', 'WHATSAPP', 'POSTAL'] as const;
 
@@ -86,7 +87,7 @@ async function snapshot(db: Db, i: Interaction): Promise<Prisma.InputJsonValue> 
     locationType: i.locationType,
     location: i.location,
     occurredAt: i.occurredAt.toISOString(),
-    attendees: (await attendees(db, i.attendeeIds)).map(({id, name}) => ({id, name})),
+    attendees: (await attendees(db, strings(i.attendeeIds))).map(({id, name}) => ({id, name})),
   };
 }
 
@@ -185,7 +186,7 @@ export const meetingsPublic = new Hono<AppEnv>().get('/meetings/:id/invite.ics',
   const meeting = await c.var.db.interaction.findUnique({where: {id}, include: {author: true}});
   if (!meeting || meeting.kind !== 'MEETING') return c.text('Not found', 404);
   const settings = await getSettings(c.var.db);
-  const people = await attendees(c.var.db, meeting.attendeeIds);
+  const people = await attendees(c.var.db, strings(meeting.attendeeIds));
   // The organizer's address only when it is the person downloading (another member's email never leaves the server).
   const me = c.var.user;
   const organizerEmail = meeting.author && me && meeting.author.id === me.id ? shownEmail(me.email) || 'noreply@crm.local' : 'noreply@crm.local';
@@ -213,7 +214,7 @@ export const interactions = new Hono<AppEnv>()
     // A record's activity: the record must be visible. Across records: only the user's or on records they may see.
     if (recordScoped) await assertVisible(c, q, scope);
     const where: Prisma.InteractionWhereInput = recordScoped || !scope.ownerId ? {} : {AND: [{OR: [{authorId: scope.ownerId}, attachedWhere(scope)]}]};
-    if (q.contactId) where.OR = [{contactId: q.contactId}, {attendeeIds: {has: q.contactId}}];
+    if (q.contactId) where.OR = [{contactId: q.contactId}, {attendeeIds: {array_contains: [q.contactId]}}];
     if (q.companyId) where.companyId = q.companyId;
     if (q.dealId) where.dealId = q.dealId;
     if (q.kind) where.kind = q.kind;
@@ -299,7 +300,7 @@ export const interactions = new Hono<AppEnv>()
     const existing = await db.interaction.findFirst({where: await ownInteraction(c, c.req.param('id'))});
     if (!existing) throw notFound('Activity');
     const patch = c.req.valid('json');
-    await assertVisible(c, {contactId: patch.contactId, companyId: patch.companyId, dealId: patch.dealId, contactIds: patch.attendeeIds?.filter((id) => !existing.attendeeIds.includes(id))});
+    await assertVisible(c, {contactId: patch.contactId, companyId: patch.companyId, dealId: patch.dealId, contactIds: patch.attendeeIds?.filter((id) => !strings(existing.attendeeIds).includes(id))});
     let interaction = await db.interaction.update({where: {id: existing.id}, data: patch as Prisma.InteractionUncheckedUpdateInput});
     // Keep the connected calendar in step: cancel, or move / rename the event.
     if (interaction.kind === 'MEETING') {

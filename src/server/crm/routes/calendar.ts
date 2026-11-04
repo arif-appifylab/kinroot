@@ -10,13 +10,14 @@ import {calendarAuthorizeUrl, calendarClient, exchangeCalendarCode, type Calenda
 import {calendarsOf, refreshCalendars, syncConnection} from '../calendar/service';
 import {audit} from '../lib/audit';
 import {notFound, valid} from '../lib/http';
+import {strings} from '../lib/json-list';
 
 const PROVIDERS: CalendarProvider[] = ['google', 'microsoft'];
 
 const redirectUri = (c: AppContext, kind: CalendarProvider) => `${publicOrigin(c.req.raw)}/site-api/crm/calendar/oauth/${kind}/callback`;
 
 /** Never send tokens to the browser. */
-const view = ({credentials: _c, ...conn}: CalendarConnection) => ({...conn, calendars: calendarsOf(conn)});
+const view = ({credentials: _c, ...conn}: CalendarConnection) => ({...conn, calendars: calendarsOf(conn), busyCalendarIds: strings(conn.busyCalendarIds)});
 
 async function ownConnection(c: AppContext, id: string) {
   const conn = await c.var.db.calendarConnection.findUnique({where: {id}});

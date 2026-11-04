@@ -14,7 +14,7 @@
  * so an import accepts exactly what the forms accept. Shapes, targets and value
  * parsers are shared with the drawer in src/lib/import-export.ts.
  */
-import type {Prisma, CustomFieldDef, Import} from '../../../generated/prisma/client';
+import {Prisma, type CustomFieldDef, type Import} from '../../../generated/prisma/client';
 import type {JobRun} from '../kit/job-run';
 import type {User} from '../kit/guards';
 import {
@@ -52,6 +52,7 @@ import {getSettings, rememberOption, type AppSettings} from './settings';
 import {userScope} from './http';
 import {readBytes, storeBytes} from '../kit/storage';
 import {memberWithEmail} from './users';
+import {strings, withStrings} from './json-list';
 
 const BATCH = 200;
 /** Deal updates write history, timeline and events per row: smaller batches keep each one short. */
@@ -119,13 +120,13 @@ async function loadContext(db: Db, imp: Import, phase: Phase, rows: string[][]):
   if (!user || !user.active) throw new Error('The person who started this import no longer has access');
   const options = imp.options as unknown as ImportOptions;
   const mapping = imp.mapping as unknown as (string | null)[];
-  const defs = await db.customFieldDef.findMany({where: {entity: IO_ENTITIES[entity].fieldEntity}});
+  const defs = (await db.customFieldDef.findMany({where: {entity: IO_ENTITIES[entity].fieldEntity}})).map((d) => withStrings(d, 'options'));
   const settings = await getSettings(db);
   // Known pick-list values keep their casing ("software" → "Software").
   const lists: Record<string, string[]> = {industry: settings.industries, type: entity === 'company' ? settings.companyTypes : [], source: settings.sources, lostReason: settings.lostReasons};
   const targets = new Map(importTargets(entity, defs).map((t) => [t.key, lists[t.key]?.length ? {...t, suggest: [...(t.suggest ?? []), ...lists[t.key]!]} : t]));
   const columnOf = new Map<string, string>();
-  mapping.forEach((key, i) => key && columnOf.set(key, imp.headers[i] || `Column ${i + 1}`));
+  mapping.forEach((key, i) => key && columnOf.set(key, strings(imp.headers)[i] || `Column ${i + 1}`));
   // Invited teammates who have not joined yet own records by their invite address, as in the original.
   const users = (await db.member.findMany({where: {active: true}, select: {id: true, name: true, inviteEmail: true, user: {select: {email: true}}}})).map((u) => ({id: u.id, name: u.name, email: u.user?.email ?? '', inviteEmail: u.inviteEmail ?? ''}));
   const usersByName = new Map<string, string>();
@@ -297,7 +298,7 @@ async function resolveCompanies(ctx: Ctx, rows: Prepared[]) {
   const names = refs.flatMap((r) => (r.name ? [lower(r.name)] : []));
   const [byDomain, byName] = await Promise.all([
     domains.length ? ctx.db.company.findMany({where: {domain: {in: domains}}, select: {id: true, domain: true}, orderBy: {createdAt: 'asc'}}) : [],
-    names.length ? ctx.db.$queryRaw<{id: string; n: string}[]>`SELECT id, lower(name) AS n FROM "Company" WHERE lower(name) = ANY(${names}::text[]) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [],
+    names.length ? ctx.db.$queryRaw<{id: string; n: string}[]>`SELECT id, lower(name) AS n FROM "Company" WHERE lower(name) IN (${Prisma.join(names)}) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [],
   ]);
   const domainHit = new Map<string, string>();
   for (const c of byDomain) if (c.domain && !domainHit.has(c.domain)) domainHit.set(c.domain, c.id);
@@ -384,7 +385,7 @@ async function adoptByDomains(ctx: Ctx, companies: {id: string; domain: string |
   if (!domains.size) return;
   const orphans = await ctx.db.$queryRaw<{id: string; d: string}[]>`
     SELECT c.id, lower(split_part(c.email, '@', 2)) AS d FROM "Contact" c
-    WHERE c.email IS NOT NULL AND lower(split_part(c.email, '@', 2)) = ANY(${[...domains.keys()]}::text[])
+    WHERE c.email IS NOT NULL AND lower(split_part(c.email, '@', 2)) IN (${Prisma.join([...domains.keys()])})
       AND NOT EXISTS (SELECT 1 FROM "ContactCompany" cc WHERE cc."contactId" = c.id)
     LIMIT ${LOOKUP_LIMIT}`;
   if (!orphans.length) return;
@@ -399,7 +400,7 @@ async function adoptByDomains(ctx: Ctx, companies: {id: string; domain: string |
 
 // ─── Existing records ───────────────────────────────────────────────────────
 
-type Existing = {id: string; ownerId: string | null; tags: string[]; custom: unknown} & Record<string, unknown>;
+type Existing = {id: string; ownerId: string | null; tags: Prisma.JsonValue; custom: unknown} & Record<string, unknown>;
 
 async function findExisting(ctx: Ctx, rows: Prepared[]): Promise<Map<number, Existing>> {
   const db = ctx.db;
@@ -407,7 +408,7 @@ async function findExisting(ctx: Ctx, rows: Prepared[]): Promise<Map<number, Exi
   const ids = rows.flatMap((p) => (p.id ? [p.id] : []));
   if (ctx.entity === 'contact') {
     const emails = [...new Set(rows.flatMap((p) => (typeof p.fields.email === 'string' && p.fields.email ? [p.fields.email] : [])))];
-    const byEmail = emails.length ? await db.$queryRaw<{id: string; e: string}[]>`SELECT id, lower(email) AS e FROM "Contact" WHERE lower(email) = ANY(${emails}::text[]) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [];
+    const byEmail = emails.length ? await db.$queryRaw<{id: string; e: string}[]>`SELECT id, lower(email) AS e FROM "Contact" WHERE lower(email) IN (${Prisma.join(emails)}) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [];
     const records = await db.contact.findMany({where: {id: {in: [...ids, ...byEmail.map((r) => r.id)]}}, include: {companies: {select: {companyId: true}}}});
     const byId = new Map(records.map((r) => [r.id, r]));
     const emailHit = new Map<string, string>();
@@ -432,7 +433,7 @@ async function findExisting(ctx: Ctx, rows: Prepared[]): Promise<Map<number, Exi
     const names = [...new Set(rows.flatMap((p) => (typeof p.fields.name === 'string' && p.fields.name ? [lower(p.fields.name)] : [])))];
     const [byDomain, byName] = await Promise.all([
       domains.length ? db.company.findMany({where: {domain: {in: domains}}, select: {id: true, domain: true}, orderBy: {createdAt: 'asc'}}) : [],
-      names.length ? db.$queryRaw<{id: string; n: string}[]>`SELECT id, lower(name) AS n FROM "Company" WHERE lower(name) = ANY(${names}::text[]) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [],
+      names.length ? db.$queryRaw<{id: string; n: string}[]>`SELECT id, lower(name) AS n FROM "Company" WHERE lower(name) IN (${Prisma.join(names)}) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [],
     ]);
     const records = await db.company.findMany({where: {id: {in: [...ids, ...byDomain.map((r) => r.id), ...byName.map((r) => r.id)]}}});
     const byId = new Map(records.map((r) => [r.id, r]));
@@ -450,7 +451,7 @@ async function findExisting(ctx: Ctx, rows: Prepared[]): Promise<Map<number, Exi
     }
   } else {
     const titles = [...new Set(rows.flatMap((p) => (typeof p.fields.title === 'string' && p.fields.title ? [lower(p.fields.title)] : [])))];
-    const byTitle = titles.length ? await db.$queryRaw<{id: string}[]>`SELECT id FROM "Deal" WHERE lower(title) = ANY(${titles}::text[]) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [];
+    const byTitle = titles.length ? await db.$queryRaw<{id: string}[]>`SELECT id FROM "Deal" WHERE lower(title) IN (${Prisma.join(titles)}) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}` : [];
     const records = await db.deal.findMany({where: {id: {in: [...ids, ...byTitle.map((r) => r.id)]}}, include: {contacts: {select: {contactId: true}}, stage: true}, orderBy: {createdAt: 'asc'}});
     const byId = new Map(records.map((r) => [r.id, r]));
     for (const p of rows) {
@@ -599,8 +600,8 @@ async function planUpdate(ctx: Ctx, p: Prepared, before: Existing): Promise<Plan
   const data: Record<string, unknown> = {...(r.data as Record<string, unknown>)};
   delete data.custom;
   delete data.companyId;
-  const tags = [...new Set([...before.tags, ...p.tags])];
-  if (tags.length > before.tags.length) data.tags = tags.slice(0, 50);
+  const tags = [...new Set([...strings(before.tags), ...p.tags])];
+  if (tags.length > strings(before.tags).length) data.tags = tags.slice(0, 50);
   if (p.owner && p.owner !== before.ownerId) data.ownerId = p.owner;
   if (ctx.entity === 'deal') {
     const deal = before as unknown as {pipelineId: string; stageId: string; status: string; closedAt: Date | null; lostReason: string | null};
@@ -737,7 +738,7 @@ async function applyCreates(ctx: Ctx, plans: Plan[]) {
 async function linkDealContacts(ctx: Ctx, rows: {p: Prepared; dealId: string}[]) {
   const emails = [...new Set(rows.flatMap((r) => r.p.contactEmails))];
   if (!emails.length) return;
-  const found = await ctx.db.$queryRaw<{id: string; e: string}[]>`SELECT id, lower(email) AS e FROM "Contact" WHERE lower(email) = ANY(${emails}::text[]) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}`;
+  const found = await ctx.db.$queryRaw<{id: string; e: string}[]>`SELECT id, lower(email) AS e FROM "Contact" WHERE lower(email) IN (${Prisma.join(emails)}) ORDER BY "createdAt" LIMIT ${LOOKUP_LIMIT}`;
   const byEmail = new Map<string, string>();
   for (const f of found) if (!byEmail.has(f.e)) byEmail.set(f.e, f.id);
   const links = rows.flatMap((r) => r.p.contactEmails.flatMap((e) => (byEmail.has(e) ? [{dealId: r.dealId, contactId: byEmail.get(e)!}] : [])));
@@ -999,10 +1000,10 @@ export async function addNewOptions(db: Db, entity: IoEntity, mapping: (string |
     if (!labels.length) continue;
     const def = await db.customFieldDef.findUnique({where: {entity_key: {entity: IO_ENTITIES[entity].fieldEntity, key: key.slice(7)}}});
     if (!def || (def.type !== 'SELECT' && def.type !== 'MULTISELECT')) continue;
-    const have = new Set(def.options.map(lower));
+    const have = new Set(strings(def.options).map(lower));
     const fresh = [...new Set(labels.map((l) => l.slice(0, 60)))].filter((l) => !have.has(lower(l)));
     if (!fresh.length) continue;
-    await db.customFieldDef.update({where: {id: def.id}, data: {options: [...def.options, ...fresh].slice(0, 200)}});
+    await db.customFieldDef.update({where: {id: def.id}, data: {options: [...strings(def.options), ...fresh].slice(0, 200)}});
     added.push({id: def.id, label: def.label, options: fresh});
   }
   return added;
@@ -1017,7 +1018,7 @@ export async function errorCsv(db: Db, imp: Import, phase: Phase) {
   const {rows} = await loadImportFile(db, imp);
   const byRow = new Map<number, string[]>();
   for (const i of issues) byRow.set(i.row, [...(byRow.get(i.row) ?? []), i.column ? `${i.column}: ${i.message}` : i.message]);
-  const lines = [csvLine(['Row', ...imp.headers, 'Import errors'])];
+  const lines = [csvLine(['Row', ...strings(imp.headers), 'Import errors'])];
   for (const [row, messages] of byRow) lines.push(csvLine([row, ...(rows[row - 2] ?? []), messages.join('; ')]));
   return CSV_BOM + lines.join('\r\n');
 }

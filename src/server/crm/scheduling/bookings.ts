@@ -13,6 +13,7 @@ import {notify, recordLink} from '../lib/notify';
 import {rememberOption} from '../lib/settings';
 import {createInteraction, refreshInteractionActivity} from '../routes/interactions';
 import {hostsFor, linkSlots, pickHost} from './links';
+import {numbers} from '../lib/json-list';
 
 // ─── Signed manage links (/book/manage/:token) ──────────────────────────────
 
@@ -94,7 +95,7 @@ async function upsertContact(db: Db, link: BookingLink, hostId: string, input: B
 
 /** Checks a requested time against the link's live availability and picks the host. */
 export async function claimSlot(db: Db, link: BookingLink, start: Date, duration: number, opts: {onlyHostId?: string | null; exclude?: Booking | null} = {}) {
-  if (!link.durations.includes(duration)) throw new HTTPException(400, {message: 'Pick one of the offered durations'});
+  if (!numbers(link.durations).includes(duration)) throw new HTTPException(400, {message: 'Pick one of the offered durations'});
   if (Number.isNaN(start.getTime())) throw new HTTPException(400, {message: 'Pick a time'});
   const slots = await linkSlots(db, link, {from: start, to: new Date(start.getTime() + 60_000), duration, onlyHostId: opts.onlyHostId, exclude: opts.exclude});
   const slot = slots.find((s) => s.start === start.getTime());
@@ -330,7 +331,7 @@ export async function publicBooking(db: Db, b: Booking & {link: BookingLink | nu
     status: b.status as 'CONFIRMED' | 'CANCELED',
     title: b.link?.name ?? b.title,
     linkId: b.link?.id ?? null,
-    durations: b.link?.durations ?? [],
+    durations: numbers(b.link?.durations),
     duration: Math.round((b.endAt.getTime() - b.startAt.getTime()) / 60_000),
     hostName: b.host?.name ?? null,
     startAt: b.startAt.toISOString(),

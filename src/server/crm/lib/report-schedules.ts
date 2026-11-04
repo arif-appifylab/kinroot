@@ -24,6 +24,7 @@ import {notify} from './notify';
 import {reportEmailContent, rangeText, type EmailSection} from './report-email';
 import {runReport} from './reports';
 import {getSettings} from './settings';
+import {strings} from './json-list';
 
 /**
  * Scheduled report emails. A schedule fires at wall-clock slots in its own
@@ -127,9 +128,10 @@ export async function unsubscribeRecipient(db: Db, scheduleId: string, email: st
   const s = await db.reportSchedule.findUnique({where: {id: scheduleId}});
   if (!s) return null;
   const user = await db.member.findFirst({where: {user: {email: email.trim().toLowerCase()}}, select: {id: true}});
-  const emails = s.emails.filter((e) => e.toLowerCase() !== email);
-  const userIds = user ? s.userIds.filter((id) => id !== user.id) : s.userIds;
-  if (emails.length !== s.emails.length || userIds.length !== s.userIds.length) {
+  const [haveEmails, haveUserIds] = [strings(s.emails), strings(s.userIds)];
+  const emails = haveEmails.filter((e) => e.toLowerCase() !== email);
+  const userIds = user ? haveUserIds.filter((id) => id !== user.id) : haveUserIds;
+  if (emails.length !== haveEmails.length || userIds.length !== haveUserIds.length) {
     await db.reportSchedule.update({where: {id: s.id}, data: {emails, userIds}});
     await audit(db, null, {action: 'report_schedule.unsubscribed', entity: 'report_schedule', recordId: s.id, actor: {email}, label: email});
   }
@@ -259,8 +261,9 @@ export async function renderScheduleEmail(db: Db, s: ScheduleWithTarget, at: num
 
 /** Everyone the schedule emails: active team members picked + external addresses (lower-cased, once each). */
 export async function recipientsOf(db: Db, s: Pick<ReportSchedule, 'userIds' | 'emails'>) {
-  const users = s.userIds.length ? await db.member.findMany({where: {id: {in: s.userIds}, active: true}, select: {user: {select: {email: true}}}}) : [];
-  return [...new Set([...users.flatMap((u) => (u.user ? [u.user.email.toLowerCase()] : [])), ...s.emails.map((e) => e.toLowerCase())])];
+  const userIds = strings(s.userIds);
+  const users = userIds.length ? await db.member.findMany({where: {id: {in: userIds}, active: true}, select: {user: {select: {email: true}}}}) : [];
+  return [...new Set([...users.flatMap((u) => (u.user ? [u.user.email.toLowerCase()] : [])), ...strings(s.emails).map((e) => e.toLowerCase())])];
 }
 
 // ─── Sending ───
@@ -286,7 +289,7 @@ export async function deliverScheduleSend(db: Db, sendId: string, opts: {final: 
       return finish(db, send, s, {status: 'no_mailbox', error: 'No mailbox to send from: connect a shared team email account in Settings → Email', delivered: 0, recipients: 0}, opts.actor);
     }
     const email = await renderScheduleEmail(db, s, send.slotAt.getTime(), {slot: send.manual ? undefined : send.slotAt.getTime()});
-    const done = new Set(send.delivered);
+    const done = new Set(strings(send.delivered));
     const base = origin(s);
     for (const to of recipients) {
       if (done.has(to)) continue; // reached on an earlier attempt
@@ -294,7 +297,8 @@ export async function deliverScheduleSend(db: Db, sendId: string, opts: {final: 
       const sent = await sendSystemEmail(db, {to: [to], subject: email.subject, html, text: htmlToText(html), attachments: email.attachments});
       if (!sent) throw new Error('No mailbox to send from');
       done.add(to);
-      await db.reportScheduleSend.update({where: {id: send.id}, data: {delivered: {push: to}}});
+      // One atomic append (jsonb), so a concurrent retry can't drop an address another attempt recorded.
+      await db.$executeRaw`UPDATE "ReportScheduleSend" SET "delivered" = "delivered" || to_jsonb(${to}::text) WHERE "id" = ${send.id}`;
     }
     return finish(db, send, s, {status: 'sent', delivered: done.size, recipients: recipients.length}, opts.actor, email);
   } catch (e) {
@@ -304,7 +308,7 @@ export async function deliverScheduleSend(db: Db, sendId: string, opts: {final: 
       await db.reportScheduleSend.update({where: {id: send.id}, data: {error: message}});
       throw e; // the job runner retries with backoff; `delivered` keeps it from re-sending
     }
-    const delivered = (await db.reportScheduleSend.findUnique({where: {id: send.id}, select: {delivered: true}}))?.delivered.length ?? 0;
+    const delivered = strings((await db.reportScheduleSend.findUnique({where: {id: send.id}, select: {delivered: true}}))?.delivered).length;
     return finish(db, send, s, {status: 'failed', error: message, delivered, recipients: recipients.length}, opts.actor);
   }
 }
@@ -345,7 +349,7 @@ async function finish(db: Db, send: ReportScheduleSend, s: ScheduleWithTarget, o
         subject: email?.subject,
         range: email?.rangeLabel,
         recipients: o.recipients,
-        externalRecipients: s.emails.length,
+        externalRecipients: strings(s.emails).length,
         slotAt: send.slotAt.toISOString(),
         manual: send.manual,
         ownerId: s.ownerId,
@@ -378,7 +382,7 @@ export async function sendJob(db: Db, sendId: string, job: {attempts: number; ma
 
 /** "Send now": a manual slot at the current instant, sent right away (no retries; the error goes back to the caller). */
 export async function sendNow(db: Db, scheduleId: string, actor: User) {
-  const send = await db.reportScheduleSend.create({data: {scheduleId, slotAt: new Date(), manual: true}});
+  const send = await db.reportScheduleSend.create({data: {scheduleId, slotAt: new Date(), manual: true, delivered: []}});
   return deliverScheduleSend(db, send.id, {final: true, actor});
 }
 
@@ -399,7 +403,7 @@ export async function reportScheduleTick(db: Db, now = Date.now(), until = Infin
     const floor = Math.max(s.cursor.getTime(), s.lastSlotAt?.getTime() ?? 0);
     if (slot !== null && slot > floor && s.nextRunAt) {
       // The unique (schedule, slot) row is the exactly-once guard across overlapping ticks.
-      const created = await db.reportScheduleSend.createManyAndReturn({data: [{scheduleId: s.id, slotAt: new Date(slot)}], skipDuplicates: true, select: {id: true}});
+      const created = await db.reportScheduleSend.createManyAndReturn({data: [{scheduleId: s.id, slotAt: new Date(slot), delivered: []}], skipDuplicates: true, select: {id: true}});
       if (created[0]) {
         await enqueue(db, 'report.send', {sendId: created[0].id});
         queued++;

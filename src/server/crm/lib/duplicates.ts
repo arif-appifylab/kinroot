@@ -1,6 +1,7 @@
 import {Prisma} from '../../../generated/prisma/client';
 import type {Db} from '../kit/db';
 import {enqueue} from './jobs';
+import {strings} from './json-list';
 
 /**
  * Duplicate detection for contacts and companies. Records are reduced to
@@ -177,7 +178,7 @@ async function syncPairs(db: Db, entity: DupEntity, found: Found, scope: {ids?: 
   let updated = 0;
   for (const p of existing) {
     const m = found.get(`${p.aId}|${p.bId}`);
-    if (p.status === 'open' && m && (m.score !== p.score || m.reasons.join() !== p.reasons.join())) {
+    if (p.status === 'open' && m && (m.score !== p.score || m.reasons.join() !== strings(p.reasons).join())) {
       await db.duplicatePair.update({where: {id: p.id}, data: {score: m.score, reasons: m.reasons}});
       updated++;
     }
@@ -316,18 +317,22 @@ export async function scheduleDuplicateScans(db: Db) {
 
 // ─── One record ───
 
+/** `c.id` not one of `ids` (bound one by one: the live driver can't bind an array parameter). */
+const notIn = (ids: string[]) => (ids.length ? Prisma.sql`NOT (c.id IN (${Prisma.join(ids)}))` : Prisma.sql`TRUE`);
+
 /** Ids of records that share a match key with `input` (cheap SQL pre-filter; scoring happens in JS). */
 async function contactCandidates(db: Db, k: ContactKeys, exclude: string[]) {
   const f0 = k.first.slice(0, 1);
+  const sameCompany = k.companyIds.length ? Prisma.sql`cc."companyId" IN (${Prisma.join(k.companyIds)})` : Prisma.sql`FALSE`;
   const rows = await db.$queryRaw<{id: string}[]>`
     SELECT c.id FROM "Contact" c
-    WHERE NOT (c.id = ANY(${exclude}::text[])) AND (
+    WHERE ${notIn(exclude)} AND (
       (${k.emailKey}::text IS NOT NULL AND c.email IS NOT NULL AND ${emailKeySql(Prisma.raw('c.email'))} = ${k.emailKey})
       OR (${k.phoneKey}::text IS NOT NULL AND length(regexp_replace(coalesce(c.phone, ''), '\\D', '', 'g')) >= 7 AND right(regexp_replace(c.phone, '\\D', '', 'g'), 10) = ${k.phoneKey})
       OR (${k.last}::text <> '' AND lower(c."lastName") = ${k.last})
       OR (${k.last}::text = '' AND lower(c."firstName") = ${k.first})
       OR (${f0}::text <> '' AND lower(left(c."firstName", 1)) = ${f0} AND (
-        EXISTS (SELECT 1 FROM "ContactCompany" cc WHERE cc."contactId" = c.id AND cc."companyId" = ANY(${k.companyIds}::text[]))
+        EXISTS (SELECT 1 FROM "ContactCompany" cc WHERE cc."contactId" = c.id AND ${sameCompany})
         OR (${k.domain}::text IS NOT NULL AND lower(split_part(c.email, '@', 2)) = ${k.domain})
       ))
     )
@@ -339,7 +344,7 @@ async function companyCandidates(db: Db, k: CompanyKeys, exclude: string[]) {
   const prefix = k.name.replace(/ /g, '').slice(0, 3);
   const rows = await db.$queryRaw<{id: string}[]>`
     SELECT c.id FROM "Company" c
-    WHERE NOT (c.id = ANY(${exclude}::text[])) AND (
+    WHERE ${notIn(exclude)} AND (
       (${k.domain}::text IS NOT NULL AND (lower(c.domain) = ${k.domain}
         OR regexp_replace(regexp_replace(lower(coalesce(c.website, '')), '^https?://(www\\.)?', ''), '[/?#].*$', '') = ${k.domain}))
       OR (${prefix}::text <> '' AND lower(left(regexp_replace(regexp_replace(lower(c.name), '^the\\s+', ''), '[^a-z0-9]', '', 'g'), 3)) = ${prefix})

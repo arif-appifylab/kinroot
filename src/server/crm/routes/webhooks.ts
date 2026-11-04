@@ -14,6 +14,7 @@ import {notFound, valid} from '../lib/http';
 import {backlogStatus, enqueue, MAX_JOBS_PER_MINUTE, setJobsPerMinute} from '../lib/jobs';
 import {deliverWebhook, TEST_ENTITY} from '../lib/webhooks';
 import {JOBS_LAST_RUN_KEY} from '../lib/ticks';
+import {strings, withStrings} from '../lib/json-list';
 
 const eventList = z.array(z.union([z.literal('*'), z.enum(EVENT_TYPES as [string, ...string[]])])).min(1, 'pick at least one event');
 const hookBody = z.object({
@@ -61,7 +62,7 @@ export const webhooks = new Hono<AppEnv>()
       ? `${backlog.rateLimited >= CAP ? `${CAP - 1}+` : backlog.rateLimited} job${backlog.rateLimited === 1 ? ' is' : 's are'} waiting for the job rate limit (${backlog.perMinute} new jobs a minute). They go out as the minutes turn; nothing is lost.${backlog.perMinute < 50 ? ' To send them faster, raise the limit to 50 in the Jobs tab of this app in your dashboard, then set the same number here.' : ''}`
       : null;
     return c.json({
-      rows,
+      rows: rows.map((r) => withStrings(r, 'events')),
       jobs: {
         cronConfigured: true,
         lastRunAt: (lastRun?.value as string | undefined) ?? null,
@@ -94,7 +95,7 @@ export const webhooks = new Hono<AppEnv>()
       select: hookSelect,
     });
     await audit(c.var.db, c, {action: 'webhook.created', entity: 'webhook', recordId: hook.id, label: webhookLabel(hook.url), meta: {events: hook.events, signingKey: await fingerprint(secret)}});
-    return c.json({webhook: hook, secret}, 201);
+    return c.json({webhook: withStrings(hook, 'events'), secret}, 201);
   })
 
   .patch('/:id', valid('json', hookBody.partial()), async (c) => {
@@ -109,7 +110,7 @@ export const webhooks = new Hono<AppEnv>()
     if (body.active !== undefined) data.active = body.active;
     const hook = await c.var.db.webhook.update({where: {id: found.id}, data: {...data, ...(body.active ? {failures: 0} : {})}, select: hookSelect});
     await audit(c.var.db, c, {action: 'webhook.updated', entity: 'webhook', recordId: hook.id, label: webhookLabel(hook.url), meta: {changed: Object.keys(data), ...(body.events ? {events: body.events} : {}), ...(body.active !== undefined ? {active: body.active} : {})}});
-    return c.json({webhook: hook});
+    return c.json({webhook: withStrings(hook, 'events')});
   })
 
   .delete('/:id', async (c) => {
@@ -145,7 +146,7 @@ export const webhooks = new Hono<AppEnv>()
     const hook = await db.webhook.findUnique({where: {id: c.req.param('id')}});
     if (!hook) throw notFound('Webhook');
     if (!hook.active) throw new HTTPException(400, {message: 'Turn the webhook on first'});
-    const type = c.req.valid('json').type ?? hook.events.find((e) => e !== '*') ?? 'contact.created';
+    const type = c.req.valid('json').type ?? strings(hook.events).find((e) => e !== '*') ?? 'contact.created';
     const data = JSON.parse(JSON.stringify(eventExample(type) ?? {})) as Prisma.InputJsonValue;
     // Stored as an Event so the log can show it, but never emit()ted: automations and scoring don't see it.
     const event = await db.event.create({data: {type, entity: TEST_ENTITY, recordId: hook.id, data}});

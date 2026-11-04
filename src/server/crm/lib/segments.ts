@@ -18,6 +18,7 @@ import {asRules, customSegmentFields, referencedLists, ruleComplete, SEGMENT_FIE
 import type {Db} from '../kit/db';
 import {automationStamp} from './automation-context';
 import {emitMany} from './events';
+import {strings} from './json-list';
 
 type Where = Prisma.ContactWhereInput;
 
@@ -45,10 +46,11 @@ export const segmentRulesSchema = z.object({
 
 // ─── Translator ─────────────────────────────────────────────────────────────
 
-export type CustomDefs = Pick<CustomFieldDef, 'key' | 'label' | 'type' | 'options'>[];
+export type CustomDefs = (Pick<CustomFieldDef, 'key' | 'label' | 'type'> & {options: string[]})[];
 
 /** Contact custom field definitions; load once and pass as `defs` when evaluating many segments. */
-export const loadSegmentDefs = (db: Db): Promise<CustomDefs> => db.customFieldDef.findMany({where: {entity: 'CONTACT'}, select: {key: true, label: true, type: true, options: true}});
+export const loadSegmentDefs = async (db: Db): Promise<CustomDefs> =>
+  (await db.customFieldDef.findMany({where: {entity: 'CONTACT'}, select: {key: true, label: true, type: true, options: true}})).map((d) => ({...d, options: strings(d.options)}));
 
 export type SegmentOpts = {seen?: Set<string>; depth?: number; defs?: CustomDefs};
 
@@ -212,10 +214,12 @@ async function ruleWhere(ctx: Ctx, rule: SegmentRule, field: SegmentField): Prom
     }
     case 'tags': {
       const values = rule.values ?? [];
-      if (rule.op === 'has_any') return {tags: {hasSome: values}};
-      if (rule.op === 'has_all') return {tags: {hasEvery: values}};
-      if (rule.op === 'has_none') return {NOT: {tags: {hasSome: values}}};
-      return {tags: {isEmpty: rule.op === 'empty'}};
+      // tags is a jsonb list (GIN-indexed): containment per tag. `values` is capped (ruleSchema: 100).
+      const any: Where = {OR: values.slice(0, 100).map((x) => ({tags: {array_contains: [x]}}))};
+      if (rule.op === 'has_any') return any;
+      if (rule.op === 'has_all') return {tags: {array_contains: values}};
+      if (rule.op === 'has_none') return {NOT: any};
+      return rule.op === 'empty' ? {tags: {equals: []}} : {NOT: {tags: {equals: []}}};
     }
     case 'bool':
       return {[key]: rule.op === 'is_true'};

@@ -7,10 +7,10 @@ import {valid} from '../lib/http';
 
 /** One prepared statement per table; table names only from this fixed map, never from input. */
 const TABLES = {
-  CONTACT: Prisma.sql`SELECT unnest(tags) AS tag FROM "Contact"`,
-  COMPANY: Prisma.sql`SELECT unnest(tags) AS tag FROM "Company"`,
-  DEAL: Prisma.sql`SELECT unnest(tags) AS tag FROM "Deal"`,
-  TICKET: Prisma.sql`SELECT unnest(tags) AS tag FROM "Ticket"`,
+  CONTACT: Prisma.sql`SELECT jsonb_array_elements_text(tags) AS tag FROM "Contact"`,
+  COMPANY: Prisma.sql`SELECT jsonb_array_elements_text(tags) AS tag FROM "Company"`,
+  DEAL: Prisma.sql`SELECT jsonb_array_elements_text(tags) AS tag FROM "Deal"`,
+  TICKET: Prisma.sql`SELECT jsonb_array_elements_text(tags) AS tag FROM "Ticket"`,
 } as const;
 
 /** Tags already in use, most used first, for tag pickers. */

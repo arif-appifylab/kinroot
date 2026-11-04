@@ -28,13 +28,13 @@ import {
   type ScheduleRange,
   type ScheduleStatus,
 } from '@/lib/report-schedules';
-import type {Jsonify, UserLite} from '@/lib/types';
+import type {Jsonify, ListModels, UserLite} from '@/lib/types';
 import {useBrand} from '@/lib/use-brand';
 import {cn} from '@/lib/utils';
 import {EmailFrame} from '../email-frame';
 
 /** A schedule as the API lists it (src/server/routes/report-schedules.ts). */
-export type ScheduleRow = Jsonify<P.ReportSchedule> & {
+export type ScheduleRow = Jsonify<ListModels['ReportSchedule']> & {
   name: string;
   kind: 'report' | 'dashboard';
   frequencyLabel: string;

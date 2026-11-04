@@ -9,7 +9,7 @@ import {registerReportObject, registerReportRef} from './reports';
  */
 
 registerReportRef('automation', {
-  sql: (ids) => Prisma.sql`SELECT id, name AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Automation" WHERE id = ANY(${ids}::text[])`,
+  sql: (ids) => Prisma.sql`SELECT id, name AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Automation" WHERE id IN (${Prisma.join(ids)})`,
   list: Prisma.sql`SELECT id, name AS label FROM "Automation" ORDER BY name LIMIT 500`,
 });
 

@@ -22,6 +22,7 @@ import {
   ticketLink,
 } from '../lib/tickets';
 import {publicFileUrl} from './files';
+import {strings} from '../lib/json-list';
 
 export type PortalConfig = {enabled: boolean; intro: string; categories: string[]};
 
@@ -74,7 +75,7 @@ async function portalTicket(db: Db, origin: string, contactIds: string[], number
     include: {author: {select: {name: true}}},
     orderBy: {createdAt: 'asc'},
   });
-  const fileIds = messages.flatMap((m) => m.fileIds);
+  const fileIds = messages.flatMap((m) => strings(m.fileIds));
   const files = fileIds.length ? await db.file.findMany({where: {id: {in: fileIds}}, select: {id: true, name: true, size: true}}) : [];
   const links = new Map(await Promise.all(files.map(async (f) => [f.id, {name: f.name, size: f.size, url: await publicFileUrl(origin, f.id, 1)}] as const)));
   return {
@@ -93,7 +94,7 @@ async function portalTicket(db: Db, origin: string, contactIds: string[], number
       body: m.body,
       html: m.html,
       status: m.kind === 'event' ? ((m.data as {to?: string}).to ?? null) : null,
-      files: m.fileIds.map((id) => links.get(id)).filter(Boolean),
+      files: strings(m.fileIds).map((id) => links.get(id)).filter(Boolean),
       createdAt: m.createdAt,
     })),
   };

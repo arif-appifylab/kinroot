@@ -56,6 +56,7 @@ import {addToList} from './segments';
 import {getSettings} from './settings';
 import {createTicket} from './tickets';
 import {asUser, withEmail} from './users';
+import {strings} from './json-list';
 
 // ─── Settings: signing secret, rate limit ───────────────────────────────────
 
@@ -347,8 +348,8 @@ const HANDLERS: Record<DataInActionKey, (ctx: Ctx, b: Body) => Promise<Handled>>
     let outcome: 'created' | 'updated' | 'unchanged';
     if (existing) {
       const data: Record<string, unknown> = {...fields};
-      const merged = [...new Set([...existing.tags, ...tags])];
-      if (merged.length > existing.tags.length) data.tags = merged.slice(0, 50);
+      const merged = [...new Set([...strings(existing.tags), ...tags])];
+      if (merged.length > strings(existing.tags).length) data.tags = merged.slice(0, 50);
       if (ownerId && ownerId !== existing.ownerId) data.ownerId = ownerId;
       const custom = await mergeCustom(ctx, 'CONTACT', b.custom, existing.custom);
       const r = await updateContactRecord(db, ctx.writer, existing, data, custom);
@@ -406,8 +407,8 @@ const HANDLERS: Record<DataInActionKey, (ctx: Ctx, b: Body) => Promise<Handled>>
     if (existing) {
       const data: Record<string, unknown> = {...fields};
       if (!b.name) delete data.name;
-      const merged = [...new Set([...existing.tags, ...tags])];
-      if (merged.length > existing.tags.length) data.tags = merged.slice(0, 50);
+      const merged = [...new Set([...strings(existing.tags), ...tags])];
+      if (merged.length > strings(existing.tags).length) data.tags = merged.slice(0, 50);
       if (ownerId && ownerId !== existing.ownerId) data.ownerId = ownerId;
       const r = await updateCompanyRecord(db, ctx.writer, existing, data, await mergeCustom(ctx, 'COMPANY', b.custom, existing.custom));
       company = r.company;

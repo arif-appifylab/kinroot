@@ -7,6 +7,7 @@ import {busyTimes, cancelEvent, createEvent, listCalendars, listEvents, updateEv
 import {teamAddresses} from '../lib/users';
 import {enqueue} from '../lib/jobs';
 import {cache} from '../../../platform/cache';
+import {strings} from '../lib/json-list';
 
 const DAY = 86_400_000;
 
@@ -24,7 +25,7 @@ export async function refreshCalendars(db: Db, conn: CalendarConnection) {
     where: {id: conn.id},
     data: {
       calendars,
-      busyCalendarIds: conn.busyCalendarIds.length ? conn.busyCalendarIds.filter((id) => calendars.some((c) => c.id === id)) : primary ? [primary.id] : [],
+      busyCalendarIds: strings(conn.busyCalendarIds).length ? strings(conn.busyCalendarIds).filter((id) => calendars.some((c) => c.id === id)) : primary ? [primary.id] : [],
       targetCalendarId: conn.targetCalendarId && calendars.some((c) => c.id === conn.targetCalendarId) ? conn.targetCalendarId : primary?.id ?? null,
       status: 'CONNECTED',
       lastError: null,
@@ -48,10 +49,11 @@ export async function calendarBusy(db: Db, userId: string, from: Date, to: Date)
     const conns = await db.calendarConnection.findMany({where: {userId}});
     const out: Interval[] = [];
     for (const conn of conns) {
-      if (!conn.busyCalendarIds.length) continue;
+      const ids = strings(conn.busyCalendarIds);
+      if (!ids.length) continue;
       try {
         const creds = await connectionCredentials(db, conn);
-        out.push(...(await busyTimes(conn.provider as CalendarProvider, creds, conn.busyCalendarIds, from, to)));
+        out.push(...(await busyTimes(conn.provider as CalendarProvider, creds, ids, from, to)));
       } catch (e) {
         await fail(db, conn, e);
       }
@@ -70,8 +72,9 @@ export async function writeTarget(db: Db, userId: string) {
 // ─── CRM meetings → the organiser's calendar ────────────────────────────────
 
 async function eventInput(db: Db, i: Interaction): Promise<EventInput> {
-  const people = i.attendeeIds.length
-    ? await db.contact.findMany({where: {id: {in: i.attendeeIds}, email: {not: null}}, select: {firstName: true, lastName: true, email: true}})
+  const attendeeIds = strings(i.attendeeIds);
+  const people = attendeeIds.length
+    ? await db.contact.findMany({where: {id: {in: attendeeIds}, email: {not: null}}, select: {firstName: true, lastName: true, email: true}})
     : [];
   const attendees = new Map<string, {email: string; name?: string | null}>();
   for (const p of people) attendees.set(p.email!.toLowerCase(), {email: p.email!, name: [p.firstName, p.lastName].filter(Boolean).join(' ')});
@@ -158,7 +161,8 @@ export async function syncConnection(db: Db, conn: CalendarConnection, {deadline
       // Google can return only what changed (incl. deletions); Graph pages through the window.
       updatedSince: provider === 'google' && conn.lastSyncedAt ? new Date(conn.lastSyncedAt.getTime() - 5 * 60_000) : null,
     };
-    const calendarIds = conn.busyCalendarIds.length ? conn.busyCalendarIds.slice(0, 3) : [conn.targetCalendarId ?? 'primary'];
+    const busyIds = strings(conn.busyCalendarIds);
+    const calendarIds = busyIds.length ? busyIds.slice(0, 3) : [conn.targetCalendarId ?? 'primary'];
     const team = new Set([
       ...(await teamAddresses(db)),
       ...(await db.calendarConnection.findMany({select: {email: true}})).map((c) => c.email.toLowerCase()),

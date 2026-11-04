@@ -10,7 +10,7 @@
  * target key>` (`contact.email`, `deal.value`, `contact.custom.plan`). Values
  * are read with the same parsers as CSV imports (`parseCell()`).
  */
-import type * as P from '../../generated/prisma/client';
+import type {ListModels} from '@/lib/types';
 import {importTargets, normHeader, type ImportTarget} from '@/lib/import-export';
 import {TICKET_PRIORITIES, type TicketPriority} from '@/lib/tickets';
 
@@ -106,7 +106,7 @@ export function suggestSecretName(name: string) {
 // ─── Field catalogue ────────────────────────────────────────────────────────
 
 export type InTarget = ImportTarget & {entity: InEntity; field: string; groupLabel: string};
-type FieldDef = Pick<P.CustomFieldDef, 'key' | 'label' | 'type' | 'options'>;
+type FieldDef = Pick<ListModels['CustomFieldDef'], 'key' | 'label' | 'type' | 'options'>;
 export type InDefs = {CONTACT: FieldDef[]; COMPANY: FieldDef[]; DEAL: FieldDef[]};
 
 const TICKET_TARGETS: ImportTarget[] = [

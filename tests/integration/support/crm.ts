@@ -47,7 +47,7 @@ export async function ownerAt(email: string) {
   expect([201, 409]).toContain(made.status);
   expect((await site.request('PUT', `/site-api/admin/users/${await userId(email)}/roles`, {roles: ['member', 'crm-owner']})).status).toBe(200);
   const state = await browser.get('/site-api/crm/auth/state');
-  expect(state.json.user?.role).toBe('OWNER');
+  expect((state.json.user as {role?: string} | null)?.role).toBe('OWNER');
   return {browser, site};
 }
 

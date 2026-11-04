@@ -36,6 +36,7 @@ import {signPayload} from './webhooks';
 import {memberWithEmail} from './users';
 import {WEBHOOK_SERVICE_NAMES, webhookLabel, webhookTarget} from '@/lib/webhook-targets';
 import {shownEmail} from './owner-account';
+import {strings} from './json-list';
 
 const DAY = 86_400_000;
 
@@ -596,15 +597,16 @@ const EXECUTORS: Record<Step['type'], Executor> = {
 
 async function tagStep(ctx: StepCtx, step: Step, change: 'add' | 'remove'): Promise<StepResult> {
   const target = step.target ?? 'contact';
-  const rec = recordOf(ctx.records, target) as {id: string; tags: string[]} | null;
+  const rec = recordOf(ctx.records, target) as {id: string; tags: Prisma.JsonValue} | null;
   if (!rec) return skip(`No ${target} to tag`);
+  const current = strings(rec.tags);
   const tag = fill(step.tag, await textCtx(ctx)).trim().slice(0, 40);
   if (!tag) throw new StepError('The tag is empty');
-  const has = rec.tags.some((t) => t.toLowerCase() === tag.toLowerCase());
+  const has = current.some((t) => t.toLowerCase() === tag.toLowerCase());
   const name = labelOf(target, rec);
   if (change === 'add' && has) return skip(`${name} already has "${tag}"`);
   if (change === 'remove' && !has) return skip(`${name} doesn't have "${tag}"`);
-  const tags = change === 'add' ? [...rec.tags, tag] : rec.tags.filter((t) => t.toLowerCase() !== tag.toLowerCase());
+  const tags = change === 'add' ? [...current, tag] : current.filter((t) => t.toLowerCase() !== tag.toLowerCase());
   if (ctx.dry) return done(`Would ${change} "${tag}" ${change === 'add' ? 'to' : 'from'} ${name}`);
   await setField(ctx, target, rec, 'tags', tags);
   return done(`${change === 'add' ? 'Added' : 'Removed'} "${tag}" ${change === 'add' ? 'to' : 'from'} ${name}`, {tag});

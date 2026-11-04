@@ -14,6 +14,7 @@ import {
 } from '@/lib/scheduling';
 import type {Db} from '../kit/db';
 import {calendarBusy} from '../calendar/service';
+import {strings, numbers} from '../lib/json-list';
 
 const DAY = 86_400_000;
 
@@ -97,7 +98,7 @@ export function locationLabel(type: string, location: string | null) {
 
 /** Active hosts of a link, in rotation order. */
 export async function hostsFor(db: Db, link: Pick<BookingLink, 'kind' | 'userId' | 'hostIds'>) {
-  const ids = link.kind === 'team' ? link.hostIds : link.userId ? [link.userId] : [];
+  const ids = link.kind === 'team' ? strings(link.hostIds) : link.userId ? [link.userId] : [];
   if (!ids.length) return [];
   const users = await db.member.findMany({where: {id: {in: ids}, active: true}});
   return ids.map((id) => users.find((u) => u.id === id)).filter((u): u is User => !!u);
@@ -111,7 +112,7 @@ export async function toPublicLink(db: Db, link: BookingLink): Promise<PublicBoo
     path: await linkPath(db, link),
     name: link.name,
     description: link.description,
-    durations: link.durations.length ? link.durations : [30],
+    durations: numbers(link.durations).length ? numbers(link.durations) : [30],
     locationType: link.locationType as LocationType,
     locationLabel: locationLabel(link.locationType, link.location),
     questions: questionsOf(link.questions),
@@ -219,6 +220,7 @@ export async function pickHost(db: Db, link: BookingLink, candidates: string[]) 
   if (candidates.length <= 1) return candidates[0] ?? null;
   const last = await db.booking.groupBy({by: ['hostId'], where: {linkId: link.id, hostId: {in: candidates}}, _max: {createdAt: true}});
   const lastAt = (id: string) => last.find((l) => l.hostId === id)?._max.createdAt?.getTime() ?? 0;
-  const order = (id: string) => link.hostIds.indexOf(id);
+  const hostIds = strings(link.hostIds);
+  const order = (id: string) => hostIds.indexOf(id);
   return [...candidates].sort((a, b) => lastAt(a) - lastAt(b) || order(a) - order(b))[0]!;
 }

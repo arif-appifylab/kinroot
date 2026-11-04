@@ -14,6 +14,7 @@ import {audit} from '../lib/audit';
 import {notFound, valid} from '../lib/http';
 import {nextSlot, readUnsubscribeToken, recipientsOf, unsubscribeRecipient, renderScheduleEmail, scheduleInclude, ScheduleError, sendNow, targetName, upcomingSlots, type ScheduleWithTarget} from '../lib/report-schedules';
 import {userSelect} from '../lib/users';
+import {strings} from '../lib/json-list';
 
 /**
  * Scheduled report emails (src/server/lib/report-schedules.ts). Anyone who
@@ -53,10 +54,12 @@ const timingKeys = ['frequency', 'weekday', 'monthDay', 'time', 'timezone'] as c
 /** Rows for the list: plain-words frequency, recipient count, readable status. */
 const present = <T extends ReportSchedule & {report: {name: string} | null; dashboard: {name: string} | null}>(s: T) => ({
   ...s,
+  userIds: strings(s.userIds),
+  emails: strings(s.emails),
   name: s.report?.name ?? s.dashboard?.name ?? 'Deleted report',
   kind: s.reportId ? ('report' as const) : ('dashboard' as const),
   frequencyLabel: describeSchedule(s),
-  recipients: new Set([...s.userIds, ...s.emails]).size,
+  recipients: new Set([...strings(s.userIds), ...strings(s.emails)]).size,
   statusLabel: s.lastStatus ? (SCHEDULE_STATUS[s.lastStatus as keyof typeof SCHEDULE_STATUS] ?? s.lastStatus) : null,
 });
 

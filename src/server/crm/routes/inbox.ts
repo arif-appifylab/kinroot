@@ -42,6 +42,7 @@ import {receivedHtmlReader} from '../inbox/sanitize';
 import {channelWhere, findReadable, inboxScope, viewWhere, withVisibleTickets, type InboxScope} from '../inbox/scope';
 import {getInboxSettings, hasTeamAccess, saveInboxSettings} from '../inbox/settings';
 import {getSettings} from '../lib/settings';
+import {strings} from '../lib/json-list';
 
 /**
  * Shared inbox (module 10). Every read and write goes through `inboxScope()`,
@@ -206,7 +207,7 @@ export const inbox = new Hono<AppEnv>()
         const email = messages[0];
         const last =
           ch && (!email || ch.createdAt >= email.sentAt)
-            ? {direction: ch.direction, fromEmail: identity?.email ?? '', fromName: ch.direction === 'INBOUND' && identity ? identityLabel(identity) : null, text: preview(ch.text) || (ch.fileIds.length ? 'Sent a file' : ''), sentAt: ch.createdAt}
+            ? {direction: ch.direction, fromEmail: identity?.email ?? '', fromName: ch.direction === 'INBOUND' && identity ? identityLabel(identity) : null, text: preview(ch.text) || (strings(ch.fileIds).length ? 'Sent a file' : ''), sentAt: ch.createdAt}
             : email ? {...email, text: preview(email.text)} : null;
         const sender = identity ? {email: identity.email ?? '', name: identityLabel(identity)} : byThread.get(t.id) ? {email: byThread.get(t.id)!.fromEmail, name: byThread.get(t.id)!.fromName} : null;
         return {...t, _count: {...t._count, messages: t._count.messages + t._count.channelMessages}, sender, personal: !!t.account?.userId, last, online: !!identity && Date.now() - identity.lastSeenAt.getTime() < 60_000};

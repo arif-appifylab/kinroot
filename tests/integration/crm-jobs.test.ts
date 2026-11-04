@@ -244,6 +244,28 @@ describe.skipIf(!DATABASE_URL)('Kinroot background jobs on the platform (integra
     expect((await db.webhookDelivery.findMany({where: {eventId: event!.id, status: 'FAILED'}})).length).toBe(1);
   });
 
+  it('matches webhooks on their event list (jsonb): the exact type or "*", never another type or an inactive hook', async () => {
+    const secret = await encryptJson('whsec_test');
+    const hook = (p: string, events: string[], active = true) => db.webhook.create({data: {url: `https://hooks.zapier.com/hooks/catch/2/${p}/`, events, active, secret}});
+    const [exact, star, both, other, none, off] = await Promise.all([
+      hook('exact', ['contact.created']),
+      hook('star', ['*']),
+      hook('both', ['deal.won', 'contact.created']),
+      hook('other', ['deal.won']),
+      hook('none', []),
+      hook('off', ['contact.created'], false),
+    ]);
+    const one = await inJob((d) => emit(d, 'contact.created', {recordId: 'c1', data: {id: 'c1'}}));
+    await inJob((d) => emitMany(d, 'contact.created', [{recordId: 'm1', data: {id: 'm1'}}]));
+    const hooksOf = async (eventId: string) => (await db.webhookDelivery.findMany({where: {eventId}, select: {webhookId: true}})).map((x) => x.webhookId).sort();
+    expect(await hooksOf(one!.id)).toEqual([exact.id, star.id, both.id].sort());
+    const manyEvent = await db.event.findFirstOrThrow({where: {type: 'contact.created', recordId: 'm1'}});
+    expect(await hooksOf(manyEvent.id), 'emitMany matches the same hooks').toEqual([exact.id, star.id, both.id].sort());
+    const won = await inJob((d) => emit(d, 'deal.won', {recordId: 'd1', data: {id: 'd1'}}));
+    expect(await hooksOf(won!.id)).toEqual([star.id, both.id, other.id].sort());
+    expect(await db.webhookDelivery.count({where: {webhookId: {in: [none.id, off.id]}}})).toBe(0);
+  });
+
   it('keys every run job by its run, rescues only stalled runs, and never runs one run twice at once', async () => {
     const a = await db.automation.create({data: {name: 'Manual', enabled: true, object: 'none', triggerKind: 'manual', trigger: {kind: 'manual', conditions: {match: 'all', blocks: []}}, steps: []}});
     const started = await inJob((d) => startRun(d, a, {recordId: null, source: 'manual', explicit: true}));

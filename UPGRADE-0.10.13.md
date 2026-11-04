@@ -4,7 +4,7 @@ Kinroot is built on template **0.10.10**. Three releases came out since (`~/Down
 `CHANGELOG.md`). **0.10.11 is a required security upgrade**: the platform's rules now say a site below it must be
 upgraded before any other work. Nothing reaches visitors until a Publish, and the site has never been published.
 
-**Status (4 Nov):** all approved. U-1 to U-14 are done (the upgrade commit); U-15 to U-19 follow in order.
+**Status (4 Nov):** all approved. U-1 to U-15 are done; U-16 to U-19 follow in order.
 
 ---
 
@@ -41,7 +41,7 @@ upgraded before any other work. Nothing reaches visitors until a Publish, and th
 
 | ✓ | ID | Change | Why | Effort |
 |---|---|---|---|---|
-| [ ] | U-15 | **No `String[]` columns** (new database rule): Prisma's live driver mishandles them: writes fail with `malformed array literal`, reads crash. Kinroot has **22**: tags on contacts, companies, deals and tickets; email `to`/`cc`/`bcc`; file ids on messages, ticket messages and the recycle bin; custom field options; webhook events; goal kinds; booking hosts; calendar ids; duplicate reasons; import headers; export columns; report schedule users / emails / delivered; meeting attendees. Move each to `Json` (opaque lists) or a related table (tags, which are filtered and grouped), with a data-keeping migration, and update every query that uses them (segments, filters, reports' tag grouping, automations and scoring on tags, imports / exports, bulk tag). Also stop binding JS arrays as `::text[]` parameters in raw SQL (use `Prisma.join`). | **The CRM would break on the live site** wherever these are written or read. Our local Postgres doesn't show it. | L |
+| [x] | U-15 | **No `String[]` columns** (new database rule): Prisma's live driver mishandles them: writes fail with `malformed array literal`, reads crash. Kinroot has **22**: tags on contacts, companies, deals and tickets; email `to`/`cc`/`bcc`; file ids on messages, ticket messages and the recycle bin; custom field options; webhook events; goal kinds; booking hosts; calendar ids; duplicate reasons; import headers; export columns; report schedule users / emails / delivered; meeting attendees. Move each to `Json` (opaque lists) or a related table (tags, which are filtered and grouped), with a data-keeping migration, and update every query that uses them (segments, filters, reports' tag grouping, automations and scoring on tags, imports / exports, bulk tag). Also stop binding JS arrays as `::text[]` parameters in raw SQL (use `Prisma.join`). | **The CRM would break on the live site** wherever these are written or read. Our local Postgres doesn't show it. | L |
 | [ ] | U-16 | **Bookings: once, and never twice** (`orders-and-stock.md`): the database refuses two bookings of the same host at overlapping times (a constraint or a short lock, not a read-then-write), and the booking form sends an idempotency key so a double click or retry books once. A test books the same slot many times at once. | Today two visitors can book the same slot at the same moment, and a double click can book twice. | M |
 | [ ] | U-17 | **Repeatable public submissions** (support request, form response, chat start): an idempotency key from the browser so a retry after a lost connection doesn't create a second one (the new database connection never re-sends a write, so the browser retries). | Duplicate tickets, responses or chats. | S–M |
 | [ ] | U-18 | **Page progress bar** (0.10.12): the template's `src/lib/page-progress.ts` (the thin bar in the site's colour while the next page loads) in Kinroot's router and public pages. Optional in the guide; the UI rules now say it's built in and not to add another. | Same feel as the template, in Kinroot's colours. | S |
@@ -62,6 +62,11 @@ upgraded before any other work. Nothing reaches visitors until a Publish, and th
 - **U-13**: README › Accounts.
 - **U-14**: `kinroot-site-admin.test.ts` redeems tickets as `CrmApp.tsx` does (POST) and checks the owner
   account refuses password, email, two-step and delete (403 `owner_account`).
+
+- **U-15**: every list column (22 `String[]` and `BookingLink.durations Int[]`) is `jsonb`, converted in
+  place by `20261104090000_no_string_arrays` (data kept); tags have GIN indexes. Raw SQL binds lists one
+  value at a time (`IN (…)`), and `tests/no-array-columns.test.ts` stops either from coming back. The API
+  still sends and takes plain lists. Bulk tag / untag is one statement (P2-23, tags part).
 
 ## Not needed for Kinroot
 - **List pages** (`src/lib/list-page.ts`, 0.10.13): for long public lists (jobs, products). Kinroot has no public lists, and its CRM lists keep their page numbers (your decision today).

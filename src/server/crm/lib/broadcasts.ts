@@ -14,7 +14,7 @@
  */
 import {HTTPException} from 'hono/http-exception';
 
-import type {Broadcast, ContactList, Prisma} from '../../../generated/prisma/client';
+import {Prisma, type Broadcast, type ContactList} from '../../../generated/prisma/client';
 import type {Db} from '../kit/db';
 import {sendEmail} from '../email/service';
 import {emit} from './events';
@@ -279,7 +279,7 @@ export async function broadcastStats(db: Db, ids: string[]) {
     FROM "BroadcastRecipient" r
     LEFT JOIN "EmailMessage" m ON m.id = r."messageId"
     LEFT JOIN "Contact" c ON c.id = r."contactId"
-    WHERE r."broadcastId" = ANY(${ids}::text[])
+    WHERE r."broadcastId" IN (${Prisma.join(ids)})
     GROUP BY r."broadcastId"`;
   for (const {id, ...s} of rows) out.set(id, s);
   return out;

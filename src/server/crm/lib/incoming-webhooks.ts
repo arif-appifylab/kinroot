@@ -66,6 +66,7 @@ import {
 import {addToList} from './segments';
 import {getSettings} from './settings';
 import {createTicket} from './tickets';
+import {strings, withStrings} from './json-list';
 
 // ─── Receiving ──────────────────────────────────────────────────────────────
 
@@ -508,8 +509,8 @@ async function upsertContact(ctx: Ctx, opts: {mainRecord: boolean}): Promise<Con
     const before = existing;
     const parsed = checked(ctx, contactBody.partial(), defined(v.fields)) ?? {};
     const {custom: _c, companyId: _x, ...data} = parsed;
-    const merged = [...new Set([...before.tags, ...tags])];
-    if (merged.length > before.tags.length) data.tags = merged.slice(0, 50);
+    const merged = [...new Set([...strings(before.tags), ...tags])];
+    if (merged.length > strings(before.tags).length) data.tags = merged.slice(0, 50);
     if (v.owner && v.owner !== before.ownerId) data.ownerId = v.owner;
     else if (!before.ownerId && ctx.config.owner.mode !== 'none') data.ownerId = await pickOwner(ctx);
     let custom: Record<string, unknown> | undefined;
@@ -559,8 +560,8 @@ async function upsertCompany(ctx: Ctx): Promise<{company: Company; outcome: 'cre
     const before = existing;
     const parsed = checked(ctx, companyBody.partial(), defined(v.fields)) ?? {};
     const {custom: _c, ...data} = parsed;
-    const merged = [...new Set([...before.tags, ...tags])];
-    if (merged.length > before.tags.length) data.tags = merged.slice(0, 50);
+    const merged = [...new Set([...strings(before.tags), ...tags])];
+    if (merged.length > strings(before.tags).length) data.tags = merged.slice(0, 50);
     if (v.owner && v.owner !== before.ownerId) data.ownerId = v.owner;
     else if (!before.ownerId && ctx.config.owner.mode !== 'none') data.ownerId = await pickOwner(ctx);
     let custom: Record<string, unknown> | undefined;
@@ -704,7 +705,7 @@ export async function processIncoming(db: Db, requestId: string, final: boolean)
   if (!request || request.status !== 'accepted') return;
   const {webhook: hook, ...req} = request;
   await db.incomingWebhookRequest.update({where: {id: req.id}, data: {attempts: {increment: 1}}});
-  const defs = await db.customFieldDef.findMany({where: {entity: {in: ['CONTACT', 'COMPANY', 'DEAL']}}, orderBy: {position: 'asc'}});
+  const defs = (await db.customFieldDef.findMany({where: {entity: {in: ['CONTACT', 'COMPANY', 'DEAL']}}, orderBy: {position: 'asc'}})).map((d) => withStrings(d, 'options'));
   const byEntity: InDefs = {CONTACT: defs.filter((d) => d.entity === 'CONTACT'), COMPANY: defs.filter((d) => d.entity === 'COMPANY'), DEAL: defs.filter((d) => d.entity === 'DEAL')};
   const action = (hook.action in IN_ACTIONS ? hook.action : 'automations') as InAction;
   const previous = (req.result ?? {}) as InResult;

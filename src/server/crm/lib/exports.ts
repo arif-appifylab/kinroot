@@ -33,6 +33,7 @@ import {notify} from './notify';
 import {scoreBandWhere} from './scoring';
 import {listContactWhere} from './segments';
 import {shownEmail} from './owner-account';
+import {strings} from './json-list';
 
 const PAGE = 1_000;
 const BUDGET_MS = 8_000;
@@ -127,7 +128,7 @@ async function writePages(db: Db, exp: Export, user: User, budgetMs: number) {
     const rows = await page(db, cur, user);
     if (!rows.length) return {exp: cur, done: true};
     const text = rows
-      .map((r) => csvLine(cur.columns.map((col) => show(custom.has(col) ? (r.custom as Record<string, unknown>)?.[custom.get(col)!] : r[col]))))
+      .map((r) => csvLine(strings(cur.columns).map((col) => show(custom.has(col) ? (r.custom as Record<string, unknown>)?.[custom.get(col)!] : r[col]))))
       .join('\r\n');
     await writeChunk(db, cur.id, cur.chunks + 1, `\r\n${text}`);
     cur = await db.export.update({where: {id: cur.id}, data: {cursor: rows.at(-1)!.id, chunks: cur.chunks + 1, processed: cur.processed + rows.length}});
@@ -222,7 +223,7 @@ async function finishExport(db: Db, c: AppContext | null, exp: Export, user: Use
     recordId: exp.id,
     label: exp.fileName,
     actor: c ? undefined : {id: user.id, name: user.name, email: user.email},
-    meta: {object: noun.many, rows: exp.processed, filters: exp.filters, listId: exp.listId, columns: exp.columns.map((col) => labels.get(col) ?? col), fileName: exp.fileName, fileId: exp.fileId, size, emailed, background: !c},
+    meta: {object: noun.many, rows: exp.processed, filters: exp.filters, listId: exp.listId, columns: strings(exp.columns).map((col) => labels.get(col) ?? col), fileName: exp.fileName, fileId: exp.fileId, size, emailed, background: !c},
   });
   return done;
 }

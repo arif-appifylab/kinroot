@@ -33,6 +33,7 @@ import {filesFor, identityLabel, linkChannelContact, receiveChannelMessage, refr
 import {conversationLink, eventData, threadEvent} from './conversations';
 import {CHAT_ONLINE_CACHE_KEY, getInboxSettings, hasTeamAccess} from './settings';
 import {cache} from '../../../platform/cache';
+import {strings} from '../lib/json-list';
 
 /**
  * Website live chat (module 10b). The visitor's browser talks to
@@ -421,7 +422,7 @@ async function toVisitorView(db: Db, thread: EmailThread, origin: string, messag
       from: m.direction === 'INBOUND' ? ('visitor' as const) : m.kind === 'auto' ? ('system' as const) : ('team' as const),
       author: m.direction === 'OUTBOUND' && m.sender ? {name: m.sender.name.split(' ')[0]!, color: m.sender.color, avatarUrl: m.sender.avatarUrl} : null,
       text: m.text,
-      files: m.fileIds.map((id) => files.get(id)).filter((f) => !!f).map((f) => ({...f, url: links.get(f.id)!})),
+      files: strings(m.fileIds).map((id) => files.get(id)).filter((f) => !!f).map((f) => ({...f, url: links.get(f.id)!})),
       at: m.createdAt.toISOString(),
       seen: !!m.readAt,
       via: null,
@@ -496,7 +497,7 @@ export async function emailVisitor(db: Db, payload: Record<string, unknown>) {
   const link = `${origin}/chat/c/${await continueToken(thread.id, identity.id)}`;
   const files = await filesFor(db, pending);
   const lines = pending.map((m) => {
-    const attached = m.fileIds.map((id) => files.get(id)?.name).filter(Boolean);
+    const attached = strings(m.fileIds).map((id) => files.get(id)?.name).filter(Boolean);
     return `${m.sender?.name.split(' ')[0] ?? teamName}: ${neutral(m.text)}${attached.length ? `\n(attached: ${attached.join(', ')})` : ''}`;
   });
   const body = `Hi${identity.name ? ` ${neutral(identity.name.split(' ')[0]!)}` : ''},\n\nYou have a new reply to your chat with ${teamName}:\n\n${lines.join('\n\n')}\n\nContinue the conversation: ${link}\nOr simply reply to this email.`;

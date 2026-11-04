@@ -481,7 +481,7 @@ describe.skipIf(!DATABASE_URL)('Ported: shared inbox (integration, real Postgres
     await inbound({from: autoContact.email, to: [TEAM_IN], subject: 'Automation', text: 'x', messageId: mid('auto')});
     let tags: string[] = [];
     for (let i = 0; i < 20 && !tags.includes('conv-auto'); i++) {
-      tags = (await db.contact.findUniqueOrThrow({where: {id: autoContact.id}})).tags;
+      tags = (await db.contact.findUniqueOrThrow({where: {id: autoContact.id}})).tags as string[];
       if (!tags.includes('conv-auto')) await new Promise(r => setTimeout(r, 50));
     }
     expect(tags).toContain('conv-auto');

@@ -4,6 +4,7 @@ import type {Db} from '../kit/db';
 import {userSelect} from '../lib/users';
 import {filesFor, identityLabel} from './channel-messages';
 import {getChatSettings, type VisitorData} from './chat';
+import {strings} from '../lib/json-list';
 
 /**
  * The agent's side of a chat (or any message channel) in the inbox detail:
@@ -58,7 +59,7 @@ export function agentMessage(m: AgentRow, files: Awaited<ReturnType<typeof files
     kind: m.kind as 'text' | 'auto',
     status: m.status,
     text: m.text,
-    files: m.fileIds.map((id) => files.get(id)).filter((f) => !!f).map((f) => ({...f, url: `/site-api/crm/files/${f.id}`})),
+    files: strings(m.fileIds).map((id) => files.get(id)).filter((f) => !!f).map((f) => ({...f, url: `/site-api/crm/files/${f.id}`})),
     sender: m.sender,
     createdAt: m.createdAt.toISOString(),
     deliveredAt: m.deliveredAt?.toISOString() ?? null,

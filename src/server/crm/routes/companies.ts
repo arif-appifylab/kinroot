@@ -15,6 +15,7 @@ import {notify, recordLink} from '../lib/notify';
 import {moveToBin} from '../lib/recycle-bin';
 import {rememberOption} from '../lib/settings';
 import {userSelect} from '../lib/users';
+import {strings} from '../lib/json-list';
 
 export const normalizeDomain = (v: string | null | undefined) =>
   v ? v.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '') || null : v;
@@ -59,7 +60,7 @@ export function companyWhere(q: Record<string, string | undefined>): Prisma.Comp
     ];
   }
   if (q.ownerId) where.ownerId = q.ownerId === 'none' ? null : q.ownerId;
-  if (q.tag) where.tags = {has: q.tag};
+  if (q.tag) where.tags = {array_contains: [q.tag]};
   if (q.industry) where.industry = q.industry;
   return where;
 }
@@ -215,7 +216,7 @@ export const companies = new Hono<AppEnv>()
     const data = Object.fromEntries(COMPANY_MERGE_FIELDS.map((f) => [f, pick(f)])) as Prisma.CompanyUncheckedUpdateInput;
     const keepId = survivor.id;
     const dropId = dropped.id;
-    const merged = {...data, tags: [...new Set([...survivor.tags, ...dropped.tags])], custom: {...(dropped.custom as object), ...(survivor.custom as object)}};
+    const merged = {...data, tags: [...new Set([...strings(survivor.tags), ...strings(dropped.tags)])], custom: {...(dropped.custom as object), ...(survivor.custom as object)}};
     // What the merge changed on the survivor, for the audit log and property history.
     const changes = [...diff(survivor, {...merged, custom: undefined}), ...customDiff(survivor.custom, merged.custom)];
     await db.$transaction([
@@ -255,7 +256,7 @@ export const companies = new Hono<AppEnv>()
     if (!src) throw notFound('Company');
     const {id: _id, createdAt: _c, updatedAt: _u, lastActivityAt: _l, domain: _d, ...fields} = src;
     // Domain stays with the original so email-domain matching remains unambiguous.
-    const copy = await c.var.db.company.create({data: {...fields, custom: src.custom as Prisma.InputJsonValue, name: `${src.name} (copy)`, lastActivityAt: new Date()}});
+    const copy = await c.var.db.company.create({data: {...fields, custom: src.custom as Prisma.InputJsonValue, tags: strings(src.tags), name: `${src.name} (copy)`, lastActivityAt: new Date()}});
     await logActivity(c.var.db, {type: 'company_created', title: `Cloned from ${src.name}`, actorId: me.id, companyId: copy.id});
     await emit(c.var.db, 'company.created', {recordId: copy.id, actorId: me.id, data: copy});
     await audit(c.var.db, c, {action: 'company.cloned', entity: 'company', recordId: copy.id, label: copy.name, meta: {from: src.id}});

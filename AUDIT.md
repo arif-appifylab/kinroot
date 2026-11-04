@@ -63,7 +63,7 @@ Effort: S = under an hour, M = a few hours, L = a day or more.
 | [ ] | P2-20 · inherited | Open inbox conversation re-downloads the whole transcript every 3 s (13–15 sequential queries per poll). | Light "updates since" endpoint; full detail on open only. | M |
 | [ ] | P2-21 · inherited | Website chat poll: ~10 sequential queries and up to 4 writes per visitor every 3 s. | Cache online agents and settings, skip re-reads; 3–4 queries. | M |
 | [ ] | P2-22 · inherited | App badges poll ~25 counts a minute per open tab (14 unindexed counts for the inbox alone), also in background tabs. | One capped `/badges` call; full counts only on their screens. | M |
-| [ ] | P2-23 · inherited | Bulk delete / complete / tag act one record at a time (up to ~2000 sequential queries in one request). | Bulk SQL + `emitMany` / `auditMany`. | S–M |
+| [~] | P2-23 · inherited | Bulk delete / complete / tag act one record at a time (up to ~2000 sequential queries in one request). **Tag / untag: one statement (done with U-15). Delete / complete: still per record.** | Bulk SQL + `emitMany` / `auditMany`. | S–M |
 | [ ] | P2-24 · inherited | Missing indexes: lists sorted by created date, `lastActivityAt`, task and booking triggers; case-insensitive email lookups can't use the email index (support portal, broadcasts, forms, chat…). | Indexes migration + `lower(email)` index and lookups. | M |
 | [ ] | P2-25 · inherited | Contact create/edit runs a full-table duplicate check inside the request; the 6-hourly scan loads all contacts into memory. | Duplicate check as a job; group candidates in SQL. | M |
 | [ ] | P2-26 · inherited | Settings rows read uncached on most requests (twice on some). | Site Cache with clear-on-save. | S |

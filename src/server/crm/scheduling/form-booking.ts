@@ -5,6 +5,7 @@ import {fullName} from '@/lib/format';
 import {isEmpty, type Answers, type FormField} from '@/lib/forms';
 import type {Db} from '../kit/db';
 import {claimSlot, createBooking} from './bookings';
+import {numbers} from '../lib/json-list';
 
 type Picked = {field: FormField; link: BookingLink; start: string; duration: number; timezone: string};
 
@@ -20,7 +21,7 @@ export async function checkFormSlots(db: Db, fields: FormField[], answers: Answe
     const link = field.bookingLinkId ? await db.bookingLink.findUnique({where: {id: field.bookingLinkId}}) : null;
     if (!link?.active) throw new HTTPException(409, {message: `${field.label}: online booking is not available right now`});
     if (!email) throw new HTTPException(400, {message: 'Please add your email address to book a time'});
-    const duration = Number(v.duration) || link.durations[0] || 30;
+    const duration = Number(v.duration) || numbers(link.durations)[0] || 30;
     await claimSlot(db, link, new Date(v.start), duration);
     out.push({field, link, start: v.start, duration, timezone: v.timezone || link.timezone});
   }

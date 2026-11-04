@@ -7,6 +7,7 @@ import {notify} from '../lib/notify';
 import {conversationLink} from './conversations';
 import {onInbound, onOutbound} from './routing';
 import type {InboxContext} from './settings';
+import {strings} from '../lib/json-list';
 
 /**
  * The message model of every inbox channel that is not email (website chat
@@ -98,7 +99,7 @@ export type FileMeta = {id: string; name: string; size: number; mimeType: string
 
 /** File details for messages (attachments never render inline unless they are raster images). */
 export async function filesFor(db: Db, messages: Pick<ChannelMessage, 'fileIds'>[]) {
-  const ids = [...new Set(messages.flatMap((m) => m.fileIds))];
+  const ids = [...new Set(messages.flatMap((m) => strings(m.fileIds)))];
   const rows = ids.length ? await db.file.findMany({where: {id: {in: ids}, purpose: {not: 'trash'}}, select: {id: true, name: true, size: true, mimeType: true}}) : [];
   return new Map<string, FileMeta>(rows.map((f) => [f.id, {...f, image: INLINE_IMAGES.includes(f.mimeType)}]));
 }

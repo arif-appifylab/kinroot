@@ -7,7 +7,7 @@
  */
 import type * as P from '../../generated/prisma/client';
 import {BUYING_ROLES, COMPANY_SIZES, LEAD_STATUSES, LIFECYCLE} from '@/lib/format';
-import type {Jsonify} from '@/lib/types';
+import type {Jsonify, ListModels} from '@/lib/types';
 
 export type IoEntity = 'contact' | 'company' | 'deal';
 
@@ -143,7 +143,7 @@ const DEAL_TARGETS: ImportTarget[] = [
 
 const BASE_TARGETS: Record<IoEntity, ImportTarget[]> = {contact: CONTACT_TARGETS, company: COMPANY_TARGETS, deal: DEAL_TARGETS};
 
-type FieldDef = Pick<P.CustomFieldDef, 'key' | 'label' | 'type' | 'options'>;
+type FieldDef = Pick<ListModels['CustomFieldDef'], 'key' | 'label' | 'type' | 'options'>;
 
 export function customTarget(def: FieldDef): ImportTarget {
   const kind: TargetKind =
@@ -563,7 +563,7 @@ export const exportColumns = (entity: IoEntity, defs: Pick<P.CustomFieldDef, 'ke
 export type ImportCounts = {create: number; update: number; skip: number; errors: number; warnings: number; newCompanies?: number};
 export type ImportStats = {companiesCreated?: number; listAdded?: number; notes?: number};
 export type ImportIssueRow = Jsonify<P.ImportIssue>;
-export type ImportRun = Omit<Jsonify<P.Import>, 'mapping' | 'options' | 'preview' | 'stats'> & {
+export type ImportRun = Omit<Jsonify<ListModels['Import']>, 'mapping' | 'options' | 'preview' | 'stats'> & {
   mapping: (string | null)[];
   options: ImportOptions;
   preview: ImportCounts | null;
@@ -572,7 +572,7 @@ export type ImportRun = Omit<Jsonify<P.Import>, 'mapping' | 'options' | 'preview
   hasErrorFile: boolean;
 };
 export type ImportDetail = {import: ImportRun; issues: ImportIssueRow[]; issueCount: number};
-export type ExportRun = Omit<Jsonify<P.Export>, 'filters'> & {filters: Record<string, string>; downloadUrl: string | null};
+export type ExportRun = Omit<Jsonify<ListModels['Export']>, 'filters'> & {filters: Record<string, string>; downloadUrl: string | null};
 
 export const ACTIVE_IMPORT = new Set(['validating', 'queued', 'running']);
 export const isActive = (status: string) => ACTIVE_IMPORT.has(status);

@@ -2,6 +2,7 @@ import {Hono} from 'hono';
 
 import {CHANNEL_KEYS, MESSAGE_CHANNELS} from '@/lib/inbox';
 import {OPEN_STATUSES} from '@/lib/tickets';
+import {Prisma} from '../../../generated/prisma/client';
 import {currentUser, type AppEnv} from '../kit/guards';
 import {getInboxSettings, hasTeamAccess} from '../inbox/settings';
 import {stampLastSeen} from './inbox';
@@ -40,10 +41,12 @@ export const badges = new Hono<AppEnv>().get('/', async (c) => {
   const settings = await getInboxSettings(db); // Site Cache
   const team = hasTeamAccess(me, settings);
   const allTeamAccounts = settings.teamAccounts === 'all';
-  const teamAccounts = allTeamAccounts ? [] : settings.teamAccounts;
+  const teamAccounts = settings.teamAccounts === 'all' ? [] : settings.teamAccounts;
   const channels = [...CHANNEL_KEYS];
   const messageChannels = ['form', ...MESSAGE_CHANNELS];
-  const ticketStatuses = [...OPEN_STATUSES];
+  // Lists are bound one value at a time (`IN (…)`): the live driver can't bind an array parameter.
+  const ticketStatuses = Prisma.join([...OPEN_STATUSES].map((s) => Prisma.sql`${s}::"TicketStatus"`));
+  const inTeamAccounts = teamAccounts.length ? Prisma.sql`a."id" IN (${Prisma.join(teamAccounts)})` : Prisma.sql`FALSE`;
 
   const [[row]] = await Promise.all([
     db.$queryRaw<{tasks: number; reminders: number; inbox: number; tickets: number; notifications: number; latest: string | null}[]>`
@@ -55,7 +58,7 @@ export const badges = new Hono<AppEnv>().get('/', async (c) => {
           SELECT 1 FROM "Task" WHERE "assigneeId" = ${me.id} AND "done" = false AND "reminderAt" <= ${now} AND "remindedAt" IS NULL LIMIT ${CAP}
         ) x) AS reminders,
         (SELECT COUNT(*)::int FROM (
-          SELECT 1 FROM "Ticket" WHERE "assigneeId" = ${me.id} AND "status" = ANY(${ticketStatuses}::"TicketStatus"[]) LIMIT ${CAP}
+          SELECT 1 FROM "Ticket" WHERE "assigneeId" = ${me.id} AND "status" IN (${ticketStatuses}) LIMIT ${CAP}
         ) x) AS tickets,
         (SELECT COUNT(*)::int FROM (
           SELECT 1 FROM "Notification" WHERE "userId" = ${me.id} AND "readAt" IS NULL LIMIT ${CAP}
@@ -63,7 +66,7 @@ export const badges = new Hono<AppEnv>().get('/', async (c) => {
         (SELECT "id" FROM "Notification" WHERE "userId" = ${me.id} ORDER BY "createdAt" DESC LIMIT 1) AS latest,
         (SELECT COUNT(*)::int FROM (
           SELECT 1 FROM "EmailThread" t
-          WHERE t."firstInboundAt" IS NOT NULL AND t."channel" = ANY(${channels}::text[])
+          WHERE t."firstInboundAt" IS NOT NULL AND t."channel" IN (${Prisma.join(channels)})
             AND t."spamAt" IS NULL AND t."trashedAt" IS NULL AND t."snoozedUntil" IS NULL
             AND t."status" = 'OPEN' AND t."unread" = true
             AND (t."assigneeId" = ${me.id} OR t."assigneeId" IS NULL)
@@ -74,9 +77,9 @@ export const badges = new Hono<AppEnv>().get('/', async (c) => {
               -- the team inbox, for people with access ("mine or unassigned" already narrows it)
               OR (${team} AND (
                 (t."channel" = 'email' AND t."accountId" IN (
-                  SELECT a."id" FROM "EmailAccount" a WHERE a."userId" IS NULL AND (${allTeamAccounts} OR a."id" = ANY(${teamAccounts}::text[]))
+                  SELECT a."id" FROM "EmailAccount" a WHERE a."userId" IS NULL AND (${allTeamAccounts} OR ${inTeamAccounts})
                 ))
-                OR t."channel" = ANY(${messageChannels}::text[])
+                OR t."channel" IN (${Prisma.join(messageChannels)})
                 OR (t."channel" = 'email' AND t."accountId" IS NULL AND t."assigneeId" IS NULL)
               ))
             )

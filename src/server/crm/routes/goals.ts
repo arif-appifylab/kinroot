@@ -8,6 +8,7 @@ import {ACTIVITY_KINDS, GOAL_METRICS, type GoalMetric} from '@/lib/reports';
 import {intParam, isoDate, notFound, ownerScope, valid} from '../lib/http';
 import {periodSpan, safeTz} from '../lib/periods';
 import {userSelect} from '../lib/users';
+import {strings, withStrings} from '../lib/json-list';
 
 const metric = z.enum(Object.keys(GOAL_METRICS) as [GoalMetric, ...GoalMetric[]]);
 const kind = z.enum(Object.keys(ACTIVITY_KINDS) as ['CALL', 'MEETING', 'EMAIL']);
@@ -65,15 +66,16 @@ async function progress(db: Db, goals: (Goal & {user: unknown})[], tz: string, o
   return Promise.all(
     goals.map(async (g) => {
       const p = periodSpan(g.period === 'QUARTER' ? 'QUARTER' : 'MONTH', tz, offset);
-      const key = `${g.metric}|${[...g.kinds].sort().join(',')}|${p.key}|${g.period}`;
-      if (!cache.has(key)) cache.set(key, actuals(db, g.metric as GoalMetric, g.kinds, p));
+      const kinds = strings(g.kinds);
+      const key = `${g.metric}|${[...kinds].sort().join(',')}|${p.key}|${g.period}`;
+      if (!cache.has(key)) cache.set(key, actuals(db, g.metric as GoalMetric, kinds, p));
       const actual = (await cache.get(key)!).get(g.userId ?? 'team') ?? 0;
       const length = p.to.getTime() - p.from.getTime();
       const elapsed = Math.min(1, Math.max(0, (now - p.from.getTime()) / length));
       const expected = g.target * elapsed;
       const status: GoalStatus = actual >= g.target ? 'achieved' : elapsed >= 1 ? 'missed' : actual >= expected ? 'on_track' : 'behind';
       return {
-        goal: g,
+        goal: withStrings(g, 'kinds'),
         period: {label: p.label, from: p.from, to: p.to},
         actual,
         expected,
@@ -110,7 +112,7 @@ export const goals = new Hono<AppEnv>()
   .post('/', requireRole('ADMIN'), valid('json', goalBody), async (c) => {
     const {startsAt, endsAt, ...body} = c.req.valid('json');
     const goal = await c.var.db.goal.create({data: {...body, kinds: body.metric === 'activities' ? body.kinds : [], startsAt: startsAt ?? new Date(0), endsAt: endsAt ?? null}});
-    return c.json({goal}, 201);
+    return c.json({goal: withStrings(goal, 'kinds')}, 201);
   })
 
   .patch('/:id', requireRole('ADMIN'), valid('json', goalBody.partial()), async (c) => {
@@ -118,7 +120,7 @@ export const goals = new Hono<AppEnv>()
     if (!found) throw notFound('Goal');
     const {startsAt, endsAt, ...body} = c.req.valid('json');
     const goal = await c.var.db.goal.update({where: {id: found.id}, data: {...body, startsAt: startsAt ?? undefined, endsAt}});
-    return c.json({goal});
+    return c.json({goal: withStrings(goal, 'kinds')});
   })
 
   .delete('/:id', requireRole('ADMIN'), async (c) => {

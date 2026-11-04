@@ -270,6 +270,7 @@ describe.skipIf(!DATABASE_URL)('Ported: scheduled report emails (integration, re
     const got = mailsFor('Retry');
     expect(got).toHaveLength(3);
     expect(got[2]!.to).toEqual([ext(5)]);
+    expect((await db.reportScheduleSend.findUniqueOrThrow({where: {id: partial.id}})).delivered, 'each address appended once (jsonb), the earlier one kept').toEqual([ext(4), ext(5)]);
   });
 
   it('pauses after three failed sends in a row, tells the creator, and resumes from now', async () => {

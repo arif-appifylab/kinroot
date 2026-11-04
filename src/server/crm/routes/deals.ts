@@ -144,7 +144,7 @@ export function dealWhere(q: Partial<z.infer<typeof dealListQuery>>): Prisma.Dea
   if (q.ownerId) where.ownerId = q.ownerId === 'none' ? null : q.ownerId;
   if (q.stageId) where.stageId = q.stageId;
   if (q.companyId) where.companies = {some: {companyId: q.companyId}};
-  if (q.tag) where.tags = {has: q.tag};
+  if (q.tag) where.tags = {array_contains: [q.tag]};
   if (q.q) where.OR = [{title: {contains: q.q, mode: 'insensitive'}}, {company: {name: {contains: q.q, mode: 'insensitive'}}}];
   return where;
 }

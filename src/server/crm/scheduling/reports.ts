@@ -7,7 +7,7 @@ import {registerReportObject, registerReportRef} from '../lib/reports';
  */
 
 registerReportRef('bookingLink', {
-  sql: (ids) => Prisma.sql`SELECT id, name AS label, NULL::float8 AS ord, CASE WHEN kind = 'team' THEN 'Team' END AS ctx FROM "BookingLink" WHERE id = ANY(${ids}::text[])`,
+  sql: (ids) => Prisma.sql`SELECT id, name AS label, NULL::float8 AS ord, CASE WHEN kind = 'team' THEN 'Team' END AS ctx FROM "BookingLink" WHERE id IN (${Prisma.join(ids)})`,
   list: Prisma.sql`SELECT id, name AS label FROM "BookingLink" ORDER BY name LIMIT 500`,
 });
 

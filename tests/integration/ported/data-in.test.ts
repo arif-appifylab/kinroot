@@ -356,7 +356,7 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     // Jobs run as they are sent here: the automation has run by the time the answer is back.
     let tags: string[] = [];
     for (let i = 0; i < 20 && !tags.includes('trial-auto'); i++) {
-      tags = (await db.contact.findUniqueOrThrow({where: {id: contactId}})).tags;
+      tags = (await db.contact.findUniqueOrThrow({where: {id: contactId}})).tags as string[];
       if (!tags.includes('trial-auto')) await new Promise(r => setTimeout(r, 50));
     }
     expect(tags).toContain('trial-auto');

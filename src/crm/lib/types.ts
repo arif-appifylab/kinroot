@@ -9,6 +9,29 @@ export type Jsonify<T> = T extends Date
       ? {[K in keyof T]: Jsonify<T[K]>}
       : T;
 
+/**
+ * List columns are jsonb in the database (`Json` in Prisma: the live driver can't handle Postgres
+ * arrays, docs/agent/database.md); the API always sends them as lists. These are the models as sent.
+ */
+type Lists<T, K extends keyof T, V = string[]> = Omit<T, K> & {[F in K]: V};
+export type ListModels = {
+  Contact: Lists<P.Contact, 'tags'>;
+  Company: Lists<P.Company, 'tags'>;
+  Deal: Lists<P.Deal, 'tags'>;
+  Ticket: Lists<P.Ticket, 'tags'>;
+  Interaction: Lists<P.Interaction, 'attendeeIds'>;
+  EmailMessage: Lists<P.EmailMessage, 'to' | 'cc' | 'bcc'>;
+  CustomFieldDef: Lists<P.CustomFieldDef, 'options'>;
+  Webhook: Lists<P.Webhook, 'events'>;
+  Goal: Lists<P.Goal, 'kinds'>;
+  TicketMessage: Lists<P.TicketMessage, 'fileIds'>;
+  BookingLink: Lists<Lists<P.BookingLink, 'hostIds'>, 'durations', number[]>;
+  CalendarConnection: Lists<P.CalendarConnection, 'busyCalendarIds'>;
+  Import: Lists<P.Import, 'headers'>;
+  Export: Lists<P.Export, 'columns'>;
+  ReportSchedule: Lists<P.ReportSchedule, 'userIds' | 'emails'>;
+};
+
 export type Role = P.TeamRole;
 export type LifecycleStage = P.LifecycleStage;
 export type DealStatus = P.DealStatus;
@@ -28,17 +51,17 @@ export type Pipeline = Jsonify<P.Pipeline> & {stages: Stage[]; _count?: {deals: 
 export type CompanyLite = {id: string; name: string; domain: string | null};
 export type ContactLite = {id: string; firstName: string; lastName: string | null; email?: string | null; title?: string | null};
 
-export type Contact = Jsonify<P.Contact> & {
+export type Contact = Jsonify<ListModels['Contact']> & {
   owner: UserLite | null;
   companies: {companyId: string; role: string | null; isPrimary: boolean; company: CompanyLite}[];
   _count?: {deals: number; tasks: number};
 };
 
-export type Company = Jsonify<P.Company> & {owner: UserLite | null; _count?: {contacts: number; deals: number}};
+export type Company = Jsonify<ListModels['Company']> & {owner: UserLite | null; _count?: {contacts: number; deals: number}};
 
 export type TaskLite = {id: string; title: string; dueAt: string | null; type: TaskType};
 
-export type Deal = Jsonify<P.Deal> & {
+export type Deal = Jsonify<ListModels['Deal']> & {
   stage: Stage;
   pipeline: {id: string; name: string; rottingDays: number};
   owner: UserLite | null;
@@ -54,10 +77,10 @@ export type DealDetail = Omit<Deal, 'pipeline'> & {
   stageChanges: (Jsonify<P.StageChange> & {toStage: Stage | null; user: UserLite | null})[];
 };
 
-export type ContactDetail = Contact & {deals: {deal: Jsonify<P.Deal> & {stage: Stage; owner: UserLite | null}}[]};
+export type ContactDetail = Contact & {deals: {deal: Jsonify<ListModels['Deal']> & {stage: Stage; owner: UserLite | null}}[]};
 export type CompanyDetail = Company & {
-  contacts: {contactId: string; role: string | null; isPrimary: boolean; contact: Jsonify<P.Contact> & {owner: UserLite | null}}[];
-  deals: (Jsonify<P.Deal> & {stage: Stage; owner: UserLite | null})[];
+  contacts: {contactId: string; role: string | null; isPrimary: boolean; contact: Jsonify<ListModels['Contact']> & {owner: UserLite | null}}[];
+  deals: (Jsonify<ListModels['Deal']> & {stage: Stage; owner: UserLite | null})[];
 };
 
 export type Note = Jsonify<P.Note> & {author: UserLite | null};
@@ -87,7 +110,7 @@ export type TimelineEmail = {
 };
 
 export type InteractionKind = P.InteractionKind;
-export type Interaction = Jsonify<P.Interaction> & {author?: UserLite | null};
+export type Interaction = Jsonify<ListModels['Interaction']> & {author?: UserLite | null};
 
 /** What the timeline stores for a logged call / meeting / message. */
 export type InteractionSnapshot = {
@@ -119,7 +142,7 @@ export type EmailAccount = Omit<Jsonify<P.EmailAccount>, 'credentials' | 'syncCu
   replyCapture: 'sync' | 'webhook' | 'none';
 };
 
-export type EmailMessage = Jsonify<P.EmailMessage> & {sender: UserLite | null};
+export type EmailMessage = Jsonify<ListModels['EmailMessage']> & {sender: UserLite | null};
 
 export type EmailThread = Jsonify<P.EmailThread> & {
   contact: ContactLite | null;
@@ -137,7 +160,7 @@ export type EmailThreadDetail = Jsonify<P.EmailThread> & {
 };
 
 export type EmailTemplate = Jsonify<P.EmailTemplate>;
-export type CustomField = Jsonify<P.CustomFieldDef>;
+export type CustomField = Jsonify<ListModels['CustomFieldDef']>;
 export type SavedView = Jsonify<P.SavedView> & {filters: Record<string, string>};
 
 export type AppSettings = {
@@ -175,7 +198,7 @@ export type AppNotification = Omit<Jsonify<P.Notification>, 'userId'> & {actor: 
 
 export type FileMeta = Omit<Jsonify<P.File>, 'storageId' | 'uploadedById'> & {uploadedBy: UserLite | null};
 
-export type Webhook = Omit<Jsonify<P.Webhook>, 'secret' | 'updatedAt'>;
+export type Webhook = Omit<Jsonify<ListModels['Webhook']>, 'secret' | 'updatedAt'>;
 /** `event.entity` is 'webhook' for test deliveries (Send test event). */
 export type WebhookDelivery = Jsonify<P.WebhookDelivery> & {event: {data: unknown; createdAt: string; entity: string}};
 export type JobsStatus = {
@@ -226,7 +249,7 @@ export type DashboardDetail = Omit<Jsonify<P.Dashboard>, 'filters'> & {
 };
 
 export type GoalProgress = {
-  goal: Jsonify<P.Goal> & {user: UserLite | null};
+  goal: Jsonify<ListModels['Goal']> & {user: UserLite | null};
   period: {label: string; from: string; to: string};
   actual: number;
   expected: number;
@@ -253,7 +276,7 @@ export type ForecastDeal = {
 export type ForecastData = {rows: ForecastRow[]; totals: ForecastRow; deals: ForecastDeal[]; noCloseDate: {count: number; value: number}; range: {from: string; to: string}};
 // ─── Tickets ────────────────────────────────────────────────────────────────
 
-export type TicketRow = Jsonify<P.Ticket> & {
+export type TicketRow = Jsonify<ListModels['Ticket']> & {
   assignee: UserLite | null;
   contact: (ContactLite & {phone: string | null; emailOptOut: boolean}) | null;
   company: CompanyLite | null;
@@ -262,7 +285,7 @@ export type TicketRow = Jsonify<P.Ticket> & {
 
 export type TicketFile = {id: string; name: string; mimeType: string; size: number};
 
-export type TicketMessage = Omit<Jsonify<P.TicketMessage>, 'kind'> & {
+export type TicketMessage = Omit<Jsonify<ListModels['TicketMessage']>, 'kind'> & {
   kind: 'reply' | 'note' | 'event';
   author: UserLite | null;
   files: TicketFile[];
@@ -283,7 +306,7 @@ export type CannedReply = Jsonify<P.CannedReply>;
 export type TicketSettingsResponse = {settings: import('./tickets').TicketSettings; sharedAccounts: {id: string; label: string; fromEmail: string}[]};
 export type EmailDesignResponse = {design: import('./email-layout').EmailDesign; brand: {name: string; logoSrc: string; primary: string}};
 // ─── Scheduling ───
-export type BookingLinkRow = Omit<Jsonify<P.BookingLink>, 'availability' | 'questions'> & {
+export type BookingLinkRow = Omit<Jsonify<ListModels['BookingLink']>, 'availability' | 'questions'> & {
   availability: import('./scheduling').Availability;
   questions: import('./scheduling').BookingQuestions;
   path: string;
@@ -292,7 +315,7 @@ export type BookingLinkRow = Omit<Jsonify<P.BookingLink>, 'availability' | 'ques
   canEdit?: boolean;
 };
 export type SchedulingProfile = Jsonify<P.SchedulingProfile>;
-export type CalendarConnectionView = Omit<Jsonify<P.CalendarConnection>, 'credentials' | 'calendars'> & {calendars: {id: string; name: string; primary: boolean; writable: boolean}[]};
+export type CalendarConnectionView = Omit<Jsonify<ListModels['CalendarConnection']>, 'credentials' | 'calendars'> & {calendars: {id: string; name: string; primary: boolean; writable: boolean}[]};
 export type CalendarState = {connections: CalendarConnectionView[]; providers: {google: boolean; microsoft: boolean}; redirectUris: {google: string; microsoft: string}};
 export type MeetingRow = Interaction & {
   author: UserLite | null;

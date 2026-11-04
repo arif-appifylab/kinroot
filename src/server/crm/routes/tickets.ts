@@ -27,6 +27,7 @@ import {
 } from '../lib/tickets';
 import {userSelect} from '../lib/users';
 import {checkUpload, completeUpload, startUpload, uploadBody} from '../lib/uploads';
+import {strings} from '../lib/json-list';
 
 const status = z.enum(['NEW', 'WAITING_ON_CONTACT', 'WAITING_ON_US', 'RESOLVED', 'CLOSED']);
 const priority = z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']);
@@ -262,7 +263,7 @@ export const tickets = new Hono<AppEnv>()
     const base = await loadTicket(c, c.req.param('ref'));
     const ticket = await db.ticket.findUniqueOrThrow({where: {id: base.id}, include: ticketInclude});
     const messages = await db.ticketMessage.findMany({where: {ticketId: ticket.id}, include: {author: {select: userSelect}}, orderBy: {createdAt: 'asc'}});
-    const fileIds = messages.flatMap((m) => m.fileIds);
+    const fileIds = messages.flatMap((m) => strings(m.fileIds));
     const files = fileIds.length ? await db.file.findMany({where: {id: {in: fileIds}}, select: fileMeta}) : [];
     const emails = messages.filter((m) => m.emailMessageId).map((m) => m.emailMessageId!);
     const delivery = emails.length ? await db.emailMessage.findMany({where: {id: {in: emails}}, select: {id: true, status: true, error: true, openCount: true}}) : [];
@@ -270,7 +271,7 @@ export const tickets = new Hono<AppEnv>()
     const byEmail = new Map(delivery.map((d) => [d.id, d]));
     return c.json({
       ticket,
-      messages: messages.map((m) => ({...m, files: m.fileIds.map((id) => byFile.get(id)).filter(Boolean), email: m.emailMessageId ? byEmail.get(m.emailMessageId) ?? null : null})),
+      messages: messages.map((m) => ({...m, files: strings(m.fileIds).map((id) => byFile.get(id)).filter(Boolean), email: m.emailMessageId ? byEmail.get(m.emailMessageId) ?? null : null})),
     });
   })
 

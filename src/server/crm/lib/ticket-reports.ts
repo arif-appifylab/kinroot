@@ -10,7 +10,7 @@ import {registerReportObject, registerReportRef} from './reports';
  */
 
 registerReportRef('contact', {
-  sql: (ids) => Prisma.sql`SELECT id, trim(concat_ws(' ', "firstName", "lastName")) AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Contact" WHERE id = ANY(${ids}::text[])`,
+  sql: (ids) => Prisma.sql`SELECT id, trim(concat_ws(' ', "firstName", "lastName")) AS label, NULL::float8 AS ord, NULL::text AS ctx FROM "Contact" WHERE id IN (${Prisma.join(ids)})`,
   // No picker list: it would show every contact's name to members limited to their own records.
 });
 
