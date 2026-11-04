@@ -145,7 +145,7 @@ const BASE_TARGETS: Record<IoEntity, ImportTarget[]> = {contact: CONTACT_TARGETS
 
 type FieldDef = Pick<ListModels['CustomFieldDef'], 'key' | 'label' | 'type' | 'options'>;
 
-export function customTarget(def: FieldDef): ImportTarget {
+function customTarget(def: FieldDef): ImportTarget {
   const kind: TargetKind =
     def.type === 'NUMBER' || def.type === 'CURRENCY' ? 'number' : def.type === 'DATE' ? 'date' : def.type === 'CHECKBOX' ? 'boolean' : def.type === 'SELECT' ? 'enum' : def.type === 'MULTISELECT' ? 'multi' : 'text';
   return {
@@ -261,7 +261,7 @@ const TRUE = new Set(['true', 'yes', 'y', '1', 'x', 'on', 'checked', '✓', '✔
 const FALSE = new Set(['false', 'no', 'n', '0', 'off', 'unchecked', 'nein', 'non', '-']);
 
 /** Yes/no cells: true/yes/y/1/x/on/checked vs false/no/n/0/off. Anything else is undefined (a warning). */
-export function parseBool(s: string): boolean | undefined {
+function parseBool(s: string): boolean | undefined {
   const k = valueKey(s);
   if (TRUE.has(k)) return true;
   if (FALSE.has(k)) return false;
@@ -274,7 +274,7 @@ export function parseBool(s: string): boolean | undefined {
  * the decimal mark; a lone comma is decimal unless exactly three digits follow
  * ("1,250" = 1250, "12,5" = 12.5).
  */
-export function parseNumber(s: string): number | undefined {
+function parseNumber(s: string): number | undefined {
   let t = s.trim();
   if (!t) return undefined;
   const negative = /^\(.*\)$/.test(t) || /^-/.test(t.replace(/^[^\d-]+/, ''));
@@ -315,7 +315,7 @@ function ymd(y: number, m: number, d: number) {
  * day-first or month-first numbers (31/03/2026, 03-31-26) as `order` says,
  * month names (31 Mar 2026, March 31, 2026) and Excel serial numbers (46112).
  */
-export function parseDate(s: string, order: DateOrder): string | undefined {
+function parseDate(s: string, order: DateOrder): string | undefined {
   const t = s.trim();
   if (!t) return undefined;
   let m = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[T\s].*)?$/.exec(t);
@@ -410,7 +410,7 @@ export function resolveOption(target: ImportTarget, raw: string, valueMap: Value
 }
 
 /** Known values keep their usual casing ("decision maker" → "Decision maker"). */
-export const suggestCase = (target: ImportTarget, raw: string) => target.suggest?.find((s) => valueKey(s) === valueKey(raw)) ?? raw;
+const suggestCase = (target: ImportTarget, raw: string) => target.suggest?.find((s) => valueKey(s) === valueKey(raw)) ?? raw;
 
 /** "Ann Lee <ann@x.com>" / "mailto:ann@x.com" → "ann@x.com" */
 export const emailOf = (v: string) => (/<([^>]+)>/.exec(v)?.[1] ?? v.replace(/^mailto:/i, '')).trim().toLowerCase();
@@ -476,7 +476,7 @@ export type ExportColumn = {key: string; label: string; group: 'Fields' | 'Relat
 const C = (key: string, label: string, group: ExportColumn['group'] = 'Fields'): ExportColumn => ({key, label, group});
 
 /** Labels match the import synonyms, so an export imports back cleanly (Record ID matches the rows). */
-export const EXPORT_COLUMNS: Record<IoEntity, ExportColumn[]> = {
+const EXPORT_COLUMNS: Record<IoEntity, ExportColumn[]> = {
   contact: [
     C('id', 'Record ID', 'System'),
     C('firstName', 'First name'),
@@ -574,6 +574,6 @@ export type ImportRun = Omit<Jsonify<ListModels['Import']>, 'mapping' | 'options
 export type ImportDetail = {import: ImportRun; issues: ImportIssueRow[]; issueCount: number};
 export type ExportRun = Omit<Jsonify<ListModels['Export']>, 'filters'> & {filters: Record<string, string>; downloadUrl: string | null};
 
-export const ACTIVE_IMPORT = new Set(['validating', 'queued', 'running']);
+const ACTIVE_IMPORT = new Set(['validating', 'queued', 'running']);
 export const isActive = (status: string) => ACTIVE_IMPORT.has(status);
 export const ACTIVE_EXPORT = new Set(['queued', 'running']);

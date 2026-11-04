@@ -6,26 +6,21 @@ import tailwindcss from '@tailwindcss/vite';
 import {tanstackRouter} from '@tanstack/router-plugin/vite';
 import {defineConfig} from 'astro/config';
 
-// Pages render on request on a Cloudflare Worker (the account pages are
+// Pages render on request on a Cloudflare Worker (only robots.txt is
 // prerendered). Beside them the same Worker serves Kinroot, the CRM
 // (`/crm/*`, a React app) and the Site API (`/site-api/*`, a Hono app).
 // One project, one build, one dev server.
 //
-// Public pages stay real HTML pages (best for search), fetched ahead by
-// `prefetch` (below) where a link asks for it. Kinroot is a React app with its own router.
+// Public pages stay real HTML pages (best for search). Kinroot is a React app with its own router.
 //
 // No wrangler config is committed: the platform writes the deploy config at
 // build time, so it can never be broken by an edit here.
 export default defineConfig({
   output: 'server',
-  // Fetch a page before the click, for links marked `data-astro-prefetch`:
-  // on hover or focus (`hover`), or as soon as it is on screen
-  // (`data-astro-prefetch="viewport"`: phones have no hover).
-  // OPT-IN, not `prefetchAll`: only links to PRERENDERED pages are marked.
-  // Per-visit pages (`/crm/*`) answer `no-store`, so a prefetch of
-  // them would be thrown away (a wasted Worker request), and Kinroot
-  // preloads its own screens (TanStack Router). Skipped on slow connections
-  // and with Data Saver. The script is a small deferred module from 'self'.
+  // Prefetch is OPT-IN (a link marked `data-astro-prefetch`), not `prefetchAll`:
+  // the public pages render per request and answer `no-store`, so a prefetch
+  // of them would be thrown away (a wasted Worker request), and Kinroot
+  // preloads its own screens (TanStack Router).
   prefetch: {prefetchAll: false, defaultStrategy: 'hover'},
   adapter: cloudflare({
     // Images in PRERENDERED pages (files in src/assets) are optimised at
@@ -74,7 +69,7 @@ export default defineConfig({
   // the site's own (src/platform/auth), on cookies.
   session: false,
   redirects: {'/account': '/account/login/'},
-  // No Markdown code blocks here; Shiki's inline styles would break the CSP.
+  // No Markdown pages today; if one comes back, Shiki's inline styles would break the CSP.
   markdown: {syntaxHighlight: false},
   security: {
     // Astro writes a Content-Security-Policy into every page, with a hash for

@@ -108,7 +108,7 @@ const lower = (s: string) => s.trim().toLowerCase();
 
 // ─── Loading ────────────────────────────────────────────────────────────────
 
-export async function loadImportFile(db: Db, imp: Pick<Import, 'fileId' | 'delimiter'>) {
+async function loadImportFile(db: Db, imp: Pick<Import, 'fileId' | 'delimiter'>) {
   const file = imp.fileId ? await db.file.findUnique({where: {id: imp.fileId}, select: {storageId: true, ready: true}}) : null;
   if (!file?.ready) throw new Error('The uploaded file is gone (files are kept for 7 days). Upload it again.');
   return parseCsv(await readBytes(file), imp.delimiter);

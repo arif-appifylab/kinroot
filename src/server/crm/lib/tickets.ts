@@ -13,10 +13,11 @@ import {mergeFields} from '../email/render';
 import {sendEmail, sendSystemEmail, usableAccounts} from '../email/service';
 import {publicFileUrl} from '../routes/files';
 import {logActivity} from './activity';
+import {contactIdByEmail} from './contact-email';
 import {associateByDomain} from './domains';
 import {emit} from './events';
 import {ownerScope} from './http';
-import {enqueue, kickJobs} from './jobs';
+import {enqueue} from './jobs';
 import {notify, notifyMentions} from './notify';
 import {richBody} from './rich-text';
 import {getSettings} from './settings';
@@ -93,7 +94,8 @@ const activityData = (t: Ticket, extra: Record<string, unknown> = {}) => ({ticke
 /** Finds the contact with this email or creates one (source "Support"). */
 export async function contactForEmail(db: Db, email: string, name?: string | null) {
   const address = email.trim().toLowerCase();
-  const existing = await db.contact.findFirst({where: {email: {equals: address, mode: 'insensitive'}}, include: {companies: {orderBy: {isPrimary: 'desc'}, take: 1}}});
+  const existingId = await contactIdByEmail(db, address);
+  const existing = existingId ? await db.contact.findUnique({where: {id: existingId}, include: {companies: {orderBy: {isPrimary: 'desc'}, take: 1}}}) : null;
   if (existing) return existing;
   const [first, ...rest] = (name?.trim() || address.split('@')[0]!).split(/\s+/);
   const contact = await db.contact.create({
@@ -226,7 +228,6 @@ export async function changeStatus(db: Db, before: Ticket, to: TicketStatus, act
     const settings = await getTicketSettings(db);
     if (settings.csatEnabled) {
       await enqueue(db, 'ticket.csat', {ticketId: ticket.id, origin: opts.origin ?? ''});
-      kickJobs();
     }
   }
   if (!opts.quiet && actor && ticket.assigneeId && ticket.assigneeId !== actor.id) {
@@ -270,7 +271,7 @@ export async function changePriority(db: Db, before: Ticket, priority: TicketPri
 // ─── Conversation ───────────────────────────────────────────────────────────
 
 /** The mailbox replies go out from: the configured one, the support address's, else the default shared one. */
-export async function replyAccount(db: Db, me: User, settings: TicketSettings): Promise<EmailAccount | null> {
+async function replyAccount(db: Db, me: User, settings: TicketSettings): Promise<EmailAccount | null> {
   const accounts = await usableAccounts(db, me);
   const support = settings.supportEmail.toLowerCase();
   return (
@@ -283,7 +284,7 @@ export async function replyAccount(db: Db, me: User, settings: TicketSettings): 
 }
 
 /** A "How did we do?" link works for this long after it was sent (when the ticket was resolved). */
-export const CSAT_DAYS = 30;
+const CSAT_DAYS = 30;
 
 /** `<ticket id>.<issued at, unix seconds in base 36>.<signature of both>`: the time is signed, so it can't be moved. */
 export async function csatToken(ticketId: string, issuedAt = Date.now()) {

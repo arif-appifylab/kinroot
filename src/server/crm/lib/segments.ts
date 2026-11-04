@@ -23,7 +23,7 @@ import {strings} from './json-list';
 type Where = Prisma.ContactWhereInput;
 
 /** Matches no contact. */
-export const NOBODY: Where = {id: {in: []}};
+const NOBODY: Where = {id: {in: []}};
 
 const MAX_DEPTH = 5;
 const DAY = 86400_000;

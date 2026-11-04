@@ -75,7 +75,7 @@ export function secretsPresent() {
 }
 
 /** The account's stored settings plus its provider's key from the owner's secret (a refused send when missing). */
-export function withKey(provider: EmailProvider, stored: Credentials): Credentials {
+function withKey(provider: EmailProvider, stored: Credentials): Credentials {
   if (provider === 'SMTP') throw new ProviderError('Custom SMTP is not available on this site. Connect Resend, Postmark, SendGrid, Mailgun, Gmail or Outlook instead.', 400);
   if (!isApi(provider)) return stored;
   const name = API_KEY_SECRETS[provider];
@@ -85,7 +85,7 @@ export function withKey(provider: EmailProvider, stored: Credentials): Credentia
 }
 
 /** A refused request: 4xx other than 429 won't succeed on retry, so jobs fail it straight away. */
-export class ProviderError extends Error {
+class ProviderError extends Error {
   readonly permanent: boolean;
   constructor(message: string, readonly status: number) {
     super(message);

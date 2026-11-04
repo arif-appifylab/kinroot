@@ -13,7 +13,7 @@ import {enqueue} from './jobs';
  * away; everything else (time passing, bulk edits without events) is caught by
  * the periodic recompute in the `crm-tick` schedule.
  */
-export const RESCORE_EVENTS = new Set<string>([
+const RESCORE_EVENTS = new Set<string>([
   'contact.created',
   'contact.updated',
   'contact.merged',

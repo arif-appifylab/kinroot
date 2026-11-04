@@ -127,7 +127,7 @@ function rowsTable(section: EmailSection, currency: string, link: string) {
 }
 
 /** One report's block in the email. */
-export function sectionHtml(section: EmailSection, opts: {currency: string; tz: string; link: string; heading: boolean; divider: boolean}) {
+function sectionHtml(section: EmailSection, opts: {currency: string; tz: string; link: string; heading: boolean; divider: boolean}) {
   const r = section.result;
   const range = rangeText(r.range.from, r.range.to, opts.tz, r.range.label);
   const tileLabel = r.additive ? `Total ${r.measureLabel.charAt(0).toLowerCase()}${r.measureLabel.slice(1)}` : r.measureLabel;

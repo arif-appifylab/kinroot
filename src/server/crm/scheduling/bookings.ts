@@ -8,7 +8,7 @@ import {cancelMeetingEvents, pushMeeting} from '../calendar/service';
 import {logActivity} from '../lib/activity';
 import {associateByDomain} from '../lib/domains';
 import {emit} from '../lib/events';
-import {enqueue, kickJobs} from '../lib/jobs';
+import {enqueue} from '../lib/jobs';
 import {notify, recordLink} from '../lib/notify';
 import {rememberOption} from '../lib/settings';
 import {createInteraction, refreshInteractionActivity} from '../routes/interactions';
@@ -21,7 +21,7 @@ import {lockFor, runOnce, type Once} from '../lib/once';
 export const manageToken = async (bookingId: string) => `${bookingId}.${await sign(`booking|${bookingId}`)}`;
 
 /** A manage link works until a week after the meeting ends (its current end, after any reschedule). */
-export const MANAGE_DAYS_AFTER = 7;
+const MANAGE_DAYS_AFTER = 7;
 
 export async function bookingFromToken(db: Db, token: string, now = Date.now()) {
   const [id, sig] = token.split('.');
@@ -63,13 +63,16 @@ function bookingLocation(link: BookingLink, input: Pick<BookInput, 'phone'>) {
 /** Contact by email (case-insensitive), created when new, with the company they typed or their work domain. */
 async function upsertContact(db: Db, link: BookingLink, hostId: string, input: BookInput) {
   const email = input.email.trim().toLowerCase();
-  let contact: Contact | null = await db.contact.findFirst({where: {email: {equals: email, mode: 'insensitive'}}});
-  const isNew = !contact;
+  // Case-insensitive on the lower(email) index (`mode: 'insensitive'` is ILIKE: no index), the oldest one.
+  const [found] = await db.$queryRaw<{id: string; phone: string | null; ownerId: string | null}[]>`
+    SELECT id, phone, "ownerId" FROM "Contact" WHERE lower(email) = ${email} ORDER BY "createdAt" ASC, id ASC LIMIT 1`;
+  let contact: Contact;
+  const isNew = !found;
   const [firstName, ...rest] = input.name.trim().split(/\s+/);
-  if (contact) {
+  if (found) {
     contact = await db.contact.update({
-      where: {id: contact.id},
-      data: {phone: contact.phone ?? input.phone ?? undefined, ownerId: contact.ownerId ?? hostId},
+      where: {id: found.id},
+      data: {phone: found.phone ?? input.phone ?? undefined, ownerId: found.ownerId ?? hostId},
     });
   } else {
     const source = `Booking: ${link.name}`.slice(0, 100);
@@ -246,7 +249,6 @@ async function afterChange(db: Db, booking: Booking, change: 'booked' | 'resched
       await enqueue(db, 'booking.reminder', {bookingId: booking.id, kind, startAt: booking.startAt.toISOString()}, {runAt});
     }
   }
-  kickJobs();
 }
 
 // ─── Reschedule / cancel ────────────────────────────────────────────────────

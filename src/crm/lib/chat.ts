@@ -44,8 +44,6 @@ export type ChatSettings = {
   awayAfterMin: number;
   /** Sites allowed to embed the widget (hostnames; subdomains included). Empty = anywhere. */
   allowedDomains: string[];
-  /** Kept from Kinroot's Turnstile option; not used (chats are rate limited per visitor and address). */
-  spamCheck: boolean;
 };
 
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
@@ -64,7 +62,6 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   offlineMessage: "We're away right now. Leave a message and your email, and we'll reply by email.",
   awayAfterMin: 5,
   allowedDomains: [],
-  spamCheck: false,
 };
 
 /** Rate limits (DB-based, src/server/lib/rate-limit.ts). */

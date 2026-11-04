@@ -17,7 +17,7 @@ import {sanitizeRichText} from '../inbox/sanitize';
 export const richHtml = z.string().max(200_000).nullish();
 
 /** The editor's merge-field chips (<span data-merge="contact.first_name" data-fallback="there">) → {{key|fallback}}. */
-export function chipsToTokens(html: string) {
+function chipsToTokens(html: string) {
   return html.replace(/<span\b[^>]*\bdata-merge="([a-z_.]+)"[^>]*>[\s\S]*?<\/span>/gi, (chip, key: string) => {
     const fallback = chip.match(/\bdata-fallback="([^"]*)"/i)?.[1];
     return fallback ? `{{${key}|${fallback}}}` : `{{${key}}}`;

@@ -6,7 +6,7 @@ import {getSettings} from '../lib/settings';
 import {htmlToText, mergeFields, textToHtml, type MergeContext} from './render';
 
 /** Settings → Email → Email design, stored in its own Setting row. */
-export const EMAIL_DESIGN_KEY = 'email.design';
+const EMAIL_DESIGN_KEY = 'email.design';
 
 export async function getEmailDesign(db: Db): Promise<EmailDesign> {
   const row = await db.setting.findUnique({where: {key: EMAIL_DESIGN_KEY}});

@@ -58,12 +58,12 @@ export type InConfig = {
   rateLimit: number;
 };
 
-export const RATE_LIMIT_DEFAULT = 120;
+const RATE_LIMIT_DEFAULT = 120;
 export const MAX_BODY_BYTES = 256 * 1024;
 export const LISTEN_MINUTES = 10;
 export const REQUEST_KEEP_DAYS = 30;
 
-export const defaultInConfig = (): InConfig => ({
+const defaultInConfig = (): InConfig => ({
   mapping: [],
   fixed: [],
   tags: [],

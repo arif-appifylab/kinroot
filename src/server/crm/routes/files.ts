@@ -147,7 +147,8 @@ export const files = new Hono<AppEnv>()
       select: {id: true},
     });
     if (!file) throw notFound('File');
-    await purgeFiles(c.var.db, {id: file.id});
+    // The row goes only with its stored bytes; storage not answering leaves both for another try.
+    if (!(await purgeFiles(c.var.db, {id: file.id}))) throw new HTTPException(503, {message: 'Storage did not answer. Try again.'});
     await c.var.db.activity.deleteMany({where: {type: 'file', refId: file.id}});
     return c.json({ok: true});
   });

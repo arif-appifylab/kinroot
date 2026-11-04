@@ -3,6 +3,7 @@ import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 import '../../src/server/background'; // the job handlers: the import and export batches run as jobs
 import {fakeStorage, owner, resetCrm, storedFiles, teammate} from './support/crm';
 import {type Browser, configureEnv, DATABASE_URL, db, ORIGIN} from './support/harness';
+import {settle} from './support/wait';
 
 /**
  * Kinroot's CSV import and export on the platform's storage and jobs: the browser uploads the file,
@@ -11,15 +12,6 @@ import {type Browser, configureEnv, DATABASE_URL, db, ORIGIN} from './support/ha
  */
 
 type Imp = {id: string; status: string; mapping: (string | null)[]; created: number; total: number};
-
-async function settle<T extends {status: string}>(read: () => Promise<T>, done: string[]) {
-  for (let i = 0; i < 40; i++) {
-    const v = await read();
-    if (done.includes(v.status)) return v;
-    await new Promise(r => setTimeout(r, 50));
-  }
-  return read();
-}
 
 async function upload(browser: Browser, name: string, csv: string) {
   const bytes = new TextEncoder().encode(csv);

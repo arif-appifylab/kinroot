@@ -241,7 +241,7 @@ export function FormSettingsPanel({fields, settings: s, onChange, slug, onSlug, 
         </div>
       </SettingsSection>
 
-      <SpamSection enabled={!!s.spamCheck} onChange={(spamCheck) => set({spamCheck})} />
+      <SpamSection />
     </div>
   );
 }
@@ -287,7 +287,7 @@ function EndingsSection({fields, endings, onChange}: {fields: FormField[]; endin
   );
 }
 
-function SpamSection(_props: {enabled: boolean; onChange: (v: boolean) => void}) {
+function SpamSection() {
   return (
     <SettingsSection title="Spam protection" description="Every form has an invisible honeypot, a speed check and a limit on responses per connection.">
       <div className="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">

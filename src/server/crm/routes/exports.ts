@@ -9,7 +9,7 @@ import {currentUser, isAdmin, requireRole, type AppEnv} from '../kit/guards';
 import {countExport, exportDownloadPath, startExport} from '../lib/exports';
 import {notFound, valid} from '../lib/http';
 
-export const exportJson = (exp: Export): ExportRun => ({
+const exportJson = (exp: Export): ExportRun => ({
   ...JSON.parse(JSON.stringify(exp)),
   downloadUrl: exp.status === 'done' && exp.fileId ? exportDownloadPath(exp.fileId) : null,
 });

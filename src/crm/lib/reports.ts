@@ -46,7 +46,7 @@ export const rangeSchema = z.object({
   to: z.string().max(40).optional(),
 });
 
-export const conditionSchema = z.object({
+const conditionSchema = z.object({
   field: key,
   op: z.enum(['is', 'is_not', 'contains', 'gt', 'gte', 'lt', 'lte', 'before', 'after', 'empty', 'not_empty', 'is_true', 'is_false']),
   value: z.union([z.string().max(500), z.number(), z.array(z.string().max(200)).max(100)]).optional(),

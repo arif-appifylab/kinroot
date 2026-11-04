@@ -2,6 +2,7 @@ import {HTTPException} from 'hono/http-exception';
 
 import {sign} from '../kit/crypto';
 import type {Db} from '../kit/db';
+import {deleteInChunks} from './chunked-delete';
 
 /**
  * DB-based rate limiting (no KV / Durable Objects on this stack): one
@@ -52,6 +53,7 @@ export async function connectionLimits(h: (n: string) => string | undefined, sco
   ];
 }
 
-export async function pruneRateHits(db: Db) {
-  await db.rateHit.deleteMany({where: {at: {lt: new Date(Date.now() - 86_400_000)}}});
+export async function pruneRateHits(db: Db, until = Date.now() + 10_000) {
+  const cut = new Date(Date.now() - 86_400_000);
+  return deleteInChunks(until, (n) => db.$executeRaw`DELETE FROM "RateHit" WHERE id IN (SELECT id FROM "RateHit" WHERE "at" < ${cut} LIMIT ${n})`);
 }

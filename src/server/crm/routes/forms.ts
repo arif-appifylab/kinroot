@@ -52,7 +52,6 @@ const settings = z.object({
   closedMessage: z.string().max(1000).optional(),
   responseLimit: z.number().int().min(1).nullish(),
   onePerContact: z.boolean().optional(),
-  spamCheck: z.boolean().optional(),
   endings: z.array(z.object({id: z.string().max(80), title: z.string().max(200), message: z.string().max(4000), redirectUrl: httpUrl.transform((v) => v ?? undefined), when: group.optional()})).min(1).max(10), // redirectUrl: http(s) only, never `javascript:`
   contactSource: z.string().max(100).optional(),
   lifecycleStage: z.enum(['LEAD', 'QUALIFIED', 'OPPORTUNITY', 'CUSTOMER', 'CHURNED', 'OTHER']).nullish(),

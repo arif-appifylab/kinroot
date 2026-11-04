@@ -4,7 +4,7 @@ import Papa from 'papaparse';
 export const CSV_BOM = '﻿';
 
 /** One CSV cell. Text starting with = + - @ would run as a formula in Excel / Sheets, so it gets a leading apostrophe. */
-export function csvCell(v: unknown) {
+function csvCell(v: unknown) {
   let s = v === null || v === undefined ? '' : v instanceof Date ? v.toISOString() : Array.isArray(v) ? v.join(', ') : String(v);
   if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;

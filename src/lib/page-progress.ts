@@ -1,6 +1,6 @@
 /**
  * BROWSER: the thin bar at the top of the page while the next page loads, in the site's own
- * `--accent` colour. The public pages install it in `Base.astro`, the dashboard in `src/portal/PortalApp.tsx`. Nothing to add per page, and never add another one.
+ * brand colour. The public pages install it in `src/layouts/CrmPublic.astro`, Kinroot in `src/crm/CrmApp.tsx`. Nothing to add per page, and never add another one.
  *
  * It only shows after 150 ms, so a fast page never flashes it. It creeps towards 90% (a page has no
  * real percentage to report), then finishes when the new page is in. It lives on `<html>`, so a

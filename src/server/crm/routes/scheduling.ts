@@ -187,10 +187,12 @@ export const scheduling = new Hono<AppEnv>()
     ]);
     const origin = publicOrigin(c.req.raw);
     const calendarIds = new Set(events.map((e) => e.interactionId));
+    const bookingOf = new Map(bookings.map((b) => [b.interactionId, b]));
     return c.json({
+      // No query per row: only the manage link is signed per booking (in memory).
       rows: await Promise.all(
         rows.map(async (r) => {
-          const b = bookings.find((x) => x.interactionId === r.id);
+          const b = bookingOf.get(r.id);
           return {
             ...r,
             onCalendar: calendarIds.has(r.id),

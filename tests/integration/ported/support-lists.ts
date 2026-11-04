@@ -56,15 +56,8 @@ export async function meOf(c: Crm): Promise<Me> {
   return must<{user: Me}>(await c.get('/auth/state'), 'state').user;
 }
 
-/** Polls `read` until its status is one of `done` (background work runs in-process, but some finishes after the answer). */
-export async function settle<T extends {status: string}>(read: () => Promise<T>, done: string[], tries = 60) {
-  for (let i = 0; i < tries; i++) {
-    const v = await read();
-    if (done.includes(v.status)) return v;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  return read();
-}
+/** Polls `read` until its status is one of `done` (background work runs in-process, but some finishes after the answer): up to 10 s. */
+export {settle} from '../support/wait';
 
 /** Runs scheduled work (what the old `/jobs/run` cron did) with the Site Database of a request scope. */
 export async function tick<T>(work: (db: Db) => Promise<T>): Promise<T> {

@@ -48,7 +48,7 @@ const DETAIL_ROWS = 50;
 const COUNT_CAP = 1000;
 
 /** Properties a company merge lets you choose between. */
-export const COMPANY_MERGE_FIELDS = ['name', 'domain', 'industry', 'type', 'size', 'employees', 'annualRevenue', 'website', 'phone', 'address', 'city', 'state', 'postalCode', 'country', 'timezone', 'linkedin', 'description', 'ownerId'] as const;
+const COMPANY_MERGE_FIELDS = ['name', 'domain', 'industry', 'type', 'size', 'employees', 'annualRevenue', 'website', 'phone', 'address', 'city', 'state', 'postalCode', 'country', 'timezone', 'linkedin', 'description', 'ownerId'] as const;
 
 export function companyWhere(q: Record<string, string | undefined>): Prisma.CompanyWhereInput {
   const where: Prisma.CompanyWhereInput = {};

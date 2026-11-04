@@ -12,12 +12,12 @@ import {connectionLimits, rateLimit} from '../lib/rate-limit';
 import {bookingFromToken, cancelBooking, createBooking, manageToken, publicBooking, rescheduleBooking, type PublicBooking} from '../scheduling/bookings';
 import {linkByPath, linkSlots, toPublicLink} from '../scheduling/links';
 
-export async function publicLinkByPath(db: Db, path: string): Promise<PublicBookingLink | null> {
+async function publicLinkByPath(db: Db, path: string): Promise<PublicBookingLink | null> {
   const link = await linkByPath(db, path);
   return link ? toPublicLink(db, link) : null;
 }
 
-export async function publicBookingByToken(db: Db, token: string, origin: string): Promise<PublicBooking | null> {
+async function publicBookingByToken(db: Db, token: string, origin: string): Promise<PublicBooking | null> {
   const b = await bookingFromToken(db, token);
   return b ? publicBooking(db, b, origin) : null;
 }

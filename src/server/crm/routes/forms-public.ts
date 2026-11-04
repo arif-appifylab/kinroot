@@ -17,7 +17,7 @@ const ACCEPT = {
   documents: /^(application\/(pdf|msword|vnd\.openxmlformats-officedocument\.[a-z.]+|vnd\.ms-[a-z.]+|vnd\.oasis\.opendocument\.[a-z.]+|rtf)|text\/(plain|csv))$/,
 };
 
-export async function publicFormBySlug(db: Db, slug: string): Promise<PublicForm | null> {
+async function publicFormBySlug(db: Db, slug: string): Promise<PublicForm | null> {
   const form = await db.form.findUnique({where: {slug}});
   if (!form) return null;
   const settings = formSettings(form);

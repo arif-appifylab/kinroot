@@ -136,7 +136,7 @@ function extraValues(m: MergeInput): Record<string, string | null | undefined> {
   };
 }
 
-export const mergeContext = (m: MergeInput): MergeContext => ({
+const mergeContext = (m: MergeInput): MergeContext => ({
   contact: m.records.contact,
   company: m.records.company,
   deal: m.records.deal,

@@ -44,7 +44,7 @@ export type DataInErrorCode = keyof typeof DATA_IN_ERRORS;
 export type DataInErrorBody = {error: {code: DataInErrorCode; message: string; field?: string}};
 
 /** Every action can answer these. */
-export const COMMON_ERRORS: DataInErrorCode[] = [
+const COMMON_ERRORS: DataInErrorCode[] = [
   'E_UNAUTHORIZED',
   'E_KEY_OWNER_INACTIVE',
   'E_SIGNATURE_MISSING',

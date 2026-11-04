@@ -10,6 +10,7 @@ import {env} from '../support/cloudflare-workers';
 import {resetCrm, teammate} from '../support/crm';
 import {Browser, configureEnv, DATABASE_URL, db} from '../support/harness';
 import {crm, meOf, must, stubFetch, tick, workspace, type Crm, type Me} from './support-lists';
+import {eventually} from '../support/wait';
 
 type Stats = {sent: number; failed: number; skipped: number; pending: number; canceled: number; opened: number; clicked: number; unsubscribed: number};
 type Bc = {id: string; status: string; total: number; scheduledAt: string; waitingUntil: string | null; error: string | null; stats: Stats; excluded: {optedOut: number; noEmail: number; duplicates: number}};
@@ -59,12 +60,7 @@ async function contact(firstName: string, email: string | null, {optOut = false,
 const detail = async (id: string, c: Crm = own) => must<{broadcast: Bc; problems: {status: string; error: string | null}[]}>(await c.get(`/broadcasts/${id}`), 'detail');
 /** Background work runs in-process; this only waits for what is still finishing. */
 async function waitFor(id: string, status: string, c: Crm = own) {
-  for (let i = 0; i < 40; i++) {
-    const b = (await detail(id, c)).broadcast;
-    if (b.status === status) return b;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  return (await detail(id, c)).broadcast;
+  return eventually(async () => (await detail(id, c)).broadcast, (b) => b.status === status);
 }
 /** The broadcast jobs waiting in the backlog for later (the old runner's PENDING Job rows). */
 const waiting = (list: string, id: string) => db.jobBacklog.findMany({where: {list, data: {path: ['broadcastId'], equals: id}}});

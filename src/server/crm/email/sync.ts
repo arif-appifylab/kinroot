@@ -140,7 +140,7 @@ async function syncOutlook(db: Db, account: EmailAccount, creds: OAuthCreds, dea
   return {stored, newest, more};
 }
 
-export async function syncAccount(db: Db, account: EmailAccount, {deadline = Date.now() + JOB_BUDGET_MS}: {deadline?: number} = {}) {
+async function syncAccount(db: Db, account: EmailAccount, {deadline = Date.now() + JOB_BUDGET_MS}: {deadline?: number} = {}) {
   // SMTP and API accounts only send; their replies arrive through the inbound webhook (Reply-To).
   if (account.provider !== 'GMAIL' && account.provider !== 'OUTLOOK') return {stored: 0, skipped: true};
   try {

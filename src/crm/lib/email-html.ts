@@ -34,7 +34,7 @@ function parseAttrs(src: string) {
 }
 
 /** http(s), mailto:, tel: and merge fields such as {{unsubscribe_url}}; anything else is dropped. */
-export function safeUrl(url: string | undefined, {images = false} = {}) {
+function safeUrl(url: string | undefined, {images = false} = {}) {
   const u = (url ?? '').trim();
   if (/^\{\{\s*[a-z_.]+\s*\}\}$/i.test(u)) return u;
   if (/^https?:\/\//i.test(u)) return u;

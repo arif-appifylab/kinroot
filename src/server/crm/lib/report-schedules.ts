@@ -19,7 +19,8 @@ import {audit} from './audit';
 import {isOwnerAddress} from './owner-account';
 import {emit} from './events';
 import {userScope} from './http';
-import {deleteInChunks, enqueue} from './jobs';
+import {deleteInChunks} from './chunked-delete';
+import {enqueue} from './jobs';
 import {notify} from './notify';
 import {reportEmailContent, rangeText, type EmailSection} from './report-email';
 import {runReport} from './reports';
@@ -47,7 +48,7 @@ const daysInMonth = (date: string) => new Date(Date.UTC(Number(date.slice(0, 4))
 const zoneOf = (t: Timing) => (isTimeZone(t.timezone) ? t.timezone : 'UTC');
 
 /** The send instant on a wall date (YYYY-MM-DD in the schedule's zone), or null when it doesn't send that day. */
-export function slotOn(t: Timing, date: string): number | null {
+function slotOn(t: Timing, date: string): number | null {
   if (t.frequency === 'weekly' && weekdayOf(date) !== (t.weekday ?? 1)) return null;
   if (t.frequency === 'monthly') {
     const last = daysInMonth(date);
@@ -69,7 +70,7 @@ export function nextSlot(t: Timing, after: number): number {
 }
 
 /** Latest slot at or before `upto` (null if none in the last 400 days). */
-export function latestSlot(t: Timing, upto: number): number | null {
+function latestSlot(t: Timing, upto: number): number | null {
   let date = addDays(localDate(upto, zoneOf(t)), 1);
   for (let i = 0; i < 400; i++, date = addDays(date, -1)) {
     const at = slotOn(t, date);
@@ -92,7 +93,7 @@ export function upcomingSlots(t: Timing, after: number, count = 3) {
  * a daily yesterday, a monthly on the 1st last month), as a custom range in
  * the schedule's zone. Its own previous period is the stretch before that.
  */
-export function previousPeriod(t: Timing, slot: number): DateRange & {fromAt: number; toAt: number} {
+function previousPeriod(t: Timing, slot: number): DateRange & {fromAt: number; toAt: number} {
   const tz = zoneOf(t);
   const before = latestSlot(t, slot - 1) ?? slot - DAY;
   const from = localDate(before, tz);
@@ -104,7 +105,7 @@ export function previousPeriod(t: Timing, slot: number): DateRange & {fromAt: nu
 // ─── Unsubscribe ───
 
 /** `<base64url(scheduleId:email)>.<signature>`: one recipient leaves one schedule without signing in. */
-export async function scheduleUnsubscribeToken(scheduleId: string, email: string) {
+async function scheduleUnsubscribeToken(scheduleId: string, email: string) {
   const payload = toB64Url(new TextEncoder().encode(`${scheduleId}:${email.toLowerCase()}`));
   return `${payload}.${await sign(`report-unsub:${payload}`)}`;
 }
@@ -158,7 +159,7 @@ export class ScheduleError extends Error {}
 const visibleTo = (owner: Pick<Member, 'id'>, x: {shared: boolean; ownerId: string | null}) => x.shared || x.ownerId === owner.id;
 export const targetName = (s: Pick<ScheduleWithTarget, 'report' | 'dashboard'>) => s.report?.name ?? s.dashboard?.name ?? 'Deleted report';
 export const origin = (s: Pick<ReportSchedule, 'origin'>) => config.siteUrl() || s.origin;
-export const deepLink = (s: Pick<ReportSchedule, 'origin' | 'reportId' | 'dashboardId'>) =>
+const deepLink = (s: Pick<ReportSchedule, 'origin' | 'reportId' | 'dashboardId'>) =>
   `${origin(s)}${CRM_APP}${s.reportId ? `/reports/${s.reportId}` : `/reports/dashboards/${s.dashboardId}`}`;
 
 const fileSlug = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'report';
@@ -274,7 +275,7 @@ type Outcome = {status: 'sent' | 'failed' | 'no_mailbox'; error?: string | null;
  * Sends one claimed slot. `final`: no retry follows (last job attempt, or a
  * manual send), so a transient error is recorded instead of thrown.
  */
-export async function deliverScheduleSend(db: Db, sendId: string, opts: {final: boolean; actor?: User | null} = {final: true}): Promise<Outcome | null> {
+async function deliverScheduleSend(db: Db, sendId: string, opts: {final: boolean; actor?: User | null} = {final: true}): Promise<Outcome | null> {
   const send = await db.reportScheduleSend.findUnique({where: {id: sendId}, include: {schedule: {include: scheduleInclude}}});
   if (!send || send.status !== 'pending') return null; // done already (or another runner finished it)
   const s = send.schedule;

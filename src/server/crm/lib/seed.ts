@@ -11,7 +11,7 @@ import {strings} from './json-list';
  */
 const DEMO_MEMBER = {name: 'Demo User', color: '#0d9488'};
 
-export async function ensureDemoUser(db: Db) {
+async function ensureDemoUser(db: Db) {
   if (await db.member.findFirst({where: {name: DEMO_MEMBER.name, userId: null, inviteEmail: null}})) return;
   await db.member.create({data: {...DEMO_MEMBER, role: 'ADMIN'}});
 }

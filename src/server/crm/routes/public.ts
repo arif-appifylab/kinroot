@@ -15,7 +15,7 @@ const maskEmail = (email: string | null) => {
   return `${user!.slice(0, 1)}${'*'.repeat(Math.max(2, Math.min(6, user!.length - 1)))}@${domain}`;
 };
 
-export async function unsubscribeState(db: Db, token: string) {
+async function unsubscribeState(db: Db, token: string) {
   const id = await contactFromUnsubscribeToken(token);
   const contact = id ? await db.contact.findUnique({where: {id}, select: {id: true, email: true, emailOptOut: true}}) : null;
   return contact ? {email: maskEmail(contact.email), optedOut: contact.emailOptOut} : null;

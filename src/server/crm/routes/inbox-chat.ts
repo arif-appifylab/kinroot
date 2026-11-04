@@ -46,7 +46,6 @@ const settingsSchema = z.object({
   offlineMessage: z.string().trim().min(1, 'write the away message').max(500),
   awayAfterMin: z.number().int().min(1).max(1440),
   allowedDomains: z.array(z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$|^localhost$/, 'must be a domain like example.com')).max(50),
-  spamCheck: z.boolean(),
 });
 
 export const inboxChat = new Hono<AppEnv>()

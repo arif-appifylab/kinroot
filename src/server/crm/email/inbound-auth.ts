@@ -47,7 +47,7 @@ const fresh = (seconds: number) => Number.isFinite(seconds) && Math.abs(Date.now
 type Verified = {ok: true; body: Record<string, unknown>; delivery?: string} | {ok: false; reason: string};
 
 /** How long a signed request's id is remembered: longer than the signature's own 5-minute window. */
-export const REPLAY_WINDOW_S = 10 * 60;
+const REPLAY_WINDOW_S = 10 * 60;
 
 /**
  * True the first time `key` is seen in the last `windowSec`, false for a repeat. One `RateHit` row

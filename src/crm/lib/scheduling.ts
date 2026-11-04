@@ -89,7 +89,7 @@ function wall(ms: number, tz: string) {
 }
 
 /** Minutes the timezone is ahead of UTC at that instant (e.g. +120 for Berlin in summer). */
-export function tzOffsetMin(ms: number, tz: string) {
+function tzOffsetMin(ms: number, tz: string) {
   const w = wall(ms, tz);
   const asUtc = Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second);
   return Math.round((asUtc - Math.floor(ms / 1000) * 1000) / 60_000);

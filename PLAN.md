@@ -1,7 +1,7 @@
 # Kinroot → EzyStudio Astro app: migration plan
 
 Source: `~/Desktop/crm app` (Kinroot: TanStack Start + Hono + Prisma 7, 74 models, ~63k lines).
-Template: `site-astro-app` 0.10.10. Rule: **no CRM feature changes**, only the code moved to the
+Template: `site-astro-app` 0.10.10, upgraded to **0.10.13** (`UPGRADE-0.10.13.md`). Rule: **no CRM feature changes**, only the code moved to the
 template's stack and rules. Where a rule forces a visible change, it is listed below with the rule.
 
 ## Status
@@ -19,6 +19,8 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | done |
 | 9 | Public site pages (`/`, `/contact/`, `/demo/`), SEO, tests ported to vitest, build, `review.md` | done |
 | 10 | Kinroot's design everywhere: sign-in, account and admin on the template's backend; template pages removed | done |
+| 11 | Clean-up (job board and payments removed) and the audit (`AUDIT.md`): wave 1, then the rest | done (see AUDIT.md for the few partly done items) |
+| 12 | Template 0.10.13: security upgrade, owner from "View as admin", no list columns, bookings and public writes once, progress bar, cache review | done |
 
 ## Phase 10 plan: Kinroot's design everywhere (owner's request)
 
@@ -114,7 +116,8 @@ Webhooks card only reports status and points there.
 - Signed-in screens: Kinroot's `_app` file routes as they were; `_app.tsx` sends signed-out visitors to the
   site's `/account/login/` and signed-in non-members to `/crm/no-access`; the Owner's first visit to `/crm/setup`.
 - Profile: the name is the account's (`PATCH /site-api/auth/me`, then Kinroot's copy); password, two-step
-  sign-in and devices link to the site's `/dashboard/account`.
+  sign-in and devices link to the site's `/dashboard/account` (later: in Settings → Security, and the
+  template's dashboard is gone).
 - Brand: `GET /site-api/crm/public/brand` (Site Cache, 1 day, cleared on save) and `/public/brand.css`
   (validated `#hex` colours only); the root route loads it for `useBrand()`, the host page for the head.
 - "Last seen" in Settings → Team is refreshed on requests, at most every 10 minutes.
@@ -210,7 +213,7 @@ Webhooks card only reports status and points there.
   rendered on the server (real HTML, one `<h1>`, own title and description) and hydrated as one island
   (`src/crm/public/site-page.tsx`: menu, chat bubble, form, booking). Website off: `/` opens `/crm/` (as before);
   `/contact/` and `/demo/` show "unavailable" with a 404. A failed read is a 503. `Cache-Control: public, max-age=60`
-  (nothing in them reads the visitor). The template's marketing home is replaced; its blog, jobs and about stay.
+  (nothing in them reads the visitor). The template's marketing home is replaced; its blog, jobs and about stay (later removed, owner-approved).
 - `CrmPublic.astro` writes the SEO head for `indexable` pages (canonical, Open Graph, Twitter, the home page's
   JSON-LD through `jsonLdText`), as `Base.astro` does. The sitemap lists the website pages only when they show
   something, and leaves out `/chat/` and `/support/tickets/` (noindex).
@@ -248,16 +251,18 @@ Webhooks card only reports status and points there.
 
 - Plain `<a href>` links to `/site-api/crm/...` downloads (exports, files) carry the session by cookie: fine live, signed out in the editor Preview.
 - Email preview frame (`components/inbox/parts.tsx`) inherits the page CSP: check its styles in phase 4.
-- Lists page with OFFSET and show totals from `count(*)` (contacts, companies, duplicates, audit, forms, automation
-  runs), as the original did; the rules want keyset paging and "25+". Owner to decide (visible change).
-- Template clean-up left: the `jobs` table and `site:job:manage` (still in the Admin role, shown as "Manage jobs"),
-  the Admin role's seeded description mentioning jobs, `orders` / `memberships` tables and the checkout API (its
-  pages are gone), `public/favicon.svg`. Needs a small data migration and template test updates.
+- ~~Lists page with OFFSET and totals~~ Decided (4 Nov): the owner keeps page numbers (AUDIT P3-24 dropped).
+- ~~Template clean-up~~ Done: job board and payments removed (migrations `remove_job_board`, `remove_template_payments`).
 - After sign-in the platform's default destination is `/dashboard` (one redirect to `/crm/`).
-- Brand logo is still a data URL in the settings row (file bytes in the database): move to a public storage file.
+- ~~Brand logo as a data URL~~ Done: uploaded logos go to public storage (older data URLs keep working until re-uploaded).
 - The sonner toast library logs one CSP message per page load (its CSS loads from our stylesheet; harmless).
 - Report filter picker lists every company name to members limited to their own records (as before; contacts are not listed).
 - Automation merge field `{{owner.email}}` puts the record owner's address in emails to contacts, as before.
+- To check in the Preview (can't be checked on this machine: no Site Key): emails to the site owner (the platform's
+  `notification` kind, sent as `{kind, subject, text}`; the docs don't list its fields), and the owner's screens
+  (Settings → Security / Profile "You're the site owner", Accounts "Comes from the dashboard").
+- Deals search under owner-only visibility can still match on a hidden company's name (the name is never shown).
+- Partly done audit rows are listed in `AUDIT.md` (status line at the top).
 
 ## Visible changes the rules force (approved by the owner)
 

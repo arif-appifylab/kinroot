@@ -82,9 +82,18 @@ export async function notifyWatchers(
  * Longest names first, so "@Sam Lee" doesn't also match "@Sam".
  */
 export async function mentionedUsers(db: Db, text: string) {
-  if (!text.includes('@')) return [];
+  return (await mentionedUsersIn(db, [text]))[0]!;
+}
+
+/** mentionedUsers() of several texts with ONE read of the team (an edit compares the old and new words). */
+export async function mentionedUsersIn(db: Db, texts: string[]): Promise<string[][]> {
+  if (!texts.some((t) => t.includes('@'))) return texts.map(() => []);
+  const users = await db.member.findMany({where: {active: true}, select: {id: true, name: true}, take: 1000});
+  return texts.map((t) => (t.includes('@') ? matchMentions(users, t) : []));
+}
+
+function matchMentions(users: {id: string; name: string}[], text: string) {
   let rest = text.toLowerCase();
-  const users = await db.member.findMany({where: {active: true}, select: {id: true, name: true}});
   const ids: string[] = [];
   for (const u of users.filter((u) => u.name).sort((a, b) => b.name.length - a.name.length)) {
     const re = new RegExp(`@${u.name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'gu');

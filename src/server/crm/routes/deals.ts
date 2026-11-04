@@ -33,7 +33,7 @@ export const dealBody = z.object({
   contactIds: z.array(z.string()).max(50).optional(),
 });
 
-export const dealInclude = {
+const dealInclude = {
   stage: true,
   pipeline: {select: {id: true, name: true, rottingDays: true}},
   owner: {select: userSelect},
@@ -45,16 +45,27 @@ export const dealInclude = {
 
 /**
  * `dealInclude` limited to the linked contacts and companies the viewer may see: with owner-only
- * visibility a deal can be linked to another owner's records, which must not show here.
+ * visibility a deal can be linked to another owner's records, which must not show here. The
+ * to-many links are filtered in the query; the to-one primary `company` can't take a `where`, so it
+ * carries its `ownerId` and every answer goes through `scopedDeal()`, which hides it (null) when it
+ * isn't the viewer's.
  */
-export function dealIncludeFor(scope: {ownerId?: string}) {
+function dealIncludeFor(scope: {ownerId?: string}) {
   if (!scope.ownerId) return dealInclude;
   const ownerId = scope.ownerId;
   return {
     ...dealInclude,
+    company: {select: {...dealInclude.company.select, ownerId: true}},
     companies: {...dealInclude.companies, where: {company: {ownerId}}},
     contacts: {...dealInclude.contacts, where: {contact: {ownerId}}},
   } satisfies Prisma.DealInclude;
+}
+
+/** A deal read with `dealIncludeFor(scope)`, its primary company null when the viewer may not see it (and its owner id dropped). */
+export function scopedDeal<T extends {company: {id: string} | null}>(deal: T, scope: {ownerId?: string}): T {
+  if (!deal.company || !('ownerId' in deal.company)) return deal;
+  const {ownerId, ...company} = deal.company as T['company'] & {ownerId?: string | null};
+  return {...deal, company: !scope.ownerId || ownerId === scope.ownerId ? company : null} as T;
 }
 
 /** Next open task per deal, for the "no next step" warning on board cards: one row per deal, in SQL. */
@@ -106,7 +117,7 @@ export async function defaultPipeline(db: Db, pipelineId?: string) {
   return pipeline;
 }
 
-export const dealListQuery = z.object({
+const dealListQuery = z.object({
   pipelineId: z.string().optional(),
   status: z.enum(['OPEN', 'WON', 'LOST', 'CLOSED', 'ALL']).default('OPEN'),
   closeDate: z.enum(['overdue', 'this_month', 'next_month', 'this_quarter', 'none']).optional(),
@@ -153,13 +164,14 @@ export const deals = new Hono<AppEnv>()
   .get('/', valid('query', dealListQuery), async (c) => {
     const db = c.var.db;
     const q = c.req.valid('query');
-    const base: Prisma.DealWhereInput = {...dealWhere(q), ...(await ownerScope(c))};
+    const scope = await ownerScope(c);
+    const base: Prisma.DealWhereInput = {...dealWhere(q), ...scope};
     const where: Prisma.DealWhereInput = q.rotting === '1' ? {AND: [base, await rottingWhere(db, q.pipelineId)]} : base;
     // The id last makes the order total, so a page never skips or repeats a deal.
     const order = q.sort ? sortBy(q.sort, q.dir, ['title', 'value', 'expectedCloseDate', 'createdAt', 'lastActivityAt'], 'createdAt') : null;
     const orderBy: Prisma.DealOrderByWithRelationInput[] = order ? [order, {id: 'asc'}] : [{position: 'asc'}, {createdAt: 'desc'}, {id: 'asc'}];
     const [rows, byStage] = await Promise.all([
-      db.deal.findMany({where, include: dealIncludeFor(await ownerScope(c)), orderBy, skip: (q.page - 1) * q.take, take: q.take}),
+      db.deal.findMany({where, include: dealIncludeFor(scope), orderBy, skip: (q.page - 1) * q.take, take: q.take}),
       // Totals for the whole filter (header and page count): one grouped query.
       db.deal.groupBy({by: ['stageId'], where, _count: {_all: true}, _sum: {value: true}}),
     ]);
@@ -169,7 +181,7 @@ export const deals = new Hono<AppEnv>()
       (t, s) => ({count: t.count + s._count._all, value: t.value + (s._sum.value ?? 0), weighted: t.weighted + ((s._sum.value ?? 0) * (probability.get(s.stageId) ?? 0)) / 100}),
       {count: 0, value: 0, weighted: 0},
     );
-    return c.json({rows: await withNextTask(db, rows), total: summary.count, page: q.page, pageSize: q.take, summary});
+    return c.json({rows: await withNextTask(db, rows.map((d) => scopedDeal(d, scope))), total: summary.count, page: q.page, pageSize: q.take, summary});
   })
 
   .post('/', valid('json', dealBody), async (c) => {
@@ -177,11 +189,12 @@ export const deals = new Hono<AppEnv>()
     const db = c.var.db;
     const {contactIds, companyIds, custom: customInput, ...body} = c.req.valid('json');
     // Only records the user may see can be linked (owner-only visibility).
-    await assertVisible(c, {contactIds, companyIds, companyId: body.companyId});
+    const scope = await ownerScope(c);
+    await assertVisible(c, {contactIds, companyIds, companyId: body.companyId}, scope);
     const pipeline = await defaultPipeline(db, body.pipelineId);
     const stageId = body.stageId && pipeline.stages.some((s) => s.id === body.stageId) ? body.stageId : pipeline.stages[0]!.id;
     const first = await db.deal.findFirst({where: {stageId, status: 'OPEN'}, orderBy: {position: 'asc'}, select: {position: true}});
-    const deal = await db.deal.create({
+    const deal = scopedDeal(await db.deal.create({
       data: {
         ...body,
         pipelineId: pipeline.id,
@@ -192,8 +205,8 @@ export const deals = new Hono<AppEnv>()
         companyId: body.companyId ?? companyIds?.[0] ?? null,
         contacts: contactIds?.length ? {create: contactIds.map((contactId) => ({contactId}))} : undefined,
       },
-      include: dealIncludeFor(await ownerScope(c)),
-    });
+      include: dealIncludeFor(scope),
+    }), scope);
     const allCompanies = [...(deal.companyId ? [deal.companyId] : []), ...(companyIds ?? [])];
     if (allCompanies.length) await setDealCompanies(db, deal.id, allCompanies, deal.companyId);
     await db.stageChange.create({data: {dealId: deal.id, toStageId: stageId, userId: me.id}});
@@ -212,22 +225,24 @@ export const deals = new Hono<AppEnv>()
   })
 
   .get('/:id', async (c) => {
+    const scope = await ownerScope(c);
     const deal = await c.var.db.deal.findFirst({
-      where: {id: c.req.param('id'), ...(await ownerScope(c))},
+      where: {id: c.req.param('id'), ...scope},
       include: {
-        ...dealIncludeFor(await ownerScope(c)),
+        ...dealIncludeFor(scope),
         pipeline: {include: {stages: {orderBy: {position: 'asc'}}}},
         stageChanges: {orderBy: {createdAt: 'asc'}, include: {toStage: true, user: {select: userSelect}}},
       },
     });
     if (!deal) throw notFound('Deal');
-    return c.json({deal});
+    return c.json({deal: scopedDeal(deal, scope)});
   })
 
   .patch('/:id', valid('json', dealBody.partial()), async (c) => {
     const me = currentUser(c);
     const db = c.var.db;
-    const before = await db.deal.findFirst({where: {id: c.req.param('id'), ...(await ownerScope(c))}, include: {stage: true}});
+    const scope = await ownerScope(c);
+    const before = await db.deal.findFirst({where: {id: c.req.param('id'), ...scope}, include: {stage: true}});
     if (!before) throw notFound('Deal');
     const {contactIds, companyIds, custom: customInput, stageId, pipelineId, ...body} = c.req.valid('json');
     // Newly linked contacts / companies must be ones the user may see; links already on the deal stay.
@@ -266,7 +281,7 @@ export const deals = new Hono<AppEnv>()
       const rest = links.map((l) => l.companyId).filter((id) => id !== before.companyId);
       await setDealCompanies(db, before.id, body.companyId ? [body.companyId, ...rest] : rest, body.companyId);
     }
-    const deal = await db.deal.findUniqueOrThrow({where: {id: before.id}, include: dealIncludeFor(await ownerScope(c))});
+    const deal = scopedDeal(await db.deal.findUniqueOrThrow({where: {id: before.id}, include: dealIncludeFor(scope)}), scope);
 
     if (data.stageId && data.stageId !== before.stageId) await stageMoved(db, me, deal, before.stage, deal.stage);
     // Custom field edits count as changes too ("field changed" automations, timeline, audit).
@@ -288,7 +303,8 @@ export const deals = new Hono<AppEnv>()
     const me = currentUser(c);
     const db = c.var.db;
     const {stageId, beforeId, afterId} = c.req.valid('json');
-    const deal = await db.deal.findFirst({where: {id: c.req.param('id'), ...(await ownerScope(c))}, include: {stage: true}});
+    const scope = await ownerScope(c);
+    const deal = await db.deal.findFirst({where: {id: c.req.param('id'), ...scope}, include: {stage: true}});
     if (!deal) throw notFound('Deal');
     const stage = await db.stage.findUnique({where: {id: stageId}});
     if (!stage || stage.pipelineId !== deal.pipelineId) throw new HTTPException(400, {message: 'Stage is not in this pipeline'});
@@ -301,11 +317,11 @@ export const deals = new Hono<AppEnv>()
       prev && next ? (prev.position + next.position) / 2 : prev ? prev.position + 1 : next ? next.position - 1 : 0;
 
     const moved = stageId !== deal.stageId;
-    const updated = await db.deal.update({
+    const updated = scopedDeal(await db.deal.update({
       where: {id: deal.id},
       data: {stageId, position, ...(moved ? {stageEnteredAt: new Date(), lastActivityAt: new Date()} : {})},
-      include: dealIncludeFor(await ownerScope(c)),
-    });
+      include: dealIncludeFor(scope),
+    }), scope);
     if (moved) await stageMoved(db, me, updated, deal.stage, stage);
     if (moved) await audit(db, c, {action: 'deal.stage_changed', entity: 'deal', recordId: deal.id, label: deal.title, meta: {from: deal.stage.name, to: stage.name}});
     return c.json({deal: updated});
@@ -315,15 +331,16 @@ export const deals = new Hono<AppEnv>()
     const me = currentUser(c);
     const db = c.var.db;
     const {status, lostReason} = c.req.valid('json');
-    const before = await db.deal.findFirst({where: {id: c.req.param('id'), ...(await ownerScope(c))}});
+    const scope = await ownerScope(c);
+    const before = await db.deal.findFirst({where: {id: c.req.param('id'), ...scope}});
     if (!before) throw notFound('Deal');
     if (status === 'LOST' && !lostReason) throw new HTTPException(400, {message: 'Pick a reason for losing this deal'});
     if (status === 'LOST') await rememberOption(db, 'lostReasons', lostReason);
-    const deal = await db.deal.update({
+    const deal = scopedDeal(await db.deal.update({
       where: {id: before.id},
       data: {status, lostReason: status === 'LOST' ? lostReason : null, closedAt: status === 'OPEN' ? null : new Date()},
-      include: dealIncludeFor(await ownerScope(c)),
-    });
+      include: dealIncludeFor(scope),
+    }), scope);
     await audit(db, c, {action: 'deal.status_changed', entity: 'deal', recordId: deal.id, label: deal.title, meta: {from: before.status, to: status, lostReason: status === 'LOST' ? lostReason : undefined}});
     const title = status === 'WON' ? `Deal won 🎉 ${deal.title}` : status === 'LOST' ? `Deal lost: ${lostReason}` : 'Deal reopened';
     await logActivity(db, {type: status === 'WON' ? 'deal_won' : status === 'LOST' ? 'deal_lost' : 'deal_reopened', title, actorId: me.id, dealId: deal.id, companyId: deal.companyId, data: {value: deal.value}});

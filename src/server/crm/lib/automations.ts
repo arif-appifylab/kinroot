@@ -57,7 +57,8 @@ import {evaluateConditions, fieldsFor, labelOf, loadRecords, ownerIdOf, primaryO
 import {executeStep, isPermanent, StepError, type StepCtx, type StepResult} from './automation-steps';
 import {emit} from './events';
 import {userScope} from './http';
-import {deleteInChunks, enqueue} from './jobs';
+import {deleteInChunks} from './chunked-delete';
+import {enqueue} from './jobs';
 import {notify} from './notify';
 import {listContactWhere} from './segments';
 
@@ -66,7 +67,7 @@ const HOUR = 3_600_000;
 
 export type Origin = {automationId: string; runId: string; chainId: string; depth: number};
 
-export const triggerOf = (a: Pick<Automation, 'trigger'>) => a.trigger as unknown as Trigger;
+const triggerOf = (a: Pick<Automation, 'trigger'>) => a.trigger as unknown as Trigger;
 export const stepsOf = (a: Pick<Automation, 'steps'>) => (Array.isArray(a.steps) ? (a.steps as unknown as Step[]) : []);
 const objectOf = (a: Pick<Automation, 'object'>) => a.object as AutoObject;
 const tzOf = (a: Pick<Automation, 'timezone'>) => (isTimeZone(a.timezone) ? a.timezone : 'UTC');
@@ -343,7 +344,7 @@ const TABLES: Record<Target, string> = {contact: '"Contact"', company: '"Company
 const OWNER_COLUMN: Record<Target, string> = {contact: '"ownerId"', company: '"ownerId"', deal: '"ownerId"', ticket: '"assigneeId"'};
 
 /** When a date trigger fires for a date value (ms of a timestamp, or a YYYY-MM-DD calendar date). */
-export function triggerMoment(t: Extract<Trigger, {kind: 'date'}>, value: Date | string, dateOnly: boolean, tz: string) {
+function triggerMoment(t: Extract<Trigger, {kind: 'date'}>, value: Date | string, dateOnly: boolean, tz: string) {
   const sign = t.direction === 'before' ? -1 : 1;
   const dayUnits = t.unit === 'days' || t.unit === 'weeks';
   const ms = typeof value === 'string' ? new Date(value.length === 10 ? `${value}T00:00:00Z` : value).getTime() : value.getTime();
@@ -606,7 +607,7 @@ async function finish(db: Db, run: AutomationRun, status: 'done' | 'failed' | 'c
  */
 const LEASE_MS = 70_000;
 const RENEW_AFTER_MS = 20_000;
-export const LEASE_PREFIX = 'lock:run:';
+const LEASE_PREFIX = 'lock:run:';
 
 async function takeLease(db: Db, runId: string) {
   const now = new Date();

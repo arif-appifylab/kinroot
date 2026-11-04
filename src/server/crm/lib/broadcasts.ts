@@ -17,6 +17,7 @@ import {HTTPException} from 'hono/http-exception';
 import {Prisma, type Broadcast, type ContactList} from '../../../generated/prisma/client';
 import type {Db} from '../kit/db';
 import {sendEmail} from '../email/service';
+import {optedOutEmails} from './contact-email';
 import {emit} from './events';
 import {userScope} from './http';
 import {enqueue} from './jobs';
@@ -81,12 +82,7 @@ export async function resolveAudience(db: Db, list: Pick<ContactList, 'id' | 'ki
     cursor = rows[rows.length - 1]!.id;
   }
   // An address is out when any contact with it opted out (also outside the list).
-  const blocked = new Set<string>();
-  const emails = [...candidates.keys()];
-  for (let i = 0; i < emails.length; i += PAGE) {
-    const rows = await db.contact.findMany({where: {email: {in: emails.slice(i, i + PAGE), mode: 'insensitive'}, emailOptOut: true}, select: {email: true}});
-    for (const r of rows) blocked.add(r.email!.toLowerCase());
-  }
+  const blocked = await optedOutEmails(db, [...candidates.keys()]);
   for (const [email, contactId] of candidates) {
     if (blocked.has(email)) out.optedOut++;
     else out.recipients.push({email, contactId});
@@ -177,11 +173,10 @@ export async function sendBroadcastBatch(db: Db, p: {broadcastId?: unknown}) {
   let failedInARow = 0;
   let lastError = '';
   // One query each for the whole batch (not one per recipient): who unsubscribed meanwhile, which contacts still exist.
-  const [optedOutRows, liveContacts] = await Promise.all([
-    batch.length ? db.contact.findMany({where: {email: {in: batch.map((r) => r.email), mode: 'insensitive'}, emailOptOut: true}, select: {email: true}}) : [],
+  const [optedOut, liveContacts] = await Promise.all([
+    optedOutEmails(db, batch.map((r) => r.email)),
     db.contact.findMany({where: {id: {in: batch.flatMap((r) => (r.contactId ? [r.contactId] : []))}}, select: {id: true}}),
   ]);
-  const optedOut = new Set(optedOutRows.flatMap((c) => (c.email ? [c.email.toLowerCase()] : [])));
   const live = new Set(liveContacts.map((c) => c.id));
   const started = Date.now();
   for (const r of batch) {

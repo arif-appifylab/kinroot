@@ -520,7 +520,9 @@ model Contact {
   channelMessages   ChannelMessage[]
   // Also in the database, written as SQL because Prisma's schema can't hold an expression index
   // (migration 20261103*_crm_indexes): "Contact_email_lower_idx" ON "Contact" (lower("email")),
-  // for case-insensitive email lookups (support portal, broadcasts, forms, chat, imports).
+  // for case-insensitive email lookups (support portal, bookings, broadcasts, forms, chat, Data in,
+  // imports, received-mail matching): query it as `lower(email) = …` / `IN (…)` (src/server/crm/lib/
+  // contact-email.ts), never `mode: 'insensitive'` (ILIKE can't use it). Emails are not stored lower-cased.
   // Prisma 7 leaves it alone in later `migrate dev` runs; still, open every new --create-only
   // migration and delete a `DROP INDEX "Contact_email_lower_idx"` line if one ever appears.
 

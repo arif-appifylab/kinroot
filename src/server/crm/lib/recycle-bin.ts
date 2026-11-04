@@ -3,7 +3,7 @@ import {BIN_DAYS, type BinEntity} from '@/lib/hygiene';
 import type {Db} from '../kit/db';
 import {logActivity} from './activity';
 import {emit} from './events';
-import {purgeFiles} from '../kit/storage';
+import {purgeFileRows} from '../kit/storage';
 import {strings} from './json-list';
 
 /**
@@ -149,8 +149,10 @@ function attachComments(target: Collected, activities: Row[], comments: Row[], c
 }
 
 async function relinkIds(db: Db, target: Collected, ids: string[], links: [string, string][]) {
-  for (const [table, column] of links) {
-    const rows = await model(db, table).findMany({where: {[column]: {in: ids}}, select: {id: true, [column]: true}});
+  // The tables are read together (one round trip), then folded in in a fixed order.
+  const found = await Promise.all(links.map(([table, column]) => model(db, table).findMany({where: {[column]: {in: ids}}, select: {id: true, [column]: true}})));
+  for (const [i, [table, column]] of links.entries()) {
+    const rows = found[i]!;
     for (const r of rows) {
       const entry = target.relink.get(r[column] as string) ?? {};
       const key = `${table}.${column}`;
@@ -163,18 +165,20 @@ async function relinkIds(db: Db, target: Collected, ids: string[], links: [strin
 /** Shared shape of contacts, companies and deals: everything hangs off one link column. */
 async function collectRecord(db: Db, entity: 'contact' | 'company' | 'deal', ids: string[]): Promise<Collected> {
   const column = LINK_COLUMN[entity] as 'contactId' | 'companyId' | 'dealId';
-  const records = await model(db, entity).findMany({where: {id: {in: ids}}});
-  const out: Collected = {records, rows: new Map(), relink: new Map(), alsoDelete: [], files: await filesBy(db, column, ids)};
   const where = {[column]: {in: ids}};
-  const [notes, tasks, interactions] = await Promise.all([
+  // Independent reads together: the whole selection costs a few round trips, not a few per record.
+  const [records, files, notes, tasks, interactions, {activities, comments}] = await Promise.all([
+    model(db, entity).findMany({where: {id: {in: ids}}}),
+    filesBy(db, column, ids),
     model(db, 'note').findMany({where}),
     model(db, 'task').findMany({where}),
     model(db, 'interaction').findMany({where}),
+    activitiesBy(db, column, ids),
   ]);
+  const out: Collected = {records, rows: new Map(), relink: new Map(), alsoDelete: [], files};
   attach(out, column, 'note', notes);
   attach(out, column, 'task', tasks);
   attach(out, column, 'interaction', interactions);
-  const {activities, comments} = await activitiesBy(db, column, ids);
   attach(out, column, 'activity', activities);
   attachComments(out, activities, comments, column);
 
@@ -395,8 +399,10 @@ async function prepare(db: Db, entity: BinEntity, record: Row) {
     record.pipelineId = stage.pipelineId;
   }
   if (entity === 'form') {
-    let slug = String(record.slug);
-    for (let n = 2; await db.form.findUnique({where: {slug}, select: {id: true}}); n++) slug = `${record.slug}-${n}`;
+    // The slug, else slug-2 … slug-50: all checked in one query.
+    const candidates = [String(record.slug), ...Array.from({length: 49}, (_, i) => `${record.slug}-${i + 2}`)];
+    const taken = new Set((await db.form.findMany({where: {slug: {in: candidates}}, select: {slug: true}, take: 50})).map((f) => f.slug));
+    const slug = candidates.find((s) => !taken.has(s)) ?? `${record.slug}-${Date.now().toString(36)}`;
     if (slug !== record.slug) {
       const warning = `Its link /f/${record.slug} is used by another form now, so it moved to /f/${slug}.`;
       record.slug = slug;
@@ -511,13 +517,16 @@ async function afterRestore(db: Db, entity: BinEntity, record: Row, actor: BinAc
 // ─── Purge ───
 
 /** Deletes bin entries for good: their parked files, follows and duplicate pairs go too. */
-export async function purgeBinEntries(db: Db, entries: Pick<DeletedRecord, 'id' | 'entity' | 'recordId' | 'fileIds'>[]) {
+export async function purgeBinEntries(db: Db, all: Pick<DeletedRecord, 'id' | 'entity' | 'recordId' | 'fileIds'>[]) {
+  if (!all.length) return 0;
+  // Stored bytes first (storage is not part of the transaction), then the rows that pointed at them.
+  // An entry whose files storage could not delete stays in the bin (its file rows too), for the next run.
+  const fileIds = all.flatMap((e) => strings(e.fileIds));
+  const failed = new Set(fileIds.length ? (await purgeFileRows(db, {id: {in: fileIds}, purpose: 'trash'})).failed : []);
+  const entries = failed.size ? all.filter((e) => !strings(e.fileIds).some((id) => failed.has(id))) : all;
   if (!entries.length) return 0;
-  const fileIds = entries.flatMap((e) => strings(e.fileIds));
   const recordIds = entries.map((e) => e.recordId);
   const follows = entries.filter((e) => e.entity === 'contact' || e.entity === 'company' || e.entity === 'deal');
-  // Stored bytes first (storage is not part of the transaction), then the rows that pointed at them.
-  if (fileIds.length) await purgeFiles(db, {id: {in: fileIds}, purpose: 'trash'});
   await db.$transaction([
     db.follow.deleteMany({where: {OR: follows.map((e) => ({entity: e.entity.toUpperCase() as 'CONTACT', recordId: e.recordId}))}}),
     db.duplicatePair.deleteMany({where: {OR: [{aId: {in: recordIds}}, {bId: {in: recordIds}}]}}),
@@ -527,12 +536,20 @@ export async function purgeBinEntries(db: Db, entries: Pick<DeletedRecord, 'id' 
 }
 
 /** Job runner: empties entries older than BIN_DAYS, a batch at a time. */
-export async function purgeExpiredBin(db: Db) {
+export async function purgeExpiredBin(db: Db, until = Date.now() + 20_000) {
   let total = 0;
-  for (let i = 0; i < 10; i++) {
-    const batch = await db.deletedRecord.findMany({where: {expiresAt: {lt: new Date()}}, select: {id: true, entity: true, recordId: true, fileIds: true}, take: 200});
+  let after: string | undefined;
+  // Keyset by id: an entry kept back (its files could not be deleted) is not fetched again this run.
+  for (let i = 0; i < 10 && Date.now() < until; i++) {
+    const batch = await db.deletedRecord.findMany({
+      where: {expiresAt: {lt: new Date()}, ...(after ? {id: {gt: after}} : {})},
+      select: {id: true, entity: true, recordId: true, fileIds: true},
+      orderBy: {id: 'asc'},
+      take: 200,
+    });
     total += await purgeBinEntries(db, batch);
     if (batch.length < 200) break;
+    after = batch[batch.length - 1]!.id;
   }
   return total;
 }

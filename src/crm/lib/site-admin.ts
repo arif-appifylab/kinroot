@@ -77,10 +77,10 @@ export type SiteMe = {viewer: Viewer; roles: string[]; abilities: Abilities};
 /**
  * `GET /site-api/me`: the visitor, their site roles and what the UI may show them (one flag per
  * permission: `manageUsers` = site:user:read, `updateUsers` = site:user:update, `manageRoles` =
- * site:role:read, `editRoles` = site:role:update, `readAudit` = site:audit:read). The same call
- * the template's dashboard made; it refreshes an expired session once, as that one did.
+ * site:role:read, `editRoles` = site:role:update, `readAudit` = site:audit:read). An expired
+ * session is refreshed once.
  */
-export const siteMeQuery = queryOptions({
+const siteMeQuery = queryOptions({
   queryKey: siteKeys.me,
   queryFn: async () => {
     const me = await siteApi.get<SiteMe>('/me');
@@ -145,7 +145,7 @@ export const sitePermissionsQuery = queryOptions({
 export const OWNER_ROLE = 'owner';
 
 /** The SAME limits `src/platform/auth/admin.ts` enforces on a role. */
-export const ROLE_SLUG_RE = /^[a-z][a-z0-9-]{1,47}$/;
+const ROLE_SLUG_RE = /^[a-z][a-z0-9-]{1,47}$/;
 
 export function roleFieldErrors(values: {slug: string; name: string; description: string}, creating: boolean) {
   const errors: Partial<Record<'slug' | 'name' | 'description', string>> = {};

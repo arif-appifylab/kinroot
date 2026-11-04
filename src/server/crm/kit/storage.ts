@@ -15,7 +15,7 @@ import type {Db} from './db';
  */
 
 /** Purposes whose files anyone may load by link (email images, avatars). Everything else is private. */
-export const PUBLIC_PURPOSES = new Set(['public']);
+const PUBLIC_PURPOSES = new Set(['public']);
 
 const origin = () => site.siteUrl ?? 'http://localhost';
 
@@ -109,14 +109,36 @@ export async function readBytes(file: Pick<FileRow, 'storageId' | 'ready'>): Pro
   return new Uint8Array(await res.arrayBuffer());
 }
 
+/** Stored bytes deleted at the same time, per round (outside calls, each with the platform's timeout). */
+const DELETE_PARALLEL = 10;
+
 /**
  * Deletes rows AND their stored bytes, bounded (200 a call; prune jobs come back for the rest).
- * Use it wherever Kinroot deleted `File` rows directly.
+ * A row goes only once its bytes are gone (deleted now, or already missing: 404): when storage
+ * refuses or doesn't answer, the row stays, so the next run can try again and the bytes are never
+ * orphaned without a row pointing at them. Use it wherever Kinroot deleted `File` rows directly.
  */
-export async function purgeFiles(db: Db, where: Prisma.FileWhereInput) {
+export async function purgeFileRows(db: Db, where: Prisma.FileWhereInput): Promise<{removed: string[]; failed: string[]}> {
   const rows = await db.file.findMany({where, select: {id: true, storageId: true}, take: 200});
-  if (!rows.length) return 0;
-  for (const r of rows) if (r.storageId) await deleteFile(origin(), r.storageId).catch(() => null);
-  await db.file.deleteMany({where: {id: {in: rows.map((r) => r.id)}}});
-  return rows.length;
+  const removed: string[] = [];
+  const failed: string[] = [];
+  for (let i = 0; i < rows.length; i += DELETE_PARALLEL) {
+    const part = rows.slice(i, i + DELETE_PARALLEL);
+    const gone = await Promise.all(
+      part.map(async (r) => {
+        if (!r.storageId) return true;
+        const res = await deleteFile(origin(), r.storageId).catch(() => null);
+        return !!res && (res.ok || res.status === 404);
+      }),
+    );
+    part.forEach((r, k) => (gone[k] ? removed : failed).push(r.id));
+  }
+  if (removed.length) await db.file.deleteMany({where: {id: {in: removed}}});
+  if (failed.length) console.error(`[storage] ${failed.length} stored file(s) could not be deleted; their rows stay for the next try`);
+  return {removed, failed};
+}
+
+/** purgeFileRows(), answering how many rows (and their bytes) went. */
+export async function purgeFiles(db: Db, where: Prisma.FileWhereInput) {
+  return (await purgeFileRows(db, where)).removed.length;
 }

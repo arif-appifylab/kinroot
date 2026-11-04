@@ -8,7 +8,7 @@ import type {Viewer} from '../platform/types';
 
 /**
  * `?next=` as a same-site PATH, or the fallback. Mirrors `safeNext` on the server.
- * The fallback is Kinroot (`/crm/`): the template's dashboard is going away.
+ * The fallback is Kinroot (`/crm/`).
  */
 export function nextPath(fallback = '/crm/'): string {
   const value = new URLSearchParams(window.location.search).get('next');

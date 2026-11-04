@@ -35,26 +35,29 @@ export async function ensureProfile(db: Db, user: Pick<User, 'id' | 'name' | 'em
 export async function uniqueHandle(db: Db, base: string, exceptUserId?: string) {
   let root = slugify(base).slice(0, 40);
   if (RESERVED_HANDLES.includes(root)) root = `${root}-1`;
-  for (let i = 0; i < 50; i++) {
-    const handle = i ? `${root}-${i + 1}` : root;
-    const taken = await db.schedulingProfile.findFirst({where: {handle, ...(exceptUserId ? {userId: {not: exceptUserId}} : {})}, select: {userId: true}});
-    if (!taken) return handle;
-  }
-  return `${root}-${Date.now().toString(36)}`;
+  // Every candidate checked in ONE query (not one query per try).
+  const candidates = Array.from({length: 50}, (_, i) => (i ? `${root}-${i + 1}` : root));
+  const taken = new Set(
+    (await db.schedulingProfile.findMany({where: {handle: {in: candidates}, ...(exceptUserId ? {userId: {not: exceptUserId}} : {})}, select: {handle: true}, take: 50})).map((p) => p.handle),
+  );
+  return candidates.find((h) => !taken.has(h)) ?? `${root}-${Date.now().toString(36)}`;
 }
 
 /** Slugs are unique per owner (personal) or among team links. */
 export async function uniqueLinkSlug(db: Db, link: {kind: string; userId: string | null}, base: string, exceptId?: string) {
   const root = slugify(base);
-  for (let i = 0; i < 50; i++) {
-    const slug = i ? `${root}-${i + 1}` : root;
-    const taken = await db.bookingLink.findFirst({
-      where: {slug, kind: link.kind, ...(link.kind === 'personal' ? {userId: link.userId} : {}), ...(exceptId ? {id: {not: exceptId}} : {})},
-      select: {id: true},
-    });
-    if (!taken) return slug;
-  }
-  return `${root}-${Date.now().toString(36)}`;
+  // Every candidate checked in ONE query (not one query per try).
+  const candidates = Array.from({length: 50}, (_, i) => (i ? `${root}-${i + 1}` : root));
+  const taken = new Set(
+    (
+      await db.bookingLink.findMany({
+        where: {slug: {in: candidates}, kind: link.kind, ...(link.kind === 'personal' ? {userId: link.userId} : {}), ...(exceptId ? {id: {not: exceptId}} : {})},
+        select: {slug: true},
+        take: 50,
+      })
+    ).map((l) => l.slug),
+  );
+  return candidates.find((s) => !taken.has(s)) ?? `${root}-${Date.now().toString(36)}`;
 }
 
 // ─── Public view ────────────────────────────────────────────────────────────

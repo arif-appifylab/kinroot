@@ -45,8 +45,6 @@ export function targetLabel(object: AutoObject, target: Target) {
 export type ConditionBlock = {target: Target; rules: SegmentRules};
 export type Conditions = {match: 'all' | 'any'; blocks: ConditionBlock[]};
 
-export const emptyConditions = (): Conditions => ({match: 'all', blocks: []});
-
 // ─── Record fields (conditions on deals / companies / tickets, field updates, date triggers) ───
 
 export type RecordFieldKind = 'text' | 'choice' | 'tags' | 'bool' | 'number' | 'date';
@@ -387,10 +385,7 @@ export const STEP_TYPES: Record<StepType, {label: string; description: string; g
 
 export const STEP_GROUPS = ['Records', 'Create', 'Communicate', 'Flow'] as const;
 
-/** Steps that change something outside the automation (dry runs describe them instead). */
-export const SIDE_EFFECT_STEPS = new Set<StepType>(['update_field', 'assign_owner', 'create_task', 'create_deal', 'create_ticket', 'add_tag', 'remove_tag', 'add_to_list', 'remove_from_list', 'send_email', 'notify', 'webhook']);
-
-export const newStepId = () => `s${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-3)}`;
+const newStepId = () => `s${Math.random().toString(36).slice(2, 9)}${Date.now().toString(36).slice(-3)}`;
 
 /** A fresh step of a type with sensible defaults for this object. */
 export function blankStep(type: StepType, object: AutoObject): Step {
@@ -518,7 +513,7 @@ export const MAX_CHAIN_DEPTH = 5;
 export const RUNS_PER_RECORD_PER_HOUR = 10;
 /** Steps one run may execute (guards against runaway runs). */
 export const MAX_STEPS_PER_RUN = 100;
-export const MAX_STEPS = 60;
+const MAX_STEPS = 60;
 
 export type RunStatus = 'running' | 'waiting' | 'done' | 'failed' | 'skipped' | 'canceled';
 export const RUN_STATUS: Record<RunStatus, {label: string; tone: 'blue' | 'violet' | 'green' | 'rose' | 'neutral' | 'amber'}> = {

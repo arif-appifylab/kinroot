@@ -489,10 +489,15 @@ export const inbox = new Hono<AppEnv>()
     }
     if (input.action === 'delete') {
       // Only from Trash; team conversations need an admin, personal ones their owner.
+      // Which accounts are personal: one query for the whole selection (not one per conversation).
+      const accountIds = isAdmin(me) ? [] : [...new Set(threads.flatMap((t) => (t.trashedAt && t.accountId ? [t.accountId] : [])))];
+      const personal = new Set(
+        accountIds.length ? (await db.emailAccount.findMany({where: {id: {in: accountIds}, userId: {not: null}}, select: {id: true}})).map((a) => a.id) : [],
+      );
       const ok: EmailThread[] = [];
       for (const t of threads) {
         if (!t.trashedAt) errors.push(`${t.subject}: move it to Trash first`);
-        else if (!isAdmin(me) && !(await isPersonal(db, t))) errors.push(`${t.subject}: only admins can delete team conversations`);
+        else if (!isAdmin(me) && !(t.accountId && personal.has(t.accountId))) errors.push(`${t.subject}: only admins can delete team conversations`);
         else ok.push(t);
       }
       const bins = await deleteConversations(db, ok, w);

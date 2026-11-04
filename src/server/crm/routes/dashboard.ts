@@ -5,6 +5,7 @@ import {Prisma} from '../../../generated/prisma/client';
 import {currentUser, type AppEnv} from '../kit/guards';
 import {intParam, ownerScope, valid} from '../lib/http';
 import {userSelect} from '../lib/users';
+import {scopedDeal} from './deals';
 
 export const dashboard = new Hono<AppEnv>().get(
   '/',
@@ -69,7 +70,8 @@ export const dashboard = new Hono<AppEnv>().get(
         where: {...scope, status: 'OPEN', expectedCloseDate: {not: null}},
         orderBy: {expectedCloseDate: 'asc'},
         take: 6,
-        include: {stage: true, company: {select: {id: true, name: true}}, owner: {select: userSelect}},
+        // The company's owner, so scopedDeal() hides another owner's company under owner-only visibility.
+        include: {stage: true, company: {select: {id: true, name: true, ownerId: true}}, owner: {select: userSelect}},
       }),
       db.task.findMany({
         where: {assigneeId: me.id, done: false, dueAt: {lt: new Date(Date.now() + 86400_000)}},
@@ -127,7 +129,7 @@ export const dashboard = new Hono<AppEnv>().get(
       funnel,
       months,
       lostReasons: lostReasons.map((r) => ({reason: r.lostReason ?? 'Unspecified', count: r._count._all, value: r._sum.value ?? 0})),
-      closingSoon,
+      closingSoon: closingSoon.map((d) => scopedDeal(d, visible)),
       myTasks,
     });
   },

@@ -5,6 +5,7 @@ import {crmTick} from '../../../src/server/crm/lib/ticks';
 import {owner, ownerAccountId, resetCrm, teammate, userId} from '../support/crm';
 import {Browser, configureEnv, DATABASE_URL, db} from '../support/harness';
 import {fakeResend, inbound as postInbound, inJob, mailbox, mails, mailsTo, restoreResend} from './support-inbox';
+import {eventually} from '../support/wait';
 
 /**
  * Ported from Kinroot's scripts/test-inbox.mjs
@@ -402,6 +403,21 @@ describe.skipIf(!DATABASE_URL)('Ported: shared inbox (integration, real Postgres
     expect(binCounts.conversationComment).toBeGreaterThanOrEqual(1);
   });
 
+  it('deletes several trashed conversations at once: one bin entry and one audit row each, the rest refused in words', async () => {
+    const ids: string[] = [];
+    for (const n of [1, 2, 3, 4]) ids.push((await start(`many${n}@stranger-port.io`, `Many ${n}`)).id);
+    await ok(act(own, ids.slice(0, 3), 'trash'));
+    expect((await ok(act(A.c, ids.slice(0, 3), 'delete'))).errors, 'members cannot delete team conversations').toHaveLength(3);
+    const del = await ok(act(own, ids, 'delete'));
+    expect([del.done, del.errors.length, del.binIds.length]).toEqual([3, 1, 3]);
+    for (const id of ids.slice(0, 3)) {
+      expect(await thread(id)).toBeNull();
+      expect(await audits('conversation.deleted', id)).toHaveLength(1);
+    }
+    expect(await thread(ids[3]!), 'not in Trash: kept').not.toBeNull();
+    expect(await db.deletedRecord.count({where: {entity: 'conversation', recordId: {in: ids}}})).toBe(3);
+  });
+
   it('restores a conversation from the recycle bin with its messages and comments', async () => {
     const {ids, del} = await binned();
     const restored = await ok(own.post(`/site-api/crm/recycle-bin/${del.binIds[0]}/restore`));
@@ -479,11 +495,7 @@ describe.skipIf(!DATABASE_URL)('Ported: shared inbox (integration, real Postgres
     await ok(own.post(`/site-api/crm/automations/${a.id}/enable`, {enabled: true}));
     const autoContact = (await ok(own.post('/site-api/crm/contacts', {firstName: 'Auto', lastName: 'Run', email: 'auto@client-port.io'}), 201)).contact;
     await inbound({from: autoContact.email, to: [TEAM_IN], subject: 'Automation', text: 'x', messageId: mid('auto')});
-    let tags: string[] = [];
-    for (let i = 0; i < 20 && !tags.includes('conv-auto'); i++) {
-      tags = (await db.contact.findUniqueOrThrow({where: {id: autoContact.id}})).tags as string[];
-      if (!tags.includes('conv-auto')) await new Promise(r => setTimeout(r, 50));
-    }
+    const tags = await eventually(async () => (await db.contact.findUniqueOrThrow({where: {id: autoContact.id}})).tags as string[], (t) => t.includes('conv-auto'));
     expect(tags).toContain('conv-auto');
   });
 

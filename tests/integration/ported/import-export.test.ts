@@ -12,6 +12,7 @@ import {env} from '../support/cloudflare-workers';
 import {fakeStorage, resetCrm, storedFiles, teammate} from '../support/crm';
 import {Browser, configureEnv, DATABASE_URL, db} from '../support/harness';
 import {crm, download, meOf, must, settle, stubFetch, tick, uploadCsv, workspace, type Crm, type Me} from './support-lists';
+import {eventually} from '../support/wait';
 
 const RUN = 'qz7';
 const L = (s: string) => `${s} ${RUN}`;
@@ -59,12 +60,9 @@ const BIG = 450; // the script used 5,200 against a server; 450 still spans thre
 const bigTag = `big-${RUN}`;
 
 async function waitImport(c: Crm, id: string, statuses: string[]) {
-  for (let i = 0; i < 100; i++) {
-    const d = must<Detail>(await c.get(`/imports/${id}`), 'import detail');
-    if (statuses.includes(d.import.status)) return d;
-    await new Promise((r) => setTimeout(r, 50));
-  }
-  throw new Error(`import ${id} never reached ${statuses}`);
+  const d = await eventually(async () => must<Detail>(await c.get(`/imports/${id}`), 'import detail'), (x) => statuses.includes(x.import.status), {timeoutMs: 20_000});
+  if (!statuses.includes(d.import.status)) throw new Error(`import ${id} never reached ${statuses}`);
+  return d;
 }
 
 /** Upload → validate → (start) like the drawer does. */

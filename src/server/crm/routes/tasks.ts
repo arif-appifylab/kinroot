@@ -30,7 +30,7 @@ const taskBody = z.object({
   dealId: z.string().nullish(),
 });
 
-export const taskInclude = {
+const taskInclude = {
   assignee: {select: userSelect},
   contact: {select: {id: true, firstName: true, lastName: true}},
   company: {select: {id: true, name: true}},

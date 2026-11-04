@@ -21,7 +21,7 @@ import {strings} from '../lib/json-list';
 
 const kinds = ['CALL', 'MEETING', 'EMAIL', 'SMS', 'LINKEDIN', 'WHATSAPP', 'POSTAL'] as const;
 
-export const LABEL: Record<InteractionKind, string> = {
+const LABEL: Record<InteractionKind, string> = {
   CALL: 'call',
   MEETING: 'meeting',
   EMAIL: 'email',

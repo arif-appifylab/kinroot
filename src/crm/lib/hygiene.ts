@@ -18,7 +18,7 @@ export const AUDIT_CATEGORIES = {
 export type AuditCategory = keyof typeof AUDIT_CATEGORIES;
 
 /** Readable names for audit actions. Unknown actions fall back to `actionLabel()`'s humanised form. */
-export const AUDIT_ACTIONS: Record<string, string> = {
+const AUDIT_ACTIONS: Record<string, string> = {
   'automation.enabled': 'Switched on automation',
   'automation.disabled': 'Switched off automation',
   'automation.secret_revealed': 'Viewed an automation signing secret',
@@ -55,7 +55,6 @@ export const AUDIT_ACTIONS: Record<string, string> = {
   'settings.oauth_secret': 'Changed an OAuth client secret',
   'settings.email_design': 'Changed the email design',
   'settings.tickets': 'Changed ticket settings',
-  'settings.turnstile': 'Changed spam protection keys',
   'settings.audit': 'Changed audit log retention',
   'email_account.connected': 'Connected an email account',
   'email_account.updated': 'Changed an email account',

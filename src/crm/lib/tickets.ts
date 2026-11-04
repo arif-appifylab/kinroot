@@ -117,8 +117,3 @@ export function durationLabel(ms: number) {
   const d = Math.floor(h / 24);
   return h % 24 ? `${d}d ${h % 24}h` : `${d}d`;
 }
-
-/** Minutes ↔ "1h 30m"-style input used by the SLA editor. */
-export function minutesLabel(mins: number | null) {
-  return mins ? durationLabel(mins * 60_000) : '—';
-}

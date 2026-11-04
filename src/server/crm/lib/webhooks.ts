@@ -5,7 +5,7 @@ import type {Db} from '../kit/db';
 import {enqueue} from './jobs';
 
 /** A webhook is switched off after this many deliveries in a row fail for good. */
-export const DISABLE_AFTER = 20;
+const DISABLE_AFTER = 20;
 
 /** Event.entity of test deliveries: no real record behind them, never emitted to automations or scoring. */
 export const TEST_ENTITY = 'webhook';
@@ -27,7 +27,7 @@ export async function signPayload(secret: string, body: string, at = Math.floor(
   return `t=${at},v1=${await hmacHex(secret, `${at}.${body}`)}`;
 }
 
-export function webhookBody(event: {id: string; type: string; createdAt: Date; data: unknown}) {
+function webhookBody(event: {id: string; type: string; createdAt: Date; data: unknown}) {
   return JSON.stringify({id: event.id, type: event.type, createdAt: event.createdAt.toISOString(), data: event.data});
 }
 

@@ -30,14 +30,14 @@ import {strings} from '../lib/json-list';
 
 export type PortalConfig = {enabled: boolean; intro: string; categories: string[]};
 
-export async function portalConfig(db: Db): Promise<PortalConfig> {
+async function portalConfig(db: Db): Promise<PortalConfig> {
   const s = await getTicketSettings(db);
   return {enabled: s.portalEnabled, intro: s.portalIntro, categories: s.categories};
 }
 
 export type CsatState = {number: number; subject: string; firstName: string | null; rating: number | null; comment: string | null} | null;
 
-export async function csatState(db: Db, token: string): Promise<CsatState> {
+async function csatState(db: Db, token: string): Promise<CsatState> {
   const id = await ticketFromCsatToken(db, token);
   const t = id ? await db.ticket.findUnique({where: {id}, include: {contact: {select: {firstName: true}}}}) : null;
   return t ? {number: t.number, subject: t.subject, firstName: t.contact?.firstName ?? null, rating: t.csatRating, comment: t.csatComment} : null;
@@ -56,12 +56,11 @@ async function portalSession(c: AppContext) {
     throw new HTTPException(401, {res, message: 'Your session needs refreshing.'});
   }
   if (viewer.state !== 'user' || !viewer.emailVerified || !viewer.email) return null;
-  const contacts = await c.var.db.contact.findMany({
-    where: {email: {equals: viewer.email, mode: 'insensitive'}},
-    select: {id: true, firstName: true, lastName: true, email: true},
-    orderBy: {createdAt: 'asc'},
-    take: 20,
-  });
+  // Case-insensitive on the lower(email) index (Prisma's `mode: 'insensitive'` is ILIKE: no index), one query.
+  const contacts = await c.var.db.$queryRaw<{id: string; firstName: string; lastName: string | null; email: string | null}[]>`
+    SELECT id, "firstName", "lastName", email FROM "Contact"
+    WHERE lower(email) = ${viewer.email.trim().toLowerCase()}
+    ORDER BY "createdAt" ASC, id ASC LIMIT 20`;
   const contact = contacts[0];
   return contact ? {contact, contactIds: contacts.map((x) => x.id), email: viewer.email} : {contact: null, contactIds: [] as string[], email: viewer.email};
 }

@@ -5,13 +5,13 @@ import {escapeHtml} from '@/lib/email-html';
 import {parseAddressList, stripAngle, type Address} from './mime';
 import {accountCredentials} from './oauth';
 import {fetchResendReceived} from './providers';
-import {enqueue, kickJobs} from '../lib/jobs';
+import {enqueue} from '../lib/jobs';
 import {getSettings} from '../lib/settings';
 import {receivedHtmlReader} from '../inbox/sanitize';
 import {ingestMessage, sendSystemEmail, type IncomingMessage} from './service';
 
 /** The SMTP / API account whose Reply-To address received this email, if any. */
-export async function accountForReply(db: Db, recipients: Address[]): Promise<EmailAccount | null> {
+async function accountForReply(db: Db, recipients: Address[]): Promise<EmailAccount | null> {
   const emails = [...new Set(recipients.map((a) => a.email.toLowerCase()))];
   if (!emails.length) return null;
   return db.emailAccount.findFirst({where: {replyTo: {in: emails, mode: 'insensitive'}}});
@@ -105,7 +105,6 @@ export async function receiveInbound(db: Db, parsed: IncomingMessage, opts: {ori
   if (message?.direction === 'INBOUND' && account?.forwardReplies && opts.forward !== false) {
     // One copy per received email: the key makes a repeat of this request (or a retry) queue nothing more.
     await enqueue(db, 'email.forward_reply', {messageId: message.id, origin: opts.origin}, {key: `forward-${message.id}`});
-    kickJobs();
   }
   return message;
 }

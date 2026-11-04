@@ -21,7 +21,7 @@ import {decryptJson, encryptJson, randomToken} from '../kit/crypto';
 import {requireRole, type AppEnv} from '../kit/guards';
 import {audit, clientIp, fingerprint} from '../lib/audit';
 import {notFound, valid} from '../lib/http';
-import {enqueue, kickJobs} from '../lib/jobs';
+import {enqueue} from '../lib/jobs';
 import {receiveIncoming, tokenHash} from '../lib/incoming-webhooks';
 
 const id = z.string().max(60);
@@ -242,7 +242,6 @@ export const incomingWebhooks = new Hono<AppEnv>()
     if (req.status !== 'failed') throw new HTTPException(400, {message: 'Only failed requests can be retried'});
     await db.incomingWebhookRequest.update({where: {id: req.id}, data: {status: 'accepted', error: null, processedAt: null}});
     await enqueue(db, 'incoming_webhook.process', {requestId: req.id});
-    kickJobs();
     await audit(db, c, {action: 'incoming_webhook.request_retried', category: 'settings', entity: 'incoming_webhook', recordId: req.webhook.id, label: req.webhook.name, meta: {requestId: req.id}});
     return c.json({ok: true});
   });

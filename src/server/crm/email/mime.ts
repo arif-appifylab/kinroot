@@ -24,7 +24,7 @@ const enc = new TextEncoder();
 const isAscii = (s: string) => /^[\x20-\x7e]*$/.test(s);
 
 /** RFC 2047 encoded-word for non-ASCII header values. */
-export function encodeHeader(value: string) {
+function encodeHeader(value: string) {
   return isAscii(value) ? value : `=?UTF-8?B?${toB64(enc.encode(value))}?=`;
 }
 

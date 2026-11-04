@@ -19,10 +19,11 @@ import type {Db} from '../kit/db';
 import {mergeFields} from '../email/render';
 import {defaultPipeline} from '../routes/deals';
 import {customDiff, diff, logActivity} from './activity';
+import {contactIdByEmail} from './contact-email';
 import {cleanCustom} from './custom-fields';
 import {associateByDomain, workDomain} from './domains';
 import {emit} from './events';
-import {enqueue, kickJobs} from './jobs';
+import {enqueue} from './jobs';
 import {notify, recordLink} from './notify';
 import {addToList} from './segments';
 import {rememberOption} from './settings';
@@ -215,7 +216,9 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput, once: O
   }
 
   // Contact: update the existing one (by email) or create one.
-  let contact: Contact | null = email ? await db.contact.findFirst({where: {email: {equals: email, mode: 'insensitive'}}}) : null;
+  // Case-insensitive on the lower(email) index (`mode: 'insensitive'` is ILIKE: no index), the oldest one.
+  const foundId = email ? await contactIdByEmail(db, email) : null;
+  let contact: Contact | null = foundId ? await db.contact.findUnique({where: {id: foundId}}) : null;
   const isNew = !contact;
   const identifiable = email || contactData.firstName || contactData.phone;
   if (identifiable) {
@@ -370,7 +373,6 @@ export async function submitForm(db: Db, form: Form, input: SubmitInput, once: O
 
   if (settings.notifyEmails?.length || (settings.autoresponder?.enabled && email)) {
     await enqueue(db, 'form.after_submit', {submissionId: submission.id});
-    kickJobs();
   }
   return {spam: false as const, replayed: false, submissionId: submission.id, ending};
 }

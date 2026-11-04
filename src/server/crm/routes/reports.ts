@@ -24,6 +24,7 @@ import {notFound, ownerScope, valid} from '../lib/http';
 import {periodSpan, safeTz, wallKey, wallOf} from '../lib/periods';
 import {catalogue, refList, runReport} from '../lib/reports';
 import {userSelect} from '../lib/users';
+import {scopedDeal} from './deals';
 import {csv} from './import-export';
 
 /** Query params every run / export accepts: viewer time zone + dashboard overrides. */
@@ -84,7 +85,7 @@ const csvResponse = (body: string, name: string) =>
 export const reportSelect = {owner: {select: userSelect}, _count: {select: {widgets: true}}} satisfies Prisma.ReportInclude;
 
 /** Shared reports, plus the user's own private ones. */
-export const visibleReports = (me: User): Prisma.ReportWhereInput => ({OR: [{shared: true}, {ownerId: me.id}]});
+const visibleReports = (me: User): Prisma.ReportWhereInput => ({OR: [{shared: true}, {ownerId: me.id}]});
 
 export async function findReport(db: Db, me: User, id: string) {
   const report = await db.report.findFirst({where: {id, ...visibleReports(me)}});
@@ -117,7 +118,8 @@ type ForecastRow = Record<ForecastCategory, number> & {key: string; label: strin
 async function forecast(c: AppContext, q: z.infer<typeof forecastQuery>) {
   const db = c.var.db;
   const tz = safeTz(q.tz);
-  const scope: Prisma.DealWhereInput = {...(await ownerScope(c))};
+  const visible = await ownerScope(c);
+  const scope: Prisma.DealWhereInput = {...visible};
   // ANDed with the visibility scope, so the owner filter can only narrow it.
   if (q.ownerId) scope.AND = [{ownerId: q.ownerId === 'none' ? null : q.ownerId}];
   if (q.pipelineId) scope.pipelineId = q.pipelineId;
@@ -127,7 +129,8 @@ async function forecast(c: AppContext, q: z.infer<typeof forecastQuery>) {
   const [open, won, undated] = await Promise.all([
     db.deal.findMany({
       where: {...scope, status: 'OPEN', expectedCloseDate: {lt: end}},
-      include: {stage: true, owner: {select: userSelect}, company: {select: {id: true, name: true}}},
+      // The company's owner, so scopedDeal() hides another owner's company under owner-only visibility.
+      include: {stage: true, owner: {select: userSelect}, company: {select: {id: true, name: true, ownerId: true}}},
       orderBy: {expectedCloseDate: 'asc'},
       take: 2000,
     }),
@@ -149,7 +152,7 @@ async function forecast(c: AppContext, q: z.infer<typeof forecastQuery>) {
     return months.find((m) => m.key === wallKey({y: w.y, m: w.m, d: 1}));
   };
 
-  const deals = open.map((d) => {
+  const deals = open.map((row) => scopedDeal(row, visible)).map((d) => {
     const auto = categoryFromProbability(d.stage.probability);
     const override = FORECAST_OVERRIDES.includes(d.forecastCategory as never) ? (d.forecastCategory as (typeof FORECAST_OVERRIDES)[number]) : null;
     const category = override ?? auto;

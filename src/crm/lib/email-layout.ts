@@ -61,7 +61,7 @@ const DEFAULT_PRIMARY = '#2563eb';
 
 export const accentOf = (design: EmailDesign, primary: string) => design.accentColor || primary || DEFAULT_PRIMARY;
 
-export const layoutStyles = () =>
+const layoutStyles = () =>
   `<style>:root{color-scheme:light only;supported-color-schemes:light}` +
   `@media only screen and (max-width:620px){.kr-wrap{padding:12px !important}.kr-pad{padding:24px 20px !important}}</style>`;
 

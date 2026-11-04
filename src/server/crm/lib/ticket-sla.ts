@@ -2,7 +2,7 @@ import type {Ticket} from '../../../generated/prisma/client';
 import {ticketRef, type BusinessHours, type TicketPriority, type TicketSettings} from '@/lib/tickets';
 import type {Db} from '../kit/db';
 import {emit} from './events';
-import {enqueue, kickJobs} from './jobs';
+import {enqueue} from './jobs';
 import {notify} from './notify';
 import {getTicketSettings, ticketLink, ticketTeam} from './tickets';
 
@@ -40,7 +40,7 @@ const hm = (s: string) => {
 };
 
 /** `minutes` of working time after `start`, counting only the business hours. */
-export function addBusinessMinutes(start: Date, minutes: number, bh: BusinessHours): Date {
+function addBusinessMinutes(start: Date, minutes: number, bh: BusinessHours): Date {
   const tz = (() => {
     try {
       new Intl.DateTimeFormat('en-US', {timeZone: bh.timezone});
@@ -92,8 +92,7 @@ export async function scheduleSla(db: Db, t: Pick<Ticket, 'id' | 'firstResponseD
   if (t.resolutionDueAt && !t.resolvedAt) {
     await enqueue(db, 'ticket.sla_check', {ticketId: t.id, kind: 'resolution', due: t.resolutionDueAt.toISOString()}, {runAt: t.resolutionDueAt});
   }
-  // A deadline already in the past (reopened ticket, back-dated SLA) is checked right away.
-  if ([t.firstResponseDueAt, t.resolutionDueAt].some((d) => d && d.getTime() <= Date.now())) kickJobs();
+  // A deadline already in the past (reopened ticket, back-dated SLA) runs right away: its runAt has passed.
 }
 
 export async function checkSla(db: Db, payload: Record<string, unknown>) {

@@ -9,7 +9,7 @@ import {cache} from '../../../platform/cache';
 const KEY = 'inbox';
 
 /** The Site Cache key of the inbox settings (docs/agent/cache.md); `saveInboxSettings` clears it. */
-export const INBOX_SETTINGS_CACHE_KEY = 'crm:inbox-settings';
+const INBOX_SETTINGS_CACHE_KEY = 'crm:inbox-settings';
 
 /**
  * Read by every inbox request, the badges and the website chat's availability; changed only in

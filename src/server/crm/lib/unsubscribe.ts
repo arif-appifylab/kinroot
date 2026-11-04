@@ -1,7 +1,7 @@
 import {sign, verifySignature} from '../kit/crypto';
 
 /** `<contactId>.<signature>`: lets a contact opt out from a link without signing in. */
-export async function unsubscribeToken(contactId: string) {
+async function unsubscribeToken(contactId: string) {
   return `${contactId}.${await sign(`unsubscribe:${contactId}`)}`;
 }
 

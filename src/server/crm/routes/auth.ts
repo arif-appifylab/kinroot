@@ -21,7 +21,7 @@ import {EMAIL_IMAGES, MAX_EMAIL_IMAGE} from './files';
 /**
  * Kinroot's own account routes, on top of the site's sign-in (src/platform/auth). Signing in and
  * out, passwords, two-step sign-in and the account's name belong to the template
- * (`/account/*`, `/site-api/auth/*`, `/dashboard/account`); Kinroot never sees a password.
+ * (`/account/*`, `/site-api/auth/*`, Settings → Security in the CRM); Kinroot never sees a password.
  *
  *   GET   /state             who is here: signed in? on the team? workspace set up?
  *   POST  /setup             first visit of the Owner: name the workspace, demo data or not

@@ -6,6 +6,7 @@ import {config} from '../kit/config';
 import {randomToken} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {logActivity} from '../lib/activity';
+import {contactIdByEmail, contactsByEmail, optedOutEmails} from '../lib/contact-email';
 import {emit} from '../lib/events';
 import {notify, notifyWatchers} from '../lib/notify';
 import {routeTicketEmail} from '../lib/ticket-mail';
@@ -55,8 +56,8 @@ export async function sendEmail(db: Db, me: Pick<User, 'id' | 'name' | 'role'>, 
   if (!account) throw new HTTPException(400, {message: 'Connect an email account in Settings → Email first'});
 
   const recipients = [...input.to, ...(input.cc ?? []), ...(input.bcc ?? [])].map((e) => e.toLowerCase());
-  const optedOut = await db.contact.findMany({where: {email: {in: recipients}, emailOptOut: true}, select: {email: true}});
-  if (optedOut.length) throw new HTTPException(400, {message: `${optedOut.map((c) => c.email).join(', ')} opted out of email`});
+  const optedOut = [...(await optedOutEmails(db, recipients))];
+  if (optedOut.length) throw new HTTPException(400, {message: `${optedOut.join(', ')} opted out of email`});
   const reserved = reachesReserved(account.provider) ? [] : recipients.filter(isReservedAddress);
   if (reserved.length) throw new HTTPException(400, {message: `${reserved.join(', ')} can't receive email: example.com and .test addresses are for testing only`});
 
@@ -71,9 +72,8 @@ export async function sendEmail(db: Db, me: Pick<User, 'id' | 'name' | 'role'>, 
   const references = previous.map((p) => p.messageId!);
 
   // Who is this for?
-  const contact = input.contactId
-    ? await db.contact.findUnique({where: {id: input.contactId}, include: {companies: {include: {company: true}, orderBy: {isPrimary: 'desc'}, take: 1}}})
-    : await db.contact.findFirst({where: {email: input.to[0]?.toLowerCase()}, include: {companies: {include: {company: true}, orderBy: {isPrimary: 'desc'}, take: 1}}});
+  const contactId = input.contactId ?? (await contactIdByEmail(db, input.to[0]));
+  const contact = contactId ? await db.contact.findUnique({where: {id: contactId}, include: {companies: {include: {company: true}, orderBy: {isPrimary: 'desc'}, take: 1}}}) : null;
   const deal = input.dealId ? await db.deal.findUnique({where: {id: input.dealId}}) : thread?.dealId ? await db.deal.findUnique({where: {id: thread.dealId}}) : null;
   const company = input.companyId
     ? await db.company.findUnique({where: {id: input.companyId}})
@@ -218,9 +218,9 @@ export async function ingestMessage(db: Db, account: EmailAccount | null, incomi
     parent?.thread ??
     (account && m.externalThreadId ? await db.emailThread.findFirst({where: {accountId: account.id, externalThreadId: m.externalThreadId}}) : null);
 
-  const contact = others.length
-    ? await db.contact.findFirst({where: {email: {in: others}}, include: {companies: {orderBy: {isPrimary: 'desc'}, take: 1}}})
-    : null;
+  // Case-insensitive on the lower(email) index: a contact saved as "Ann@X.com" still matches.
+  const contactId = others.length ? (await contactsByEmail(db, others, {take: 1}))[0]?.id : null;
+  const contact = contactId ? await db.contact.findUnique({where: {id: contactId}, include: {companies: {orderBy: {isPrimary: 'desc'}, take: 1}}}) : null;
   const inbox = await inboxContext(db);
   const teamMail = !outbound && others.length > 0 && feedsTeamInbox(inbox, account);
   if (!contact && !thread && !teamMail) return null;

@@ -8,7 +8,7 @@ import {currentUser, isAdmin, type AppContext, type AppEnv} from '../kit/guards'
 import {logActivity} from '../lib/activity';
 import {emit} from '../lib/events';
 import {assertVisible, attachedWhere, notFound, ownerScope, valid} from '../lib/http';
-import {linkFor, mentionedUsers, notifyMentions, notifyWatchers} from '../lib/notify';
+import {linkFor, mentionedUsersIn, notifyMentions, notifyWatchers} from '../lib/notify';
 import {userSelect} from '../lib/users';
 
 const link = {contactId: z.string().max(40).nullish(), companyId: z.string().max(40).nullish(), dealId: z.string().max(40).nullish()};
@@ -72,8 +72,9 @@ export const notes = new Hono<AppEnv>()
     await c.var.db.activity.updateMany({where: {type: 'note', refId: note.id}, data: {data: {body: note.body.slice(0, 2000), pinned: note.pinned}, text: note.body.slice(0, 5000)}});
     if (patch.body) {
       // Only people newly mentioned by the edit hear about it.
-      const already = new Set(await mentionedUsers(c.var.db, existing.body));
-      const added = (await mentionedUsers(c.var.db, note.body)).filter((id) => !already.has(id));
+      const [before, after] = await mentionedUsersIn(c.var.db, [existing.body, note.body]);
+      const already = new Set(before);
+      const added = after!.filter((id) => !already.has(id));
       if (added.length) await notifyMentions(c.var.db, note.body, {actorId: me.id, actorName: me.name, where: 'in a note', link: linkFor(note), only: added});
     }
     return c.json({note});

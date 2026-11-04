@@ -21,9 +21,10 @@ import {randomToken, sign, verifySignature} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {logActivity} from '../lib/activity';
 import {associateByDomain} from '../lib/domains';
+import {contactIdByEmail} from '../lib/contact-email';
 import {checkDuplicates} from '../lib/duplicates';
 import {emit} from '../lib/events';
-import {enqueue, kickJobs} from '../lib/jobs';
+import {enqueue} from '../lib/jobs';
 import {notifyWatchers} from '../lib/notify';
 import {getSettings} from '../lib/settings';
 import {stripQuoted} from '../lib/ticket-mail';
@@ -69,7 +70,7 @@ export async function saveChatSettings(db: Db, value: ChatSettings) {
 }
 
 /** The shared mailbox chat emails go out from: the chosen one, else the first shared mailbox. */
-export async function chatAccount(db: Db, s?: ChatSettings) {
+async function chatAccount(db: Db, s?: ChatSettings) {
   const settings = s ?? (await getChatSettings(db));
   const chosen = settings.accountId ? await db.emailAccount.findFirst({where: {id: settings.accountId, userId: null}}) : null;
   return chosen ?? (await db.emailAccount.findFirst({where: {userId: null}, orderBy: [{isDefault: 'desc'}, {createdAt: 'asc'}]}));
@@ -127,7 +128,7 @@ export async function claimFiles(db: Db | Prisma.TransactionClient, identityId: 
 // ─── Availability ───────────────────────────────────────────────────────────
 
 /** Team members who could answer now: active, signed in recently, with team-inbox access (and in the round robin when it is on). */
-export async function onlineAgents(db: Db) {
+async function onlineAgents(db: Db) {
   const [settings, users] = await Promise.all([
     getInboxSettings(db),
     db.member.findMany({where: {active: true, role: {not: 'VIEWER'}, lastSeenAt: {gte: new Date(Date.now() - ONLINE_MS)}}, select: {id: true, role: true}}),
@@ -245,10 +246,10 @@ export async function newVisitor(db: Db, meta: VisitorMeta) {
 }
 
 /** Finds the contact with this email or creates one (source "Chat"), with the usual duplicate checks. */
-export async function contactForVisitor(db: Db, email: string, name?: string | null) {
+async function contactForVisitor(db: Db, email: string, name?: string | null) {
   const address = email.trim().toLowerCase();
-  const existing = await db.contact.findFirst({where: {email: {equals: address, mode: 'insensitive'}}, select: {id: true}});
-  if (existing) return existing.id;
+  const existing = await contactIdByEmail(db, address);
+  if (existing) return existing;
   const [first, ...rest] = (name?.trim() || address.split('@')[0]!).split(/\s+/);
   const contact = await db.contact.create({
     data: {firstName: (first || address).slice(0, 100), lastName: rest.join(' ').slice(0, 100) || null, email: address, source: 'Chat', lastActivityAt: new Date()},

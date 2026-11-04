@@ -195,6 +195,59 @@ describe.skipIf(!DATABASE_URL)('Kinroot owner-only visibility (integration, real
     expect(await db.task.count({where: {title: 'Weekly'}}), 'completing again changes nothing').toBe(2);
   });
 
+  it('bulk delete moves every visible record to the recycle bin with what hangs off it, in one pass (P2-23)', async () => {
+    const make = async (n: string) => ok<{contact: {id: string}}>(await post(amy, '/contacts', {firstName: n, lastName: 'Bin'}), 201).contact.id;
+    const cs = [await make('Bin1'), await make('Bin2'), await make('Bin3')];
+    for (const id of cs) ok(await post(amy, '/notes', {body: `note on ${id}`, contactId: id}), 201);
+    const file = (await db.file.create({data: {name: 'a.pdf', mimeType: 'application/pdf', size: 1, ready: true, purpose: 'attachment', contactId: cs[0], uploadedById: amyId}})).id;
+    const [events0, audits0] = await Promise.all([db.event.count({where: {type: 'contact.deleted', recordId: {in: cs}}}), db.auditLog.count({where: {action: 'contact.deleted', recordId: {in: cs}}})]);
+
+    ok(await post(amy, '/contacts/bulk', {ids: [...cs, ids.benContact], action: 'delete'}));
+    const bins = await db.deletedRecord.findMany({where: {entity: 'contact', recordId: {in: [...cs, ids.benContact]}}});
+    expect(bins.map((b) => b.recordId).sort(), "one entry per deleted contact, never another member's").toEqual([...cs].sort());
+    expect(bins.map((b) => (b.counts as Record<string, number>).note), 'each entry keeps its note').toEqual([1, 1, 1]);
+    expect(bins.every((b) => b.deletedById === amyId)).toBe(true);
+    expect(await db.event.count({where: {type: 'contact.deleted', recordId: {in: cs}}}) - events0).toBe(3);
+    expect(await db.auditLog.count({where: {action: 'contact.deleted', recordId: {in: cs}}}) - audits0).toBe(3);
+    expect(await db.note.count({where: {contactId: {in: cs}}})).toBe(0);
+    expect((await db.file.findUniqueOrThrow({where: {id: file}})).purpose, 'its own attachment is parked with the entry').toBe('trash');
+
+    // One comes back from the bin with its note.
+    ok(await post(amy, `/recycle-bin/${bins.find((b) => b.recordId === cs[0])!.id}/restore`));
+    expect(await db.contact.count({where: {id: cs[0]}})).toBe(1);
+    expect(await db.note.count({where: {contactId: cs[0]}})).toBe(1);
+  });
+
+  it("hides another member's company when it is a deal's primary company", async () => {
+    // An admin may link anything: Amy's deal, Ben's company as its primary one.
+    const created = ok<{deal: {id: string; company: {name: string} | null}}>(
+      await post(own, '/deals', {title: 'Cross deal', value: 500, companyId: ids.benCompany, ownerId: amyId, expectedCloseDate: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10)}),
+      201,
+    ).deal;
+    expect(created.company?.name, 'the admin sees it').toBe('Ben Co');
+    expect(Object.keys(created.company ?? {}), 'and never its owner id').not.toContain('ownerId');
+
+    type Deal = {id: string; companyId: string | null; company: unknown};
+    const detail = ok<{deal: Deal}>(await get(amy, `/deals/${created.id}`)).deal;
+    expect(detail.company, 'not on the detail').toBeNull();
+    const listed = ok<{rows: Deal[]}>(await get(amy, '/deals?q=Cross')).rows.find((d) => d.id === created.id)!;
+    expect(listed.company, 'not in the list').toBeNull();
+    const edited = ok<{deal: Deal}>(await patch(amy, `/deals/${created.id}`, {title: 'Cross deal 2'})).deal;
+    expect(edited.company, 'not in the answer to an edit').toBeNull();
+    const moved = ok<{deal: Deal}>(await post(amy, `/deals/${created.id}/status`, {status: 'OPEN'})).deal;
+    expect(moved.company).toBeNull();
+    const dash = ok<{closingSoon?: Deal[]}>(await get(amy, '/dashboard'));
+    expect(dash.closingSoon?.find((d) => d.id === created.id)?.company ?? null, 'not on the dashboard').toBeNull();
+    const fc = ok<{deals: Deal[]}>(await get(amy, '/reports/forecast?months=3'));
+    expect(fc.deals.find((d) => d.id === created.id)?.company ?? null, 'not in the forecast').toBeNull();
+    for (const body of [detail, listed, edited, dash, fc]) expect(JSON.stringify(body)).not.toContain('Ben Co');
+
+    // Amy's own company as the primary one still shows.
+    ok(await patch(own, `/deals/${created.id}`, {companyId: ids.company}));
+    expect(ok<{deal: {company: {name: string} | null}}>(await get(amy, `/deals/${created.id}`)).deal.company?.name).toBe('Amy Co');
+    expect((await get(ben, `/deals/${created.id}`)).status, "and Ben can't open Amy's deal").toBe(404);
+  });
+
   it('answers validation failures 422 with every field error (P2-32), checks links (P2-13) and numbers (P2-18)', async () => {
     const res = await post(amy, '/contacts', {firstName: '', email: 'not-an-email', linkedin: 'javascript:alert(1)'});
     expect(res.status).toBe(422);

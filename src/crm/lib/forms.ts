@@ -84,8 +84,6 @@ export type FormSettings = {
   closedMessage?: string;
   responseLimit?: number | null;
   onePerContact?: boolean;
-  /** Kept from Kinroot's Turnstile option; not used (honeypot, speed check and rate limits protect every form). */
-  spamCheck?: boolean;
   endings: Ending[];
   // what a submission does
   contactSource?: string;
@@ -330,7 +328,7 @@ function ruleMatches(rule: Rule, fields: FormField[], answers: Answers) {
   }
 }
 
-export function groupMatches(group: RuleGroup | undefined, fields: FormField[], answers: Answers) {
+function groupMatches(group: RuleGroup | undefined, fields: FormField[], answers: Answers) {
   const rules = group?.rules.filter((r) => r.fieldId) ?? [];
   if (!rules.length) return true;
   return group!.match === 'any' ? rules.some((r) => ruleMatches(r, fields, answers)) : rules.every((r) => ruleMatches(r, fields, answers));
@@ -345,7 +343,7 @@ function logicAllows(logic: FieldLogic | undefined, fields: FormField[], answers
 export type Page = {id: string; title?: string; fields: FormField[]};
 
 /** Splits on page breaks; a page break's logic hides or shows its whole page. */
-export function pagesOf(fields: FormField[]): (Page & {logic?: FieldLogic})[] {
+function pagesOf(fields: FormField[]): (Page & {logic?: FieldLogic})[] {
   const pages: (Page & {logic?: FieldLogic})[] = [{id: 'page_1', fields: []}];
   for (const f of fields) {
     if (f.type === 'page_break') pages.push({id: f.id, title: f.label, fields: [], logic: f.logic});

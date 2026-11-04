@@ -122,7 +122,7 @@ export function bandFor(score: number, bands: ScoreBand[]): ScoreBand {
 }
 
 /** [min, max) of a band, null = unbounded. */
-export function bandRange(key: string, bands: ScoreBand[]): {min: number | null; max: number | null} | null {
+function bandRange(key: string, bands: ScoreBand[]): {min: number | null; max: number | null} | null {
   const i = bands.findIndex((b) => b.key === key);
   if (i < 0) return null;
   return {min: i === 0 ? null : bands[i]!.min, max: bands[i + 1]?.min ?? null};

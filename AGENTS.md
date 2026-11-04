@@ -366,3 +366,36 @@ whole-table loops, nothing big in module memory (`performance.md`).
 ## How changes go live
 You edit a working copy; the OWNER publishes from the editor: Prepare → Build (`npm ci`,
 `npm run build`) → Migrate → Deploy (`publishing.md`). Keep `npm run dev` working at `/`.
+
+## This site: Kinroot (read before working here)
+This site is **Kinroot**, a CRM, built on this template. Where the sections above describe the template's
+blog, job board, checkout, `/dashboard` portal or `src/portal/` UI kit, Kinroot replaced them:
+- **The app is `/crm/`** (`src/pages/crm/[...path].astro` hosting `src/crm/CrmApp.tsx`, TanStack Router
+  file routes in `src/crm/routes/`), built from **Kinroot's own UI kit** in `src/crm/components/ui/`
+  (`Button` with `pending`/`pendingLabel`, `Field`, `useFormState` / `is` in `form-state.ts`, `DataTable`
+  with error and retry, `LoadError`). It is "the dashboard" for every rule above. `/dashboard/*` and
+  `/portal/*` only redirect to `/crm/*`. Never bring back `src/portal/`, the blog, jobs or checkout (an
+  upgrade adds their files: delete them again).
+- **Public pages** use `src/layouts/CrmPublic.astro` (Kinroot's design, React islands); the app uses
+  `src/layouts/Crm.astro`. Styles and tokens: `src/crm/styles.css` (brand colour `--primary`).
+- **Kinroot's API** is `/site-api/crm` (`src/server/crm/app.ts`): `crmHooks` (inbound mail, webhooks,
+  Data in, tracking) is mounted before `csrf`, `crmApp` after. Its guards are in `src/server/crm/kit/`:
+  the signed-in team member is `c.var.user`, a `Member` with a team role (OWNER > ADMIN > MEMBER >
+  VIEWER, `requireRole`). Site roles only decide who may claim the CRM (`site:crm:own`, the site owner).
+- **Record visibility**: with "members see only their own records" on, every read of a record or of
+  anything attached to it goes through `ownerScope` / `assertVisible` / `attachedWhere`
+  (`src/server/crm/lib/http.ts`), in the query's `where`. Input: `valid()` answers `422 {error, fields}`.
+- **The site owner has no email here.** Their `User.email` is a stand-in (`lib/owner-account.ts`):
+  never show it, merge it or reply to it; `sendSystemEmail` sends their mail as the platform's
+  notification.
+- **Lists are `jsonb`** (read with `lib/json-list.ts`); raw SQL binds lists one value at a time
+  (`IN (${Prisma.join(xs)})`), never an array parameter (`tests/no-array-columns.test.ts`).
+- **Public writes run once** (`lib/once.ts` on `idempotent()`, the browser's key from
+  `src/crm/lib/attempt.ts`); bookings take a per-host lock (`scheduling/bookings.ts`).
+- **Background work**: `lib/jobs.ts` (`enqueue`, a send rate set in Settings → Webhooks, a backlog for
+  what the platform refused), handlers in `src/server/background.ts`, schedules `crm-tick` /
+  `crm-sync` / `crm-prune` in `background.json` (`lib/ticks.ts`).
+- **Caches**: the keys and why they are safe are listed in `UPGRADE-0.10.13.md` (U-19).
+- Open work and decisions: `PLAN.md`, `AUDIT.md`. Tests: `tests/integration/crm-*.test.ts` and
+  `tests/integration/ported/` (helpers in `tests/integration/support/crm.ts`: `owner()` is the site owner
+  through a "View as admin" ticket, `ownerAt(email)` an Owner with a real address).

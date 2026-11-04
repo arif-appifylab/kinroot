@@ -8,7 +8,7 @@
 
 type Service = {name: string; hosts?: string[]; suffixes?: string[]; path?: RegExp};
 
-export const WEBHOOK_SERVICES: Service[] = [
+const WEBHOOK_SERVICES: Service[] = [
   {name: 'Zapier', hosts: ['hooks.zapier.com']},
   {name: 'Make', hosts: ['hook.make.com', 'hook.eu1.make.com', 'hook.eu2.make.com', 'hook.us1.make.com', 'hook.us2.make.com', 'hook.integromat.com', 'hook.eu1.integromat.com', 'hook.us1.integromat.com']},
   {name: 'n8n Cloud', suffixes: ['.app.n8n.cloud']},

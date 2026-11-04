@@ -30,7 +30,7 @@ const optionsSchema = z.object({
 });
 
 /** What the drawer gets: no job token, plus whether the files are still there. */
-export function importJson(imp: Import): ImportRun {
+function importJson(imp: Import): ImportRun {
   const {token: _t, ...rest} = imp;
   const stats = {...(imp.stats as Record<string, unknown>)};
   delete stats.origin;

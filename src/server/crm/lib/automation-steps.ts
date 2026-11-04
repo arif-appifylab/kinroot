@@ -25,6 +25,7 @@ import type {Db} from '../kit/db';
 import {sendEmail, sendSystemEmail} from '../email/service';
 import {customDiff, diff, logActivity} from './activity';
 import {audit} from './audit';
+import {optedOutEmails} from './contact-email';
 import {fieldsFor, fieldValue, fill, labelOf, ownerIdOf, primaryOf, recordOf, recordPath, evaluateConditions, type DealWithStage, type MergeInput, type Records} from './automation-records';
 import {cleanCustom} from './custom-fields';
 import {checkDuplicates} from './duplicates';
@@ -77,7 +78,7 @@ const done = (summary: string, output?: Record<string, unknown>): StepResult => 
 
 const tzOf = (a: Automation) => (isTimeZone(a.timezone) ? a.timezone : 'UTC');
 
-export function mergeInput(ctx: Pick<StepCtx, 'automation' | 'run' | 'records'>, owner: {name: string; email: string} | null): MergeInput {
+function mergeInput(ctx: Pick<StepCtx, 'automation' | 'run' | 'records'>, owner: {name: string; email: string} | null): MergeInput {
   return {object: ctx.run.object, records: ctx.records, automation: {name: ctx.automation.name, origin: originOf(ctx.automation)}, owner};
 }
 
@@ -471,7 +472,7 @@ const EXECUTORS: Record<Step['type'], Executor> = {
     const contact = ctx.records.contact;
     if (!contact) return skip('No contact to email');
     if (!contact.email) return skip(`${labelOf('contact', contact)} has no email address`);
-    const optedOut = await ctx.db.contact.count({where: {email: {equals: contact.email, mode: 'insensitive'}, emailOptOut: true}});
+    const optedOut = !contact.emailOptOut && (await optedOutEmails(ctx.db, [contact.email])).size > 0;
     if (contact.emailOptOut || optedOut) return skip(`${contact.email} opted out of email`);
 
     const owner = await ownerOfRun(ctx);

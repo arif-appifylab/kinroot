@@ -4,9 +4,9 @@ import type {EmailThread, Prisma} from '../../../generated/prisma/client';
 import {domainOf, isMessageChannel, MESSAGE_CHANNELS, TRASH_DAYS, type BlockKind} from '@/lib/inbox';
 import type {Db} from '../kit/db';
 import type {AppContext} from '../kit/guards';
-import {audit} from '../lib/audit';
+import {audit, auditMany} from '../lib/audit';
 import {emit} from '../lib/events';
-import {enqueue, kickJobs} from '../lib/jobs';
+import {enqueue} from '../lib/jobs';
 import {notify} from '../lib/notify';
 import {moveToBin} from '../lib/recycle-bin';
 import {refreshChannelActivity} from './channel-messages';
@@ -184,20 +184,13 @@ export async function restoreConversation(db: Db, before: EmailThread, who: Who)
 export async function deleteConversations(db: Db, threads: EmailThread[], who: Who) {
   if (!threads.length) return [];
   const bins = await moveToBin(db, 'conversation', threads.map((t) => t.id), who.actor);
-  for (const t of threads) {
-    await audit(db, who.c, {action: 'conversation.deleted', entity: 'conversation', recordId: t.id, label: auditLabel(t), meta: {channel: t.channel, trashedAt: t.trashedAt}});
-  }
+  // One batch of audit rows for the whole selection.
+  await auditMany(db, who.c, threads.map((t) => ({action: 'conversation.deleted', entity: 'conversation', recordId: t.id, label: auditLabel(t), meta: {channel: t.channel, trashedAt: t.trashedAt}})));
   return bins;
 }
 
-// ─── Job runner tick ────────────────────────────────────────────────────────
+// ─── The every-minute tick ──────────────────────────────────────────────────
 
-/**
- * Runs from /jobs/run: wakes snoozed conversations whose time passed (the
- * `inbox.wake` job normally does it), auto-closes team conversations without
- * a reply for N days (Settings → Inbox), and moves conversations trashed more
- * than 30 days ago to the recycle bin.
- */
 /** Per pass and per loop: the rest waits for the next minute (oldest first, so nothing starves). */
 const TICK_CAP = 25;
 
@@ -244,6 +237,5 @@ export async function inboxTick(db: Db, opts: {until?: number} = {}) {
 
   const expired = late() ? [] : await db.emailThread.findMany({where: {trashedAt: {lt: new Date(now.getTime() - TRASH_DAYS * 86_400_000)}}, orderBy: {trashedAt: 'asc'}, take: TICK_CAP});
   if (expired.length) await deleteConversations(db, expired, SYSTEM);
-  if (woke || closed || expired.length) kickJobs();
   return {woke, closed, purged: expired.length};
 }

@@ -47,6 +47,7 @@ import {logActivity} from './activity';
 import {audit, redact} from './audit';
 import {cleanCustom} from './custom-fields';
 import {associateByDomain, nameFromDomain} from './domains';
+import {contactsByEmail} from './contact-email';
 import {checkDuplicates} from './duplicates';
 import {emit} from './events';
 import {userScope} from './http';
@@ -103,7 +104,7 @@ export const maskSecret = (secret: string) => `${secret.slice(0, SIGNING_SECRET_
 
 // ─── API keys ───────────────────────────────────────────────────────────────
 
-export const apiKeyHash = (key: string) => sha256Hex(`apikey:${key}`);
+const apiKeyHash = (key: string) => sha256Hex(`apikey:${key}`);
 
 /** A new key: shown once in full; only its hash and a short prefix are stored. */
 export async function newApiKey() {
@@ -113,7 +114,7 @@ export async function newApiKey() {
 
 // ─── Validation from the catalogue ──────────────────────────────────────────
 
-export class DataInError extends Error {
+class DataInError extends Error {
   constructor(
     public code: DataInErrorCode,
     message: string,
@@ -196,7 +197,7 @@ function schemaFor(action: DataInAction) {
 const blank = (v: unknown) => v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0);
 
 /** Validates a body against the action's catalogue fields; throws E_INVALID_FIELD naming the field. */
-export function validateBody(action: DataInAction, body: Record<string, unknown>): Record<string, unknown> {
+function validateBody(action: DataInAction, body: Record<string, unknown>): Record<string, unknown> {
   for (const f of action.fields) if (f.required && blank(body[f.name])) throw fieldError(f.name, 'is required');
   const r = schemaFor(action).safeParse(body);
   if (!r.success) {
@@ -539,7 +540,7 @@ const HANDLERS: Record<DataInActionKey, (ctx: Ctx, b: Body) => Promise<Handled>>
     if (!ref) throw fieldError('list', 'is required');
     const list = await staticList(ctx, ref, 'list');
     const emails = [...new Set((b.emails as string[]).map(lower))];
-    const found = await db.contact.findMany({where: {email: {in: emails, mode: 'insensitive'}, ...ctx.scope}, select: {id: true, email: true}, orderBy: {createdAt: 'asc'}});
+    const found = await contactsByEmail(db, emails, {ownerId: ctx.scope.ownerId, take: 5000});
     const byEmail = new Map<string, string>();
     for (const c of found) if (c.email && !byEmail.has(lower(c.email))) byEmail.set(lower(c.email), c.id);
     const missing = emails.filter((e) => !byEmail.has(e));

@@ -64,7 +64,7 @@ export async function getScoringSettings(db: Db): Promise<ScoringSettings> {
 }
 
 /** Sorts bands by minimum and checks them; the lowest band has no minimum. */
-export function normaliseBands(bands: ScoreBand[]): ScoreBand[] {
+function normaliseBands(bands: ScoreBand[]): ScoreBand[] {
   const sorted = [...bands].sort((a, b) => (a.min ?? -Infinity) - (b.min ?? -Infinity));
   const out = sorted.map((b, i) => ({...b, min: i === 0 ? null : b.min}));
   if (new Set(out.map((b) => b.key)).size !== out.length) throw new HTTPException(400, {message: 'Each band needs its own name'});
@@ -509,7 +509,7 @@ export async function scoringStatus(db: Db): Promise<ScoringStatus> {
 }
 
 /** Contact where for one band (score range); an unknown band matches nobody. */
-export function bandWhere(key: string, bands: ScoreBand[]): Prisma.ContactWhereInput {
+function bandWhere(key: string, bands: ScoreBand[]): Prisma.ContactWhereInput {
   const i = bands.findIndex((b) => b.key === key);
   if (i < 0) return {id: {in: []}};
   const min = i === 0 ? null : bands[i]!.min;

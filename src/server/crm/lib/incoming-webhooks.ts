@@ -36,6 +36,7 @@ import {
 import {config as site} from '../../../platform/config';
 import {fromB64, sha256Hex} from '../kit/crypto';
 import type {Db} from '../kit/db';
+import {deleteInChunks} from './chunked-delete';
 import {firstDelivery} from '../email/inbound-auth';
 import {mergeFields} from '../email/render';
 import {companyBody, normalizeDomain} from '../routes/companies';
@@ -43,11 +44,12 @@ import {contactBody, contactName} from '../routes/contacts';
 import {dealBody, defaultPipeline} from '../routes/deals';
 import {logActivity} from './activity';
 import {audit} from './audit';
+import {contactIdByEmail} from './contact-email';
 import {cleanCustom} from './custom-fields';
 import {associateByDomain, nameFromDomain} from './domains';
 import {checkDuplicates} from './duplicates';
 import {emit} from './events';
-import {enqueue, kickJobs} from './jobs';
+import {enqueue} from './jobs';
 import {hit, ipKey} from './rate-limit';
 import {
   contactIdByPhone,
@@ -83,7 +85,7 @@ const SECRET_HEADER = /auth|secret|token|signature|key|cookie|password|session/i
 const ADDRESS_HEADER = /^(cf-connecting-ip(v6)?|cf-pseudo-ipv4|x-forwarded-for|x-real-ip|true-client-ip|x-client-ip|x-cluster-client-ip|forwarded)$/i;
 
 /** Header values that look secret (and the verification header) never reach the log; address headers are left out. */
-export function redactHeaders(headers: Headers, extra?: string | null): Record<string, string> {
+function redactHeaders(headers: Headers, extra?: string | null): Record<string, string> {
   const out: Record<string, string> = {};
   const skip = extra?.toLowerCase();
   headers.forEach((value, name) => {
@@ -96,7 +98,7 @@ export function redactHeaders(headers: Headers, extra?: string | null): Record<s
 const UNSAFE = new Set(['__proto__', 'constructor', 'prototype']);
 
 /** `customer[email]=a&items[0][name]=b&tag=x&tag=y` → {customer: {email}, items: [{name}], tag: [x, y]}. */
-export function formToObject(params: URLSearchParams): Record<string, unknown> {
+function formToObject(params: URLSearchParams): Record<string, unknown> {
   const root: Record<string, unknown> = {};
   for (const [key, value] of params) {
     const push = key.endsWith('[]');
@@ -120,10 +122,10 @@ export function formToObject(params: URLSearchParams): Record<string, unknown> {
   return root;
 }
 
-export class PayloadError extends Error {}
+class PayloadError extends Error {}
 
 /** JSON, form-urlencoded, multipart (fields only) or text, plus query parameters at the top level (the body wins). */
-export async function parsePayload(contentType: string | null, raw: Uint8Array<ArrayBuffer>, query: URLSearchParams): Promise<unknown> {
+async function parsePayload(contentType: string | null, raw: Uint8Array<ArrayBuffer>, query: URLSearchParams): Promise<unknown> {
   const ct = (contentType ?? '').toLowerCase();
   const text = new TextDecoder().decode(raw);
   const q = formToObject(query);
@@ -175,7 +177,7 @@ function decodeSignature(value: string, encoding: 'hex' | 'base64'): Uint8Array<
 }
 
 /** Null when the request passes the webhook's verification, else why not (shown to the sender and in the log). */
-export async function verifyRequest(hook: Pick<IncomingWebhook, 'verify' | 'verifyHeader' | 'verifyEncoding' | 'secretName'>, headers: Headers, raw: Uint8Array<ArrayBuffer>): Promise<string | null> {
+async function verifyRequest(hook: Pick<IncomingWebhook, 'verify' | 'verifyHeader' | 'verifyEncoding' | 'secretName'>, headers: Headers, raw: Uint8Array<ArrayBuffer>): Promise<string | null> {
   // Every request proves the sender (the site's rule for webhooks into the site): no check set up, nothing accepted.
   if (hook.verify !== 'header' && hook.verify !== 'hmac') return 'This webhook has no sender check yet. Set one up in Settings → Webhooks → Incoming.';
   const name = hook.verifyHeader?.trim();
@@ -202,7 +204,7 @@ export async function verifyRequest(hook: Pick<IncomingWebhook, 'verify' | 'veri
 }
 
 /** Optional: when the sender adds it, the time it sent the request (seconds or milliseconds since 1970, or ISO 8601). */
-export const TIMESTAMP_HEADER = 'x-webhook-timestamp';
+const TIMESTAMP_HEADER = 'x-webhook-timestamp';
 const STAMP_TOLERANCE_MS = 5 * 60_000;
 const STALE = 'The X-Webhook-Timestamp header is more than 5 minutes from now: send the time the request is sent';
 
@@ -309,7 +311,6 @@ export async function receiveIncoming(db: Db, input: ReceiveInput): Promise<Rece
   }
   await db.incomingWebhook.update({where: {id: hook.id}, data: {lastRequestAt: new Date(), lastStatus: 'accepted'}});
   await enqueue(db, 'incoming_webhook.process', {requestId: row.id});
-  kickJobs();
   return {status: 200, body: {ok: true, id: row.id}};
 }
 
@@ -657,8 +658,8 @@ async function findContactOnly(ctx: Ctx) {
   const v = await readValues(ctx, 'contact');
   const email = typeof v.fields.email === 'string' && v.fields.email ? v.fields.email : null;
   if (email) {
-    const c = await ctx.db.contact.findFirst({where: {email: {equals: email, mode: 'insensitive'}}, orderBy: {createdAt: 'asc'}, select: {id: true}});
-    if (c) return c.id;
+    const c = await contactIdByEmail(ctx.db, email);
+    if (c) return c;
   }
   return contactIdByPhone(ctx.db, typeof v.fields.phone === 'string' ? v.fields.phone : null);
 }
@@ -752,6 +753,7 @@ export async function processIncoming(db: Db, requestId: string, final: boolean)
 }
 
 /** Requests are kept 30 days. */
-export async function pruneIncomingRequests(db: Db, days: number) {
-  await db.incomingWebhookRequest.deleteMany({where: {createdAt: {lt: new Date(Date.now() - days * 86_400_000)}}});
+export async function pruneIncomingRequests(db: Db, days: number, until = Date.now() + 10_000) {
+  const cut = new Date(Date.now() - days * 86_400_000);
+  return deleteInChunks(until, (n) => db.$executeRaw`DELETE FROM "IncomingWebhookRequest" WHERE id IN (SELECT id FROM "IncomingWebhookRequest" WHERE "createdAt" < ${cut} LIMIT ${n})`);
 }

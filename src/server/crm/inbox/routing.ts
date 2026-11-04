@@ -66,7 +66,7 @@ export async function onOutbound(db: Db, threadId: string, at: Date) {
 }
 
 /** Round robin among the chosen members who can work the team inbox: the one assigned least recently goes next. */
-export async function pickRoundRobin(db: Db, ctx: InboxContext) {
+async function pickRoundRobin(db: Db, ctx: InboxContext) {
   const ids = ctx.settings.roundRobinIds;
   if (ctx.settings.assignment !== 'round_robin' || !ids.length) return null;
   const users = await db.member.findMany({where: {id: {in: ids}, active: true, role: {not: 'VIEWER'}}, select: {id: true, role: true}});

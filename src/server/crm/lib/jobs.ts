@@ -15,6 +15,7 @@ import {deliverWebhooks} from './webhooks';
 import {sendBroadcastBatch, startBroadcast} from './broadcasts';
 import {recalcJob, rescoreContacts, scoreEvents} from './scoring';
 import {pruneAudit} from './audit';
+import {deleteInChunks} from './chunked-delete';
 import {checkDuplicates, scanDuplicates} from './duplicates';
 import {purgeExpiredBin} from './recycle-bin';
 import {advanceRun, matchEvents, pruneAutomations, runBatch, type Origin} from './automations';
@@ -90,7 +91,7 @@ const HANDLERS = {
 export type JobType = keyof typeof HANDLERS;
 
 /** `webhook.deliver` → `crm-webhook-deliver`: platform list names are `a-z0-9-`. */
-export const listOf = (type: JobType) => `crm-${type.replace(/[._]/g, '-')}`;
+const listOf = (type: JobType) => `crm-${type.replace(/[._]/g, '-')}`;
 
 /** What the owner reads in the platform's Jobs tab: the kind of work, never personal data. */
 const LABELS: Record<JobType, string> = {
@@ -151,13 +152,6 @@ export async function enqueue(_db: Db, type: JobType, payload: Prisma.InputJsonO
   else await flush([job]);
 }
 
-/**
- * Does nothing, on purpose. Kinroot's old runner needed a nudge after queueing; platform jobs are
- * sent when the request (or job) ends (`withOutbox`) and start within seconds. Kept so the call
- * sites written for the old runner still compile; new code never calls it.
- */
-export function kickJobs() {}
-
 /** Runs `work` collecting the jobs it queues, then sends them (also when `work` throws). */
 export async function withOutbox<T>(work: () => Promise<T>): Promise<T> {
   const outbox: Outbox = {jobs: []};
@@ -174,9 +168,9 @@ const origin = () => site.siteUrl ?? 'http://localhost';
 // ─── The job rate ───────────────────────────────────────────────────────────
 
 /** New jobs a minute the platform takes by default; the owner can raise it to 50 in the Jobs tab. */
-export const JOBS_PER_MINUTE = 10;
+const JOBS_PER_MINUTE = 10;
 /** Settings row: the rate the owner set in the platform's Jobs tab (Settings → Webhooks). */
-export const JOBS_RATE_SETTING = 'jobs.perMinute';
+const JOBS_RATE_SETTING = 'jobs.perMinute';
 export const MAX_JOBS_PER_MINUTE = 1000;
 /** Settings row: jobs sent this minute (`{minute, count}`), shared by every Worker. */
 const RATE_COUNTER = 'jobs.rate';
@@ -185,7 +179,7 @@ const MAX_BATCH = 100;
 /** `lastError` of rows that wait only for the next minute (Settings → Webhooks counts them). */
 export const RATE_WAIT = 'Waiting for the job rate limit';
 /** Tries for a row that keeps failing for another reason (the platform down…), then it is set aside. */
-export const MAX_BACKLOG_ATTEMPTS = 12;
+const MAX_BACKLOG_ATTEMPTS = 12;
 /** Set-aside rows are kept this long for admins to see, then pruned. */
 export const FAILED_KEEP_DAYS = 30;
 
@@ -196,7 +190,7 @@ const RATE_LIMITED = new Set(['E_JOBS_RATE_LIMITED', 'E_TOO_MANY_REQUESTS']);
 const ON_HOLD = new Set(['E_JOBS_PAUSED', 'E_JOBS_BACKLOG', 'E_JOBS_SITE_BACKLOG']);
 
 /** The rate in force: the owner's setting, else the platform's default. */
-export async function jobsPerMinute(db: Db) {
+async function jobsPerMinute(db: Db) {
   const row = await db.setting.findUnique({where: {key: JOBS_RATE_SETTING}, select: {value: true}});
   const n = Number(row?.value);
   return Number.isInteger(n) && n >= 1 ? Math.min(n, MAX_JOBS_PER_MINUTE) : JOBS_PER_MINUTE;
@@ -496,18 +490,6 @@ export async function runStep<T>(name: string, deadline: number, work: (until: n
   }
 }
 
-/** Rows deleted per statement by the clean-ups. */
-export const PRUNE_CHUNK = 5000;
-
-/** Deletes in chunks of `size` (one statement each) until a chunk comes back short or time is up. */
-export async function deleteInChunks(until: number, chunk: (size: number) => Promise<number>, size = PRUNE_CHUNK) {
-  let total = 0;
-  for (;;) {
-    const n = await chunk(size);
-    total += n;
-    if (n < size || Date.now() >= until) return total;
-  }
-}
 
 /**
  * Keeps tables small: job backlog rows set aside after 30 days (waiting ones are never deleted),
@@ -523,7 +505,7 @@ export async function pruneJobs(db: Db, deadline = Date.now() + 45_000) {
   const steps: [string, (until: number) => Promise<unknown>][] = [
     // Uploads never confirmed, and form / chat uploads never sent: their rows and their stored bytes.
     ['files', () => purgeFiles(db, {OR: [{ready: false}, {purpose: {in: ['form_pending', 'chat_pending']}}], createdAt: {lt: new Date(Date.now() - day)}})],
-    ['rate hits', () => pruneRateHits(db)],
+    ['rate hits', (until) => pruneRateHits(db, until)],
     [
       'job backlog',
       (until) => {
@@ -538,13 +520,13 @@ export async function pruneJobs(db: Db, deadline = Date.now() + 45_000) {
         return deleteInChunks(until, (n) => db.$executeRaw`DELETE FROM "Event" WHERE id IN (SELECT id FROM "Event" WHERE "createdAt" < ${cut} LIMIT ${n})`);
       },
     ],
-    ['recycle bin', () => purgeExpiredBin(db)],
-    ['audit log', () => pruneAudit(db)],
+    ['recycle bin', (until) => purgeExpiredBin(db, until)],
+    ['audit log', (until) => pruneAudit(db, until)],
     ['automations', (until) => pruneAutomations(db, until)],
     ['imports and exports', () => pruneImportExport(db)],
     ['report sends', (until) => pruneScheduleSends(db, until)],
-    ['incoming webhooks', () => pruneIncomingRequests(db, REQUEST_KEEP_DAYS)],
-    ['data in', () => pruneDataIn(db)],
+    ['incoming webhooks', (until) => pruneIncomingRequests(db, REQUEST_KEEP_DAYS, until)],
+    ['data in', (until) => pruneDataIn(db, until)],
   ];
   const out: Record<string, unknown> = {};
   for (const [name, work] of steps) out[name] = await runStep(`prune ${name}`, deadline, work);

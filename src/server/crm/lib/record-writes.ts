@@ -12,6 +12,7 @@ import type {Db} from '../kit/db';
 import {contactName} from '../routes/contacts';
 import {customDiff, diff, logActivity} from './activity';
 import {audit} from './audit';
+import {contactIdByEmail} from './contact-email';
 import {adoptContactsForDomain, associateByDomain, nameFromDomain} from './domains';
 import {phoneKey, queueDuplicateCheck} from './duplicates';
 import {emit} from './events';
@@ -69,7 +70,9 @@ export async function contactIdByPhone(db: Db, phone: string | null | undefined,
  */
 export async function findContact(db: Db, ref: {email?: string | null; phone?: string | null}, scope: {ownerId?: string} = {}): Promise<Contact | null> {
   if (ref.email) {
-    const found = await db.contact.findFirst({where: {email: {equals: ref.email, mode: 'insensitive'}, ...scope}, orderBy: {createdAt: 'asc'}});
+    // Case-insensitive on the lower(email) index (`mode: 'insensitive'` is ILIKE: no index), the oldest one.
+    const foundId = await contactIdByEmail(db, ref.email, {ownerId: scope.ownerId});
+    const found = foundId ? await db.contact.findUnique({where: {id: foundId}}) : null;
     if (found) return found;
   }
   const id = await contactIdByPhone(db, ref.phone, {withoutEmail: !!ref.email, ownerId: scope.ownerId});

@@ -7,6 +7,7 @@ import {env} from '../support/cloudflare-workers';
 import {fakeStorage, owner, ownerAccountId, resetCrm, teammate, userId} from '../support/crm';
 import {Browser, configureEnv, DATABASE_URL, db, ORIGIN} from '../support/harness';
 import {fakeResend, inbound, inJob, mailbox, mails, mailsTo, restoreResend} from './support-inbox';
+import {eventually} from '../support/wait';
 
 /**
  * Ported from Kinroot's scripts/test-chat.mjs
@@ -255,13 +256,13 @@ describe.skipIf(!DATABASE_URL)('Ported: website live chat (integration, real Pos
     await ok(own.post(`/site-api/crm/automations/${auto.id}/enable`, {enabled: true}));
     const scored = (await ok(own.post('/site-api/crm/contacts', {firstName: 'Sco', lastName: 'Red', email: 'sco@client-port.io'}), 201)).contact;
     await started({text: 'Score me', email: scored.email});
-    let tagged = false;
-    let points = 0;
-    for (let i = 0; i < 20 && !(tagged && points); i++) {
-      tagged = ((await db.contact.findUniqueOrThrow({where: {id: scored.id}})).tags as string[]).includes('chat-auto');
-      points = (await db.scoreEvent.aggregate({where: {contactId: scored.id, ruleId: rule.id}, _sum: {points: true}}))._sum.points ?? 0;
-      if (!(tagged && points)) await new Promise(r => setTimeout(r, 50));
-    }
+    const {tagged, points} = await eventually(
+      async () => ({
+        tagged: ((await db.contact.findUniqueOrThrow({where: {id: scored.id}})).tags as string[]).includes('chat-auto'),
+        points: (await db.scoreEvent.aggregate({where: {contactId: scored.id, ruleId: rule.id}, _sum: {points: true}}))._sum.points ?? 0,
+      }),
+      (v) => v.tagged && v.points > 0,
+    );
     expect(tagged).toBe(true);
     expect(points).toBe(7);
   });

@@ -27,7 +27,7 @@ import {strings} from '../lib/json-list';
  *   to a contact.
  */
 
-export const channelLabel = (channel: string) => INBOX_CHANNELS[channel as InboxChannel]?.label ?? channel;
+const channelLabel = (channel: string) => INBOX_CHANNELS[channel as InboxChannel]?.label ?? channel;
 
 /** How the team sees someone who has not given a name: "Visitor 7F3A". */
 export const identityLabel = (i: Pick<ChannelIdentity, 'id' | 'name' | 'email'>) => i.name || i.email || `Visitor ${i.id.slice(-4).toUpperCase()}`;

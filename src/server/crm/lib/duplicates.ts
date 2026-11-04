@@ -23,7 +23,7 @@ const FREE_MAIL = new Set([
 ]);
 
 /** Case-insensitive, without +tags; Gmail also ignores dots (j.doe@gmail.com = jdoe@googlemail.com). Mirrors emailKeySql(). */
-export function normEmail(email?: string | null) {
+function normEmail(email?: string | null) {
   const e = email?.trim().toLowerCase();
   if (!e || !e.includes('@')) return null;
   const [rawLocal = '', domain = ''] = e.split('@');
@@ -42,14 +42,14 @@ export function phoneKey(phone?: string | null) {
 }
 
 /** Lower case, no accents or punctuation, single spaces. */
-export function normName(s?: string | null) {
+function normName(s?: string | null) {
   return (s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
 const LEGAL = /\b(inc|incorporated|llc|ltd|limited|corp|corporation|co|company|gmbh|ag|sa|sas|plc|bv|nv|srl|pty|oy|ab|as|group|holding|holdings)\b/g;
-export const normCompany = (name?: string | null) => normName(name).replace(/^the /, '').replace(LEGAL, ' ').replace(/\s+/g, ' ').trim();
+const normCompany = (name?: string | null) => normName(name).replace(/^the /, '').replace(LEGAL, ' ').replace(/\s+/g, ' ').trim();
 
-export function normDomain(v?: string | null) {
+function normDomain(v?: string | null) {
   const d = v?.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[/?#].*$/, '').replace(/\.$/, '');
   return d && d.includes('.') ? d : null;
 }
@@ -64,7 +64,7 @@ function trigrams(s: string) {
   return out;
 }
 
-export function similarity(a: Set<string>, b: Set<string>) {
+function similarity(a: Set<string>, b: Set<string>) {
   if (!a.size || !b.size) return 0;
   let shared = 0;
   for (const t of a) if (b.has(t)) shared++;

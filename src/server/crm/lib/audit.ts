@@ -3,6 +3,7 @@ import {DEFAULT_AUDIT_RETENTION, type AuditCategory} from '@/lib/hygiene';
 import {maskEmail} from '../../../platform/auth/admin';
 import {sha256Hex, sign} from '../kit/crypto';
 import type {Db} from '../kit/db';
+import {deleteInChunks} from './chunked-delete';
 import type {AppContext} from '../kit/guards';
 import {automationOf} from './automation-context';
 import {shownEmail} from './owner-account';
@@ -140,7 +141,8 @@ export async function saveAuditSettings(db: Db, value: AuditSettings) {
 }
 
 /** Drops entries older than the retention period (run from pruneJobs). */
-export async function pruneAudit(db: Db) {
+export async function pruneAudit(db: Db, until = Date.now() + 10_000) {
   const {retentionDays} = await getAuditSettings(db);
-  await db.auditLog.deleteMany({where: {createdAt: {lt: new Date(Date.now() - retentionDays * 86_400_000)}}});
+  const cut = new Date(Date.now() - retentionDays * 86_400_000);
+  return deleteInChunks(until, (n) => db.$executeRaw`DELETE FROM "AuditLog" WHERE id IN (SELECT id FROM "AuditLog" WHERE "createdAt" < ${cut} LIMIT ${n})`);
 }

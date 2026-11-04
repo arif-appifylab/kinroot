@@ -1,4 +1,4 @@
-import type {CalendarConnection, Interaction} from '../../../generated/prisma/client';
+import {Prisma, type CalendarConnection, type Interaction} from '../../../generated/prisma/client';
 import type {Interval} from '@/lib/scheduling';
 import type {Db} from '../kit/db';
 import {createInteraction, refreshInteractionActivity} from '../routes/interactions';
@@ -73,7 +73,7 @@ function busyForDays(db: Db, userId: string, from: Date, to: Date): Promise<Inte
 }
 
 /** The connection (and calendar) new meetings of this user are written to. */
-export async function writeTarget(db: Db, userId: string) {
+async function writeTarget(db: Db, userId: string) {
   const conn = await db.calendarConnection.findFirst({where: {userId}, orderBy: [{isDefault: 'desc'}, {createdAt: 'asc'}]});
   if (!conn) return null;
   return {conn, calendarId: conn.targetCalendarId ?? 'primary'};
@@ -204,11 +204,11 @@ export async function syncConnection(db: Db, conn: CalendarConnection, {deadline
         if (e.canceled || logged >= MAX_NEW_PER_RUN) continue;
         const emails = e.attendees.map((a) => a.email).filter((x) => !team.has(x));
         if (!emails.length) continue;
-        const contacts = await db.contact.findMany({
-          where: {email: {in: emails, mode: 'insensitive'}},
-          select: {id: true, companies: {orderBy: {isPrimary: 'desc'}, take: 1, select: {companyId: true}}},
-          orderBy: {createdAt: 'asc'},
-        });
+        // Case-insensitive on the lower(email) index, with each contact's primary company, one query.
+        const contacts = await db.$queryRaw<{id: string; companyId: string | null}[]>`
+          SELECT c.id, (SELECT cc."companyId" FROM "ContactCompany" cc WHERE cc."contactId" = c.id ORDER BY cc."isPrimary" DESC LIMIT 1) AS "companyId"
+          FROM "Contact" c WHERE lower(c.email) IN (${Prisma.join([...new Set(emails.map((x) => x.toLowerCase()))])})
+          ORDER BY c."createdAt" ASC, c.id ASC LIMIT 100`;
         if (!contacts.length) continue;
         const interaction = await createInteraction(
           db,
@@ -223,7 +223,7 @@ export async function syncConnection(db: Db, conn: CalendarConnection, {deadline
             outcome: e.start.getTime() > Date.now() ? 'Scheduled' : 'Completed',
             attendeeIds: contacts.map((c) => c.id),
             contactId: contacts[0]!.id,
-            companyId: contacts[0]!.companies[0]?.companyId ?? null,
+            companyId: contacts[0]!.companyId ?? null,
             authorId: conn.userId,
           },
           {calendar: false},
