@@ -1,5 +1,5 @@
 import type {Prisma} from '../../../generated/prisma/client';
-import {WEBHOOK_SERVICE_NAMES, webhookTarget} from '@/lib/webhook-targets';
+import {WEBHOOK_REFUSED, webhookTarget} from '@/lib/webhook-targets';
 import {decryptJson} from '../kit/crypto';
 import type {Db} from '../kit/db';
 import {enqueue} from './jobs';
@@ -44,7 +44,7 @@ export async function deliverWebhook(db: Db, deliveryId: string, final: boolean)
   // Saved before the service list, or edited in the database: refused for good, never retried.
   const target = webhookTarget(webhook.url);
   if (!target) {
-    await db.webhookDelivery.update({where: {id: delivery.id}, data: {status: 'FAILED', attempts: {increment: 1}, error: `Not a webhook service Kinroot sends to (${WEBHOOK_SERVICE_NAMES})`}});
+    await db.webhookDelivery.update({where: {id: delivery.id}, data: {status: 'FAILED', attempts: {increment: 1}, error: WEBHOOK_REFUSED}});
     return;
   }
 

@@ -26,7 +26,7 @@ export const TICKET_PRIORITIES: {value: TicketPriority; label: string; tone: Ton
 ];
 export const PRIORITY = Object.fromEntries(TICKET_PRIORITIES.map((p) => [p.value, p])) as Record<TicketPriority, (typeof TICKET_PRIORITIES)[number]>;
 
-export const SOURCE_LABELS: Record<TicketSource, string> = {EMAIL: 'Email', FORM: 'Form', PORTAL: 'Portal', MANUAL: 'Manual', WEBHOOK: 'Incoming webhook', API: 'Data in API'};
+export const SOURCE_LABELS: Record<TicketSource, string> = {EMAIL: 'Email', FORM: 'Form', PORTAL: 'Portal', MANUAL: 'Manual', WEBHOOK: 'Webhook', API: 'Data in webhook'};
 
 export const ticketRef = (n: number) => `#${n}`;
 /** Goes into every outgoing subject so replies thread back even without reply headers. */

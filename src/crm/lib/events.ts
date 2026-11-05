@@ -415,41 +415,18 @@ export const EVENT_GROUPS = [
     ],
   },
   {
-    label: 'Incoming webhooks',
-    events: [
-      {
-        type: 'webhook.received',
-        label: 'Incoming webhook received',
-        short: 'Incoming webhook received',
-        example: () => ({
-          webhookId: 'cminhook0stripe00000001',
-          webhook: {id: 'cminhook0stripe00000001', name: 'Stripe checkouts'},
-          requestId: 'cminhookreq0000000000001',
-          action: 'contact',
-          outcome: 'updated',
-          recordId: IDS.contact,
-          contactId: IDS.contact,
-          companyId: null,
-          dealId: null,
-          ticketId: null,
-          data: {id: 'evt_1001', type: 'checkout.completed', customer: {email: 'maya.patel@northwind.example', name: 'Maya Patel'}, amount: 1800, currency: 'usd'},
-        }),
-      },
-    ],
-  },
-  {
-    label: 'Data in API',
+    label: 'Data in webhook',
     events: [
       {
         type: 'data_in.received',
-        label: 'Data in event received',
+        label: 'Data in webhook event received',
         short: 'Custom event received',
         example: () => ({
           event: 'trial.started',
           contactId: IDS.contact,
           properties: {plan: 'Pro', seats: 12},
           occurredAt: T,
-          key: {id: 'cmapikey0website0000001', name: 'Website'},
+          key: {id: 'url:Kx9Qe2ZtR4mB', name: 'Data in URL'},
         }),
       },
     ],

@@ -1,21 +1,17 @@
 /**
- * Data in API: other platforms push data in through
- * `POST /site-api/crm/public/data-in/v1/<action>` (catalogue: src/lib/data-in.ts).
+ * The Data in webhook: other tools push data in by POSTing JSON to
+ * `/site-api/crm/public/data-in/<action path>/<access token>` with an `X-Signature-Token` header
+ * (catalogue: src/crm/lib/data-in.ts; URL shapes: src/crm/lib/data-in-url.ts).
  *
- *   handleDataIn()   the public endpoint: route → API key (Bearer) → key owner
- *                    still active → rate limit → size → X-Signature (HMAC-SHA256
- *                    of "<t>.<raw body>", 5-minute window, each signature once)
- *                    → JSON → Idempotency-Key → validation (zod built from the
- *                    catalogue fields) → the action's handler. Every request
- *                    with a known route is logged (DataInRequest), refused or not.
- *   handleDataInUrl() the same actions for no-code tools (Pabbly, Zapier, Make):
- *                    `POST /site-api/crm/public/data-in/<action>/<access token>` with an
- *                    `X-Signature-Token` header instead of a key and an HMAC; same limits, log
- *                    and idempotency, acting as the admin who turned it on (src/crm/lib/data-in-url.ts).
+ *   handleDataInUrl() the public endpoint: connection limit → route → access token → the admin it
+ *                    acts as still active → rate limit → size → signature token → JSON →
+ *                    Idempotency-Key → validation (zod built from the catalogue fields) → the
+ *                    action's handler. Every request with a valid access token is logged
+ *                    (DataInRequest), refused or not.
  *   HANDLERS         one per catalogue action. They write through the shared
  *                    helpers (record-writes, createNote, logInteraction,
- *                    createTicket, addToList, emit…), acting as the user who
- *                    created the key, so the timeline, events, scoring,
+ *                    createTicket, addToList, emit…), acting as the admin who
+ *                    turned the webhook on, so the timeline, events, scoring,
  *                    automations, history and audit log stay in step.
  *
  * Errors always answer `{error: {code, message, field?}}` with a stable code.
@@ -23,17 +19,14 @@
 import {HTTPException} from 'hono/http-exception';
 import {z, type ZodType} from 'zod';
 
-import type {ApiKey, ContactList, EntityType, Prisma} from '../../../generated/prisma/client';
+import type {ContactList, EntityType, Prisma} from '../../../generated/prisma/client';
 import type {User} from '../kit/guards';
 import {
-  API_KEY_PREFIX,
   DATA_IN_ERRORS,
   DATA_IN_MAX_BYTES,
   DEFAULT_DATA_IN_RATE_LIMIT,
   IDEMPOTENCY_HOURS,
   matchDataInAction,
-  SIGNATURE_TOLERANCE_SEC,
-  SIGNING_SECRET_PREFIX,
   type DataInAction,
   type DataInActionKey,
   type DataInErrorCode,
@@ -64,19 +57,19 @@ import {createTicket} from './tickets';
 import {asUser, withEmail} from './users';
 import {strings} from './json-list';
 
-// ─── Settings: signing secret, rate limit, Data in URL ──────────────────────
+// ─── Settings: rate limit, Data in URL ──────────────────────────────────────
 
 const SETTING_KEY = 'data-in';
 
 /**
- * The Data in URL (for Pabbly, Zapier and other no-code tools that can't sign requests): an access
- * token in the URL path and a signature token sent as the `X-Signature-Token` header, both needed.
+ * The Data in URL: an access token in the URL path and a signature token sent as the
+ * `X-Signature-Token` header, both needed.
  * Each is kept twice: its SHA-256 (what requests are compared against, in constant time) and
  * encrypted with encryptJson() (only for an admin's "Show tokens"). `createdById` is the admin who
- * turned it on or regenerated it last: requests act as them, like an API key acts as its creator.
+ * turned it on or regenerated it last: requests act as them.
  */
 type UrlStored = {id: string; enabled: boolean; accessHash: string; access: string; signatureHash: string; signature: string; createdById: string; rotatedAt: string};
-type Stored = {secret?: string; rotatedAt?: string; rateLimit?: number; url?: UrlStored};
+type Stored = {rateLimit?: number; url?: UrlStored};
 
 async function stored(db: Db): Promise<Stored> {
   const row = await db.setting.findUnique({where: {key: SETTING_KEY}});
@@ -84,37 +77,18 @@ async function stored(db: Db): Promise<Stored> {
 }
 
 async function store(db: Db, patch: Partial<Stored>) {
-  const value = {...(await stored(db)), ...patch};
+  // Only the keys in use: anything an older version kept in this row is dropped on the next save.
+  const {rateLimit, url} = await stored(db);
+  const value = {...(rateLimit === undefined ? {} : {rateLimit}), ...(url ? {url} : {}), ...patch};
   await db.setting.upsert({where: {key: SETTING_KEY}, create: {key: SETTING_KEY, value}, update: {value}});
-}
-
-const newSecret = () => `${SIGNING_SECRET_PREFIX}${randomToken(32)}`;
-
-/** The signing secret (made on first use; stored encrypted with encryptJson()). */
-export async function signingSecret(db: Db): Promise<string> {
-  const s = await stored(db);
-  const current = s.secret ? await decryptJson<string>(s.secret).catch(() => null) : null;
-  if (current) return current;
-  const secret = newSecret();
-  await store(db, {secret: await encryptJson(secret), rotatedAt: new Date().toISOString()});
-  return secret;
-}
-
-/** A new signing secret; the old one stops working at once. */
-export async function rotateSigningSecret(db: Db): Promise<string> {
-  const secret = newSecret();
-  await store(db, {secret: await encryptJson(secret), rotatedAt: new Date().toISOString()});
-  return secret;
 }
 
 export async function dataInSettings(db: Db) {
   const s = await stored(db);
-  return {rateLimit: s.rateLimit ?? DEFAULT_DATA_IN_RATE_LIMIT, rotatedAt: s.rotatedAt ?? null};
+  return {rateLimit: s.rateLimit ?? DEFAULT_DATA_IN_RATE_LIMIT};
 }
 
 export const saveRateLimit = (db: Db, rateLimit: number) => store(db, {rateLimit});
-
-export const maskSecret = (secret: string) => `${secret.slice(0, SIGNING_SECRET_PREFIX.length + 2)}${'•'.repeat(16)}${secret.slice(-4)}`;
 
 const accessHash = (token: string) => sha256Hex(`datain-url:${token}`);
 const signatureTokenHash = (token: string) => sha256Hex(`datain-sigtoken:${token}`);
@@ -185,16 +159,6 @@ export async function setDataInUrlEnabled(db: Db, memberId: string, enabled: boo
     return;
   }
   await store(db, {url: {...u, enabled, ...(enabled ? {createdById: memberId} : {})}});
-}
-
-// ─── API keys ───────────────────────────────────────────────────────────────
-
-const apiKeyHash = (key: string) => sha256Hex(`apikey:${key}`);
-
-/** A new key: shown once in full; only its hash and a short prefix are stored. */
-export async function newApiKey() {
-  const key = `${API_KEY_PREFIX}${randomToken(24)}`;
-  return {key, hash: await apiKeyHash(key), prefix: key.slice(0, API_KEY_PREFIX.length + 6)};
 }
 
 // ─── Validation from the catalogue ──────────────────────────────────────────
@@ -311,10 +275,13 @@ function validateBody(action: DataInAction, body: Record<string, unknown>): Reco
 
 // ─── Handlers ───────────────────────────────────────────────────────────────
 
+/** How a request's sender is named in the log, on records' source and in event data. */
+type Sender = {id: string; name: string};
+
 type Ctx = {
   db: Db;
   user: User;
-  key: Pick<ApiKey, 'id' | 'name'>;
+  key: Sender;
   origin: string;
   params: Record<string, string>;
   writer: Writer;
@@ -679,10 +646,9 @@ const HANDLERS: Record<DataInActionKey, (ctx: Ctx, b: Body) => Promise<Handled>>
 
 // ─── The endpoint ───────────────────────────────────────────────────────────
 
-/** Unknown keys from one address: after this many in 10 minutes, it gets E_RATE_LIMITED without a lookup. */
-const BAD_KEY_LIMIT = 30;
+/** Unknown URLs from one address: after this many in 10 minutes, it gets E_RATE_LIMITED without a lookup. */
+const BAD_URL_LIMIT = 30;
 const BODY_PREVIEW = 4000;
-const enc = new TextEncoder();
 
 export type DataInInput = {method: string; path: string; headers: Headers; body: () => Promise<ArrayBuffer>; ip: string | null; origin: string};
 export type DataInOutput = {status: number; body: unknown; headers?: Record<string, string>};
@@ -704,36 +670,11 @@ function bodyPreview(raw: Uint8Array, parsed?: unknown) {
   return text.length > BODY_PREVIEW ? `${text.slice(0, BODY_PREVIEW)}…` : text;
 }
 
-function parseSignature(header: string) {
-  const parts = Object.fromEntries(
-    header
-      .split(',')
-      .map((p) => p.trim().split('='))
-      .filter((kv) => kv.length === 2)
-      .map(([k, v]) => [k!.trim(), v!.trim()]),
-  );
-  const t = parts.t;
-  const v1 = parts.v1;
-  if (!t || !/^\d{1,12}$/.test(t) || !v1 || !/^[0-9a-f]{64}$/i.test(v1)) return null;
-  return {t: Number(t), v1: v1.toLowerCase()};
-}
-
-async function signatureMatches(secret: string, t: number, v1: string, raw: Uint8Array) {
-  const key = await crypto.subtle.importKey('raw', enc.encode(secret), {name: 'HMAC', hash: 'SHA-256'}, false, ['verify']);
-  const prefix = enc.encode(`${t}.`);
-  const data = new Uint8Array(prefix.length + raw.length);
-  data.set(prefix);
-  data.set(raw, prefix.length);
-  const sig = new Uint8Array(v1.match(/../g)!.map((h) => parseInt(h, 16)));
-  // crypto.subtle.verify compares in constant time.
-  return crypto.subtle.verify('HMAC', key, sig, data);
-}
-
 /** Who a request acts as, and how it is named in the log, the records' source and idempotency. */
 type Caller = {
-  key: Pick<ApiKey, 'id' | 'name'>;
+  key: Sender;
   user: User;
-  log: {apiKeyId: string | null; name: string; prefix: string};
+  log: {name: string; prefix: string};
   writer: Pick<Writer, 'by' | 'source' | 'data'> & {meta: Record<string, unknown>};
 };
 
@@ -752,7 +693,7 @@ type Run = {
   blockedNow: () => Promise<DataInOutput | null>;
 };
 
-/** Logging and refusals shared by both ways in. `logPath` never holds a token. */
+/** Logging and refusals. `logPath` never holds a token. */
 async function begin(db: Db, input: DataInInput, action: DataInAction, params: Record<string, string>, logPath: string): Promise<Run> {
   const started = Date.now();
   const idemHeader = input.headers.get('idempotency-key')?.trim().slice(0, 200) || null;
@@ -763,7 +704,6 @@ async function begin(db: Db, input: DataInInput, action: DataInAction, params: R
     await db.dataInRequest
       .create({
         data: {
-          apiKeyId: state.log?.apiKeyId ?? null,
           keyName: state.log?.name ?? null,
           keyPrefix: state.log?.prefix ?? null,
           action: action.key,
@@ -785,15 +725,15 @@ async function begin(db: Db, input: DataInInput, action: DataInAction, params: R
   };
   const fail: Run['fail'] = (code, message, field) => finish(DATA_IN_ERRORS[code].status, errorBody(code, message, field), code);
 
-  // Answered without a log row: nobody can be told apart before a valid key (anyone could fill the log).
+  // Answered without a log row: nobody can be told apart before a valid access token (anyone could fill the log).
   const refuse: Run['refuse'] = (code, message) => ({status: DATA_IN_ERRORS[code].status, body: errorBody(code, message)});
-  // Refused before anything is written: a wrong method, no key or an unknown key (or Data in URL)
-  // counts against the connection (`datain:bad:<ip>`, 30 per 10 minutes) and leaves no log row.
+  // Refused before anything is written: a wrong method or an unknown access token counts against
+  // the connection (`datain:bad:<ip>`, 30 per 10 minutes) and leaves no log row.
   const badKey = `datain:bad:${await ipKey(input.ip)}`;
-  const blocked = () => refuse('E_RATE_LIMITED', 'Too many requests with unknown API keys or URLs from this address. Try again later.');
-  const strike: Run['strike'] = async (code, message) => ((await hit(db, badKey, BAD_KEY_LIMIT, 600)) ? refuse(code, message) : blocked());
-  // Over the limit: not even a key lookup until the window has passed.
-  const blockedNow = async () => ((await db.rateHit.count({where: {key: badKey, at: {gte: new Date(Date.now() - 600_000)}}})) >= BAD_KEY_LIMIT ? blocked() : null);
+  const blocked = () => refuse('E_RATE_LIMITED', 'Too many requests with unknown Data in URLs from this address. Try again later.');
+  const strike: Run['strike'] = async (code, message) => ((await hit(db, badKey, BAD_URL_LIMIT, 600)) ? refuse(code, message) : blocked());
+  // Over the limit: not even a token lookup until the window has passed.
+  const blockedNow = async () => ((await db.rateHit.count({where: {key: badKey, at: {gte: new Date(Date.now() - 600_000)}}})) >= BAD_URL_LIMIT ? blocked() : null);
   return {db, input, action, params, idemHeader, state, finish, fail, refuse, strike, blockedNow};
 }
 
@@ -808,7 +748,7 @@ async function limitAndRead(run: Run, rateKey: string, per: string, rateLimit: n
   return raw;
 }
 
-/** JSON → Idempotency-Key → validation → the action's handler; the same for both ways in. */
+/** JSON → Idempotency-Key → validation → the action's handler. */
 async function runAction(run: Run, caller: Caller, raw: Uint8Array, opts: {idemScope: string; jsonHint?: string; prepare?: (body: Record<string, unknown>) => Record<string, unknown>}): Promise<DataInOutput> {
   const {db, action, idemHeader, state, fail, finish} = run;
   // ─── JSON ───
@@ -824,12 +764,12 @@ async function runAction(run: Run, caller: Caller, raw: Uint8Array, opts: {idemS
   // ─── Idempotency ───
   let reservation: string | null = null;
   if (idemHeader) {
-    await db.dataInIdempotency.deleteMany({where: {apiKeyId: opts.idemScope, key: idemHeader, createdAt: {lt: new Date(Date.now() - IDEMPOTENCY_HOURS * 3_600_000)}}});
+    await db.dataInIdempotency.deleteMany({where: {scope: opts.idemScope, key: idemHeader, createdAt: {lt: new Date(Date.now() - IDEMPOTENCY_HOURS * 3_600_000)}}});
     try {
-      reservation = (await db.dataInIdempotency.create({data: {apiKeyId: opts.idemScope, key: idemHeader, action: action.key}})).id;
+      reservation = (await db.dataInIdempotency.create({data: {scope: opts.idemScope, key: idemHeader, action: action.key}})).id;
     } catch (e) {
       if ((e as {code?: string}).code !== 'P2002') throw e;
-      const prior = await db.dataInIdempotency.findUnique({where: {apiKeyId_key: {apiKeyId: opts.idemScope, key: idemHeader}}});
+      const prior = await db.dataInIdempotency.findUnique({where: {scope_key: {scope: opts.idemScope, key: idemHeader}}});
       if (prior && prior.action !== action.key) return fail('E_INVALID_FIELD', `Idempotency-Key: this key was already used for ${prior.action}. Use a new key per request.`, 'Idempotency-Key');
       if (!prior || prior.status === null) return fail('E_IDEMPOTENCY_IN_PROGRESS', 'A request with this Idempotency-Key is still running. Retry in a moment.');
       state.replayed = true;
@@ -859,68 +799,10 @@ async function runAction(run: Run, caller: Caller, raw: Uint8Array, opts: {idemS
 
 const OWNER_INACTIVE = 'can no longer make changes';
 
-export async function handleDataIn(db: Db, input: DataInInput): Promise<DataInOutput> {
-  const match = matchDataInAction(input.method, input.path);
-  // Not a route of this API: answered, never logged.
-  if (!match) return {status: 404, body: errorBody('E_NOT_FOUND', `No action at ${input.method} ${input.path || '/'}. The actions are listed in Settings → Webhooks → Incoming.`)};
-  const run = await begin(db, input, match.action, match.params, input.path);
-  const {action, fail, strike} = run;
-  const blocked = await run.blockedNow();
-  if (blocked) return blocked;
-  if (match.wrongMethod) return strike('E_NOT_FOUND', `${action.path} only accepts ${action.method} requests`);
-
-  // ─── API key ───
-  const bearer = /^Bearer\s+(\S{10,200})$/i.exec((input.headers.get('authorization') ?? '').trim())?.[1];
-  if (!bearer) return strike('E_UNAUTHORIZED', 'Send your API key as "Authorization: Bearer <key>".');
-  const key = await db.apiKey.findUnique({where: {keyHash: await apiKeyHash(bearer)}, include: {createdBy: {include: withEmail}}});
-  if (!key) return strike('E_UNAUTHORIZED', 'Unknown API key. Copy it again, or create a new one in Settings → Webhooks → Incoming.');
-  const {createdBy, ...keyRow} = key;
-  const user = createdBy ? asUser(createdBy) : null;
-  run.state.log = {apiKeyId: key.id, name: key.name, prefix: key.prefix};
-  if (key.revokedAt) return fail('E_UNAUTHORIZED', 'This API key was revoked. Create a new one in Settings → Webhooks → Incoming.');
-  if (!user || !user.active || user.role === 'VIEWER') {
-    return fail('E_KEY_OWNER_INACTIVE', `The person who created this API key was deactivated or ${OWNER_INACTIVE}. Ask an admin to create a new key.`);
-  }
-
-  // ─── Rate limit, size ───
-  const raw = await limitAndRead(run, `datain:${key.id}`, 'this key', (await dataInSettings(db)).rateLimit);
-  if (!(raw instanceof Uint8Array)) return raw;
-
-  // ─── Signature ───
-  const header = input.headers.get('x-signature');
-  if (!header) return fail('E_SIGNATURE_MISSING', 'Sign the request: X-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">.');
-  const sig = parseSignature(header);
-  if (!sig) return fail('E_SIGNATURE_INVALID', 'X-Signature must look like t=<unix seconds>,v1=<64 hex characters>.');
-  if (!(await signatureMatches(await signingSecret(db), sig.t, sig.v1, raw))) {
-    return fail('E_SIGNATURE_INVALID', 'The signature does not match. Sign "<t>.<raw body>" byte for byte with the current signing secret.');
-  }
-  if (Math.abs(Date.now() / 1000 - sig.t) > SIGNATURE_TOLERANCE_SEC) return fail('E_SIGNATURE_EXPIRED', `The signature's time is more than ${SIGNATURE_TOLERANCE_SEC / 60} minutes away from now. Sign every request just before sending it.`);
-  try {
-    await db.dataInSignature.create({data: {signature: await sha256Hex(sig.v1)}});
-  } catch (e) {
-    if ((e as {code?: string}).code === 'P2002') return fail('E_SIGNATURE_REUSED', 'This signature was already used. Sign every request again, even a retry.');
-    throw e;
-  }
-  await db.apiKey.update({where: {id: key.id}, data: {lastUsedAt: new Date()}});
-
-  const caller: Caller = {
-    key: keyRow,
-    user,
-    log: run.state.log,
-    writer: {
-      by: `API key ${key.name}`,
-      source: {kind: 'api', name: key.name},
-      data: {apiKeyId: key.id},
-      meta: {source: {kind: 'api', name: key.name}, dataInKey: {id: key.id, name: key.name, prefix: key.prefix}, action: action.key},
-    },
-  };
-  return runAction(run, caller, raw, {idemScope: key.id});
-}
-
-// ─── The Data in URL (Pabbly, Zapier, Make…) ────────────────────────────────
+// ─── The Data in URL ────────────────────────────────────────────────────────
 
 /**
- * Values as no-code tools send them: an unmapped field arrives as "" (left out here, so it never
+ * Values as automation tools send them: an unmapped field arrives as "" (left out here, so it never
  * clears a value; null still does), numbers and true/false as text, lists as "a, b", and an object
  * as JSON text. Anything else is left as sent, for validateBody() to accept or refuse by name.
  */
@@ -964,8 +846,7 @@ function lenient(action: DataInAction, body: Record<string, unknown>): Record<st
 const URL_GONE = 'This Data in URL is not active: it was regenerated or turned off. Copy the current URL from Settings → Webhooks → Incoming.';
 
 /**
- * `POST /site-api/crm/public/data-in/<action path>/<access token>` with `X-Signature-Token`. Same
- * checks as an API key, in the same order, with the two tokens instead of a key and a signature:
+ * `POST /site-api/crm/public/data-in/<action path>/<access token>` with `X-Signature-Token`:
  * connection limit → route → access token (unknown, regenerated or turned off: 404, counted
  * against the connection) → the admin it acts as still active → rate limit → size → signature
  * token (401) → JSON → Idempotency-Key → validation → handler. Neither token is ever logged.
@@ -988,7 +869,7 @@ export async function handleDataInUrl(db: Db, input: DataInInput): Promise<DataI
   const settings = await stored(db);
   const url = settings.url;
   if (!url || !url.enabled || !sameHex(await accessHash(token), url.accessHash)) return strike('E_NOT_FOUND', URL_GONE);
-  run.state.log = {apiKeyId: null, name: DATA_IN_URL_NAME, prefix: token.slice(0, DATA_IN_URL_TOKEN_PREFIX.length + 4)};
+  run.state.log = {name: DATA_IN_URL_NAME, prefix: token.slice(0, DATA_IN_URL_TOKEN_PREFIX.length + 4)};
   const member = await db.member.findUnique({where: {id: url.createdById}, include: withEmail});
   const user = member ? asUser(member) : null;
   if (!user || !user.active || user.role === 'VIEWER') {
@@ -1020,7 +901,7 @@ export async function handleDataInUrl(db: Db, input: DataInInput): Promise<DataI
   };
   return runAction(run, caller, raw, {
     idemScope: `url:${url.id}`,
-    jsonHint: ' Send the body as JSON (Zapier: Payload Type "json"; Pabbly: Payload Type "JSON").',
+    jsonHint: ' Send the body as JSON: set your automation tool\'s payload or body type to JSON.',
     prepare: (body) => lenient(action, body),
   });
 }

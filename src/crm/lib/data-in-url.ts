@@ -1,6 +1,6 @@
 /**
- * The Data in URL: the same Data in actions (src/crm/lib/data-in.ts) for tools that can't sign a
- * request, like Pabbly Connect, Zapier or Make. The tool POSTs JSON to
+ * The Data in URL: the Data in actions (src/crm/lib/data-in.ts) for any automation tool that can
+ * call a webhook. The tool POSTs JSON to
  *
  *   https://<site>/site-api/crm/public/data-in/<action path>/<access token>
  *
@@ -16,7 +16,7 @@ export const SIGNATURE_TOKEN_PREFIX = 'crm_st_';
 export const SIGNATURE_TOKEN_HEADER = 'X-Signature-Token';
 /** 30 random bytes as base64url: 40 characters after the prefix. */
 export const ACCESS_TOKEN_PATTERN = /^crm_url_[A-Za-z0-9_-]{40}$/;
-/** Shown in the request log and on records' "source" instead of an API key's name. */
+/** Shown in the request log and on records' "source". */
 export const DATA_IN_URL_NAME = 'Data in URL';
 
 /** The Data in URL as the admin screen sees it: never a token, only masks. */
@@ -71,7 +71,7 @@ export function dataInUrlParams(action: DataInAction): DataInUrlParam[] {
     required: !!f.required,
     inPath,
     max: maxOf(f),
-    example: example(f, inPath ? undefined : sample[f.name]),
+    example: example(f, inPath ? action.sampleParams?.[f.name] : sample[f.name]),
     description: [f.description, f.values ? `One of: ${f.values.join(', ')}.` : '', f.nullable ? 'null clears it.' : ''].filter(Boolean).join(' '),
   });
   return [...(action.params ?? []).map((f) => row(f, true)), ...action.fields.map((f) => row(f, false))];
@@ -80,7 +80,7 @@ export function dataInUrlParams(action: DataInAction): DataInUrlParam[] {
 /** What every Data in URL request may send besides the body. */
 export const DATA_IN_URL_HEADERS = [
   {name: SIGNATURE_TOKEN_HEADER, required: true, value: 'your signature token', description: 'The signature token from this screen. Requests without it, or with an old one, are refused.'},
-  {name: 'Content-Type', required: true, value: 'application/json', description: 'Send the body as JSON (in Zapier: Payload Type "json"; in Pabbly: Payload Type "JSON").'},
+  {name: 'Content-Type', required: true, value: 'application/json', description: 'Send the body as JSON: in your automation tool, set the payload or body type to JSON.'},
   {name: 'Idempotency-Key', required: false, value: 'a unique id per record, e.g. the order id', description: `Optional: a retry with the same value within ${IDEMPOTENCY_HOURS} hours is not applied twice.`},
 ] as const;
 

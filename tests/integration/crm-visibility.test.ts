@@ -287,6 +287,58 @@ describe.skipIf(!DATABASE_URL)('Kinroot owner-only visibility (integration, real
     }
   });
 
+  it("never shows a hidden record's name in a timeline entry's stored title (AUDIT-2 L-2)", async () => {
+    const benId = (await db.member.findUniqueOrThrow({where: {userId: await userId('ben@example.com')}})).id;
+    // Ben's deal on Amy's contact (an admin can set that up), with entries written at the time.
+    const deal = ok<{deal: {id: string}}>(await post(own, '/deals', {title: 'Hidden Pipeline zq', ownerId: benId}), 201).deal;
+    const created = await db.activity.create({data: {type: 'deal_created', title: 'Deal created: Hidden Pipeline zq', actorId: amyId, contactId: ids.contact, dealId: deal.id, data: {value: 777}}});
+    const linked = await db.activity.create({data: {type: 'associated', title: 'Linked to Ben Co by email domain', contactId: ids.contact, companyId: ids.benCompany}});
+    try {
+      type Entry = {id: string; title: string; dealId: string | null; companyId: string | null; deal: unknown; data: unknown};
+      const feed = async (b: Browser, q = '') => ok<{rows: Entry[]}>(await get(b, `/timeline?contactId=${ids.contact}${q}`)).rows;
+
+      const rows = await feed(amy);
+      expect(rows.find((r) => r.id === created.id)).toMatchObject({title: 'Deal created', dealId: null, deal: null, data: {}});
+      expect(rows.find((r) => r.id === linked.id)).toMatchObject({title: 'Records linked', companyId: null});
+      expect(JSON.stringify(rows)).not.toContain('Hidden Pipeline');
+      expect(JSON.stringify(rows)).not.toContain('Ben Co');
+      // Amy's own entries keep their words; a search can't confirm the hidden name.
+      expect(rows.some((r) => r.id === ids.activity && r.title === 'Note added')).toBe(true);
+      expect((await feed(amy, '&q=Hidden%20Pipeline')).map((r) => r.id)).not.toContain(created.id);
+      // Nor does the contact's JSON export.
+      const exported = await get(amy, `/contacts/${ids.contact}/export`);
+      expect(exported.status).toBe(200);
+      expect(JSON.stringify(exported.json)).not.toContain('Hidden Pipeline');
+
+      // An admin sees the entry as written, and so does Amy with "everyone" visibility.
+      expect((await feed(own)).find((r) => r.id === created.id)?.title).toBe('Deal created: Hidden Pipeline zq');
+      expect((await feed(own, '&q=Hidden%20Pipeline')).map((r) => r.id)).toContain(created.id);
+      await visibility('everyone');
+      try {
+        expect((await feed(amy)).find((r) => r.id === created.id)?.title).toBe('Deal created: Hidden Pipeline zq');
+      } finally {
+        await visibility('owner');
+      }
+
+      // A comment on the entry tells Amy (its author) with the title her timeline shows.
+      ok(await post(own, `/comments/activity/${created.id}`, {body: 'nice one'}), 201);
+      const toAmy = await db.notification.findFirstOrThrow({where: {userId: amyId, type: 'comment'}, orderBy: {createdAt: 'desc'}});
+      expect(toAmy.title).toMatch(/commented on Deal created$/);
+      expect(toAmy.link).toBe(`/contacts/${ids.contact}`);
+
+      // A note on Amy's contact and Ben's deal: each owner reads the name of their own record.
+      ok(await post(own, '/notes', {body: 'shared context', contactId: ids.contact, dealId: deal.id}), 201);
+      const note = (id: string) => db.notification.findFirstOrThrow({where: {userId: id, type: 'activity'}, orderBy: {createdAt: 'desc'}});
+      expect((await note(amyId)).title).toMatch(/added a note on Ada Secret$/);
+      expect((await note(amyId)).link).toBe(`/contacts/${ids.contact}`);
+      expect((await note(benId)).title).toMatch(/added a note on Hidden Pipeline zq$/);
+    } finally {
+      await db.note.deleteMany({where: {dealId: deal.id}});
+      await db.activity.deleteMany({where: {id: {in: [created.id, linked.id]}}});
+      await db.deal.delete({where: {id: deal.id}});
+    }
+  });
+
   it('answers validation failures 422 with every field error (P2-32), checks links (P2-13) and numbers (P2-18)', async () => {
     const res = await post(amy, '/contacts', {firstName: '', email: 'not-an-email', linkedin: 'javascript:alert(1)'});
     expect(res.status).toBe(422);

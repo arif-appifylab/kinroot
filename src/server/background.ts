@@ -43,7 +43,6 @@ export const background = defineBackground({
   'crm-report-send': crmJob('report.send'),
   'crm-inbox-wake': crmJob('inbox.wake'),
   'crm-chat-email-visitor': crmJob('chat.email_visitor'),
-  'crm-incoming-webhook-process': crmJob('incoming_webhook.process'),
   'crm-tick': () => runJob(async db => void (await crmTick(db))),
   'crm-sync': () => runJob(async db => void (await crmSync(db))),
   'crm-prune': () => runJob(async db => void (await crmPrune(db))),

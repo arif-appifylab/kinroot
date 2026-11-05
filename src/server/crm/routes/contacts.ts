@@ -11,6 +11,7 @@ import {cleanCustom} from '../lib/custom-fields';
 import {forgetPairs, queueDuplicateCheck} from '../lib/duplicates';
 import {emit, emitMany} from '../lib/events';
 import {assertVisible, custom, fieldError, httpUrl, intParam, listQuery, notFound, optStr, optText, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {ENTRY_OWNERS, exportedEntry} from '../lib/shown-activity';
 import {CONTACT_LIMITS, copyName} from '@/lib/record-limits';
 import {associateByDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
@@ -402,7 +403,7 @@ export const contacts = new Hono<AppEnv>()
         take: cap.emails + 1,
         select: {direction: true, status: true, fromEmail: true, to: true, cc: true, subject: true, text: true, sentAt: true, openCount: true, clickCount: true},
       }),
-      db.activity.findMany({where: {contactId: id}, orderBy: {createdAt: 'desc'}, take: cap.activities + 1, select: {type: true, title: true, data: true, createdAt: true}}),
+      db.activity.findMany({where: {contactId: id}, orderBy: {createdAt: 'desc'}, take: cap.activities + 1, select: {type: true, title: true, data: true, createdAt: true, contactId: true, companyId: true, dealId: true, ...ENTRY_OWNERS}}),
     ]);
     const parts = {notes, tasks, interactions, emails, activities};
     const truncated = (Object.keys(parts) as (keyof typeof parts)[]).filter((k) => parts[k].length > cap[k]);
@@ -415,7 +416,7 @@ export const contacts = new Hono<AppEnv>()
         tasks: keep(tasks, cap.tasks),
         interactions: keep(interactions, cap.interactions),
         emails: keep(emails, cap.emails),
-        activities: keep(activities, cap.activities),
+        activities: keep(activities, cap.activities).map((a) => exportedEntry(a, scope)),
         ...(truncated.length ? {truncated: Object.fromEntries(truncated.map((k) => [k, `the most recent ${cap[k]} only`]))} : {}),
       },
       null,

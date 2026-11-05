@@ -1,5 +1,3 @@
-import {createHmac} from 'node:crypto';
-
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {getDb} from '../../src/platform/db';
@@ -9,10 +7,10 @@ import {owner, ownerAccountId, resetCrm, teammate, userId} from './support/crm';
 import {type Browser, configureEnv, DATABASE_URL, db, ORIGIN} from './support/harness';
 
 /**
- * The Data in URL (Settings → Webhooks → Incoming): Pabbly / Zapier / Make POST JSON to
- * /site-api/crm/public/data-in/<action>/<access token> with X-Signature-Token. Both tokens are
- * needed; regenerate replaces both; off → 404; rate limit, idempotency and the log as with a key;
- * the signed (API key + HMAC) mode keeps working beside it.
+ * The Data in webhook (Settings → Webhooks → Incoming), the one way in: an automation tool POSTs
+ * JSON to /site-api/crm/public/data-in/<action>/<access token> with X-Signature-Token. Both tokens
+ * are needed; regenerate replaces both; off → 404; rate limit, idempotency and the log; the removed
+ * signed mode (API keys + HMAC) and its key routes answer 404.
  */
 
 const BASE = '/site-api/crm/public/data-in';
@@ -99,7 +97,7 @@ describe.skipIf(!DATABASE_URL)('Kinroot: Data in URL (integration, real Postgres
     expect(setting).not.toContain(ACCESS);
     expect(setting).not.toContain(SIGNATURE);
     const log = await db.dataInRequest.findFirstOrThrow({where: {action: 'contacts.upsert'}, orderBy: {createdAt: 'desc'}});
-    expect([log.status, log.keyName, log.apiKeyId, log.path]).toEqual([201, 'Data in URL', null, '/contacts/{access_token}']);
+    expect([log.status, log.keyName, log.path]).toEqual([201, 'Data in URL', '/contacts/{access_token}']);
     expect(JSON.stringify(log)).not.toContain(ACCESS);
     expect(JSON.stringify(log)).not.toContain(SIGNATURE);
     const revealed = await db.auditLog.findFirstOrThrow({where: {action: 'data_in.url_revealed'}});
@@ -112,7 +110,8 @@ describe.skipIf(!DATABASE_URL)('Kinroot: Data in URL (integration, real Postgres
     expect([unknown.status, unknown.data.error.field]).toEqual([422, 'favouriteColour']);
     const notJson = await send('/contacts', null, {raw: 'email=x%40y.io'});
     expect([notJson.status, code(notJson)]).toEqual([400, 'E_INVALID_JSON']);
-    expect(notJson.data.error.message).toMatch(/Pabbly/);
+    expect(notJson.data.error.message).toMatch(/payload or body type to JSON/);
+    expect(notJson.data.error.message).not.toMatch(/Zapier|Pabbly|Make/);
   });
 
   it('refuses a missing or wrong X-Signature-Token (401) and an unknown access token (404, not logged)', async () => {
@@ -120,9 +119,8 @@ describe.skipIf(!DATABASE_URL)('Kinroot: Data in URL (integration, real Postgres
     expect([missing.status, code(missing), missing.data.error.field]).toEqual([401, 'E_UNAUTHORIZED', 'X-Signature-Token']);
     const wrong = await send('/contacts', {email: 'a@pabbly-url.io'}, {signature: `crm_st_${'x'.repeat(40)}`});
     expect([wrong.status, code(wrong)]).toEqual([401, 'E_UNAUTHORIZED']);
-    // The API's signing secret or an API key is not the signature token.
-    const secret = (await ok(own.post('/site-api/crm/data-in/secret/reveal', {}))).secret;
-    expect((await send('/contacts', {email: 'a@pabbly-url.io'}, {signature: secret})).status).toBe(401);
+    // The access token is not the signature token.
+    expect((await send('/contacts', {email: 'a@pabbly-url.io'}, {signature: ACCESS})).status).toBe(401);
     expect(await db.contact.count({where: {email: 'a@pabbly-url.io'}})).toBe(0);
     expect(await db.dataInRequest.count({where: {status: 401, keyName: 'Data in URL'}})).toBe(3);
 
@@ -185,6 +183,8 @@ describe.skipIf(!DATABASE_URL)('Kinroot: Data in URL (integration, real Postgres
     expect(r.map((x) => x.status)).toEqual([201, 201, 201, 429]);
     expect(code(r[3]!)).toBe('E_RATE_LIMITED');
     await ok(own.request('PATCH', '/site-api/crm/data-in/settings', {rateLimit: 120}));
+    expect(await db.auditLog.count({where: {action: 'data_in.settings_updated', category: 'settings'}})).toBe(2);
+    expect((await ok(own.get('/site-api/crm/data-in/url'))).rateLimit).toBe(120);
     await db.rateHit.deleteMany({});
 
     const big = await send('/contacts', {email: 'big@pabbly-url.io', note: 'x'.repeat(300 * 1024)});
@@ -198,18 +198,16 @@ describe.skipIf(!DATABASE_URL)('Kinroot: Data in URL (integration, real Postgres
     expect(await db.dataInRequest.count({where: {idempotencyKey: 'order-1001', replayed: true}})).toBe(1);
   });
 
-  it('keeps the signed mode (API key + HMAC) working beside it', async () => {
-    const key = (await ok(own.post('/site-api/crm/data-in/keys', {name: 'Website'}), 201)).plain as string;
-    const secret = (await ok(own.post('/site-api/crm/data-in/secret/reveal', {}))).secret as string;
+  it('the signed mode is gone: its public paths, key and secret routes answer 404, and a URL token never works there', async () => {
     const body = JSON.stringify({email: 'signed@pabbly-url.io'});
-    const t = Math.floor(Date.now() / 1000);
-    const v1 = createHmac('sha256', secret).update(`${t}.${body}`).digest('hex');
-    const signed = await hook('POST', `${BASE}/v1/contacts`, {'content-type': 'application/json', authorization: `Bearer ${key}`, 'x-signature': `t=${t},v1=${v1}`}, body);
-    expect(signed.status, JSON.stringify(signed.data)).toBe(201);
-    // The URL's tokens are no API key, and the signed path takes no token.
-    const asBearer = await hook('POST', `${BASE}/v1/contacts`, {'content-type': 'application/json', authorization: `Bearer ${ACCESS}`, 'x-signature': `t=${t},v1=${v1}`}, body);
-    expect([asBearer.status, code(asBearer)]).toEqual([401, 'E_UNAUTHORIZED']);
+    const signed = await hook('POST', `${BASE}/v1/contacts`, {'content-type': 'application/json', authorization: `Bearer ${ACCESS}`, 'x-signature': 't=1,v1=00'}, body);
+    expect([signed.status, code(signed)]).toEqual([404, 'E_NOT_FOUND']);
     const tokenOnV1 = await hook('POST', `${BASE}/v1/contacts/${ACCESS}`, {'content-type': 'application/json', 'x-signature-token': SIGNATURE}, body);
     expect(tokenOnV1.status).toBe(404);
+    expect(await db.contact.count({where: {email: 'signed@pabbly-url.io'}})).toBe(0);
+    expect((await own.get('/site-api/crm/data-in')).status).toBe(404);
+    expect((await own.post('/site-api/crm/data-in/keys', {name: 'Website'})).status).toBe(404);
+    expect((await own.post('/site-api/crm/data-in/secret/reveal', {})).status).toBe(404);
+    expect((await own.post('/site-api/crm/data-in/secret/regenerate', {})).status).toBe(404);
   });
 });

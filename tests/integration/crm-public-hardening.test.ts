@@ -1,4 +1,4 @@
-import {createHash, createHmac} from 'node:crypto';
+import {createHash} from 'node:crypto';
 
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
@@ -16,7 +16,7 @@ import {Browser, configureEnv, DATABASE_URL, db} from './support/harness';
 /**
  * Kinroot's public and team edges after the audit (AUDIT.md P1-5, P2-3, P2-6, P2-8 … P3-2): request
  * size limits, who may change whom on the team, form permissions, link expiry, the public booking
- * slots, the Data in API's unauthenticated requests, rate-limit bursts, CSV headers, the Microsoft
+ * slots, the Data in webhook's unauthenticated requests, rate-limit bursts, CSV headers, the Microsoft
  * tenant, the tinted favicon, the logo in storage and the cached settings.
  */
 
@@ -148,14 +148,17 @@ describe.skipIf(!DATABASE_URL)('Kinroot public hardening (integration, real Post
     expect((await new Browser(app, '198.51.100.78').get(q({}))).status).toBe(404);
   });
 
-  it('answers the Data in API without a valid key but logs nothing, counting it against the connection (P2-10)', async () => {
-    const path = '/site-api/crm/public/data-in/v1/contacts';
-    const noKey = await outside(path, {headers: {'content-type': 'application/json'}, body: '{}'});
-    expect(noKey.status).toBe(401);
-    const badKey = await outside(path, {headers: {'content-type': 'application/json', authorization: `Bearer crm_live_${'z'.repeat(32)}`}, body: '{}'});
-    expect(badKey.status).toBe(401);
+  it('answers the Data in webhook without a valid access token but logs nothing, counting it against the connection (P2-10)', async () => {
+    await own.request('PATCH', '/site-api/crm/data-in/url', {enabled: true});
+    const path = `/site-api/crm/public/data-in/contacts/crm_url_${'z'.repeat(40)}`;
+    const unknown = await outside(path, {headers: {'content-type': 'application/json', 'x-signature-token': 'crm_st_x'}, body: '{}'});
+    expect(unknown.status).toBe(404);
+    const junk = await outside('/site-api/crm/public/data-in/contacts/nope', {headers: {'content-type': 'application/json'}, body: '{}'});
+    expect(junk.status).toBe(404);
     const wrongMethod = await outside(path, {method: 'GET'});
     expect(wrongMethod.status).toBe(404);
+    // The removed signed mode's paths are gone too.
+    expect((await outside('/site-api/crm/public/data-in/v1/contacts', {headers: {'content-type': 'application/json'}, body: '{}'})).status).toBe(404);
     expect(await db.dataInRequest.count()).toBe(0);
     expect(await db.rateHit.count({where: {key: {startsWith: 'datain:bad:'}}})).toBe(3);
     // Over the limit: still answered, still not logged.
@@ -167,15 +170,13 @@ describe.skipIf(!DATABASE_URL)('Kinroot public hardening (integration, real Post
   });
 
   it('gives a Data in record to an invited teammate who has not joined yet (P3-3)', async () => {
-    const key = (await own.post('/site-api/crm/data-in/keys', {name: 'Site'})).json as {plain: string};
-    const secret = (await own.post('/site-api/crm/data-in/secret/reveal', {})).json.secret as string;
+    expect((await own.request('PATCH', '/site-api/crm/data-in/url', {enabled: true})).status).toBe(200);
+    const tokens = (await own.post('/site-api/crm/data-in/url/reveal', {})).json as {accessToken: string; signatureToken: string};
     const invite = await own.post('/site-api/crm/team/invite', {name: 'Ivy', email: 'ivy@example.com', role: 'MEMBER'});
     const ivy = (invite.json.user as {id: string}).id;
-    const body = JSON.stringify({email: 'lead@client.io', owner: 'IVY@example.com'});
-    const t = Math.floor(Date.now() / 1000);
-    const res = await outside('/site-api/crm/public/data-in/v1/contacts', {
-      headers: {'content-type': 'application/json', authorization: `Bearer ${key.plain}`, 'x-signature': `t=${t},v1=${createHmac('sha256', secret).update(`${t}.${body}`).digest('hex')}`},
-      body,
+    const res = await outside(`/site-api/crm/public/data-in/contacts/${tokens.accessToken}`, {
+      headers: {'content-type': 'application/json', 'x-signature-token': tokens.signatureToken},
+      body: JSON.stringify({email: 'lead@client.io', owner: 'IVY@example.com'}),
     });
     expect(res.status, JSON.stringify(res.json)).toBe(201);
     expect((await db.contact.findFirstOrThrow({where: {email: 'lead@client.io'}})).ownerId).toBe(ivy);

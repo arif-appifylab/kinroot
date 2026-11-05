@@ -1,26 +1,23 @@
-import {createHash, createHmac} from 'node:crypto';
-
 import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest';
 
 import {getDb} from '../../../src/platform/db';
 import {inRequestScope} from '../../../src/platform/request-scope';
 import {app} from '../../../src/server/app';
-import {owner, ownerAccountId, resetCrm, teammate, userId} from '../support/crm';
+import {owner, ownerAccountId, resetCrm} from '../support/crm';
 import {type Browser, configureEnv, DATABASE_URL, db, ORIGIN} from '../support/harness';
 
 /**
  * Ported from Kinroot's scripts/test-data-in.mjs
- * The Data in API: keys (shown once, hashed, last used, revoked, owner deactivated), every
- * X-Signature error, the signing secret (Show audited, regenerate), every action with its update
- * path and field errors, Idempotency-Key replays, rate limit, body size, the request log (no keys or
- * secrets), timeline / history / audit entries and automations started by a custom event.
+ * The Data in actions through the Data in webhook (access token in the URL + X-Signature-Token):
+ * every action with its update path and field errors, bad JSON and unknown routes, Idempotency-Key
+ * replays, the request log (no tokens), timeline / history / audit entries and automations started
+ * by a custom event. The URL's own checks (tokens, regenerate, off, rate limit, size, the admin it
+ * acts as) are in crm-data-in-url.test.ts.
  */
 
-const API = '/site-api/crm/public/data-in/v1';
-const now = () => Math.floor(Date.now() / 1000);
-const sign = (secret: string, t: number, body: string) => createHmac('sha256', secret).update(`${t}.${body}`).digest('hex');
+const API = '/site-api/crm/public/data-in';
 
-type Res = {status: number; data: any; headers: Headers; sig?: string};
+type Res = {status: number; data: any; headers: Headers};
 
 /** A request from another service: no session, no CSRF (the route sits before them), its own address. */
 async function hook(method: string, path: string, headers: Record<string, string>, body?: string): Promise<Res> {
@@ -43,24 +40,20 @@ async function hook(method: string, path: string, headers: Record<string, string
 
 let own: Browser;
 let me: {id: string};
-let KEY = '';
-let SECRET = '';
-let keyId = '';
-let n = 0;
+let ACCESS = '';
+let SIGNATURE = '';
+let urlId = '';
 
-type CallOpt = {raw?: string; t?: number; key?: string | null; signature?: string | null; secret?: string; signedBody?: string; idem?: string; method?: string};
-/** Bearer key + X-Signature over "<t>.<raw body>"; options override any part to test the refusals. */
+type CallOpt = {raw?: string; token?: string; signature?: string | null; idem?: string; method?: string};
+/** The action's URL with the access token + X-Signature-Token; options override any part to test the refusals. */
 async function call(path: string, body?: unknown, opt: CallOpt = {}): Promise<Res> {
   const raw = opt.raw ?? JSON.stringify(body ?? {});
-  const t = opt.t ?? now();
   const headers: Record<string, string> = {'content-type': 'application/json'};
-  const key = opt.key === undefined ? KEY : opt.key;
-  if (key) headers.authorization = `Bearer ${key}`;
-  if (opt.signature !== null) headers['x-signature'] = opt.signature ?? `t=${t},v1=${sign(opt.secret ?? SECRET, t, opt.signedBody ?? raw)}`;
+  const sig = opt.signature === undefined ? SIGNATURE : opt.signature;
+  if (sig) headers['x-signature-token'] = sig;
   if (opt.idem) headers['idempotency-key'] = opt.idem;
   const method = opt.method ?? 'POST';
-  const res = await hook(method, API + path, headers, method === 'GET' ? undefined : raw);
-  return {...res, sig: headers['x-signature']};
+  return hook(method, `${API}${path}/${opt.token ?? ACCESS}`, headers, method === 'GET' ? undefined : raw);
 }
 const code = (r: Res) => r.data?.error?.code;
 const field = (r: Res) => r.data?.error?.field;
@@ -84,7 +77,7 @@ const maya = () => ({
   tags: ['Trial', 'api-port'],
 });
 
-describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)', () => {
+describe.skipIf(!DATABASE_URL)('Ported: Data in actions (integration, real Postgres)', () => {
   beforeAll(configureEnv);
   afterAll(async () => {
     await db.$disconnect();
@@ -95,69 +88,24 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     await own.get('/site-api/crm/auth/state');
     await ok(own.post('/site-api/crm/auth/setup', {brandName: 'Kinroot', demoData: false}));
     me = await db.member.findUniqueOrThrow({where: {userId: await ownerAccountId()}, select: {id: true}});
-    const k1 = await ok(own.post('/site-api/crm/data-in/keys', {name: 'Website'}), 201);
-    KEY = k1.plain;
-    keyId = k1.key.id;
-    SECRET = (await ok(own.post('/site-api/crm/data-in/secret/reveal', {}))).secret;
+    await ok(own.request('PATCH', '/site-api/crm/data-in/url', {enabled: true}));
+    const tokens = await ok(own.post('/site-api/crm/data-in/url/reveal', {}));
+    ACCESS = tokens.accessToken;
+    SIGNATURE = tokens.signatureToken;
+    urlId = `url:${((await db.setting.findUniqueOrThrow({where: {key: 'data-in'}})).value as {url: {id: string}}).url.id}`;
   });
 
-  it('shows a key once, stores only its hash and prefix, and audits it and the secret’s Show', async () => {
-    const overview = await ok(own.get('/site-api/crm/data-in'));
-    expect(overview.baseUrl.endsWith('/site-api/crm/public/data-in/v1')).toBe(true);
-    expect(overview.secret.masked.startsWith('crm_sig_') && overview.secret.masked.includes('•')).toBe(true);
-    expect(KEY.startsWith('crm_live_') && KEY.length > 30).toBe(true);
-    const row = await db.apiKey.findUniqueOrThrow({where: {id: keyId}});
-    expect(row.prefix).toBe(KEY.slice(0, 15));
-    expect(row.keyHash).toBe(createHash('sha256').update(`apikey:${KEY}`).digest('hex'));
-    expect(Object.values(row).some(v => typeof v === 'string' && v.includes(KEY))).toBe(false);
-    const listed = overview.keys.find((k: {id: string}) => k.id === keyId);
-    expect(listed.createdBy?.id).toBe(me.id);
-    expect(listed.lastUsedAt).toBeNull();
-    expect(JSON.stringify(overview)).not.toContain(KEY);
-    const keyAudit = await db.auditLog.findFirstOrThrow({where: {action: 'api_key.created', recordId: keyId}});
-    expect(keyAudit.category).toBe('security');
-    expect(JSON.stringify(keyAudit.meta)).not.toContain(KEY);
-    expect((keyAudit.meta as {fingerprint: string}).fingerprint).toHaveLength(12);
-
-    // The signing secret: Show returns it, the overview never does; stored encrypted.
-    expect(SECRET.startsWith('crm_sig_') && SECRET.length > 40).toBe(true);
-    expect(JSON.stringify(overview)).not.toContain(SECRET);
-    const revealAudit = await db.auditLog.findFirstOrThrow({where: {action: 'data_in.secret_revealed'}, orderBy: {createdAt: 'desc'}});
-    expect(revealAudit.category).toBe('security');
-    expect((revealAudit.meta as {fingerprint: string}).fingerprint).toBe(createHash('sha256').update(SECRET).digest('hex').slice(0, 12));
-    expect(JSON.stringify(revealAudit.meta)).not.toContain(SECRET);
-    expect(revealAudit.actorId).toBe(me.id);
-    const setting = await db.setting.findUniqueOrThrow({where: {key: 'data-in'}});
-    expect((setting.value as {secret: string}).secret.startsWith('v1.')).toBe(true);
-    expect(JSON.stringify(setting.value)).not.toContain(SECRET);
-  });
-
-  it('refuses missing or unknown keys, every signature problem, bad JSON and unknown routes', async () => {
+  it('refuses a missing signature token, bad JSON and unknown routes', async () => {
     const sample = {email: 'sig@client-port.io'};
-    const noKey = await call('/contacts', sample, {key: null});
-    expect([noKey.status, code(noKey)]).toEqual([401, 'E_UNAUTHORIZED']);
-    expect(noKey.data.error.message).toMatch(/Bearer/);
-    const badKey = await call('/contacts', sample, {key: `crm_live_${'x'.repeat(32)}`});
-    expect([badKey.status, code(badKey)]).toEqual([401, 'E_UNAUTHORIZED']);
     const noSig = await call('/contacts', sample, {signature: null});
-    expect([noSig.status, code(noSig)]).toEqual([401, 'E_SIGNATURE_MISSING']);
-    expect(code(await call('/contacts', sample, {signature: 'sha256=abc'}))).toBe('E_SIGNATURE_INVALID');
-    expect(code(await call('/contacts', sample, {secret: 'crm_sig_not-the-secret'}))).toBe('E_SIGNATURE_INVALID');
-    expect(code(await call('/contacts', sample, {signedBody: JSON.stringify({email: 'other@client-port.io'})}))).toBe('E_SIGNATURE_INVALID');
-    const expired = await call('/contacts', sample, {t: now() - 400});
-    expect([expired.status, code(expired)]).toEqual([401, 'E_SIGNATURE_EXPIRED']);
-    expect(code(await call('/contacts', sample, {t: now() + 400}))).toBe('E_SIGNATURE_EXPIRED');
-    const first = await call('/contacts', sample);
-    const replay = await call('/contacts', sample, {signature: first.sig});
-    expect(first.status).toBe(201);
-    expect([replay.status, code(replay)]).toEqual([401, 'E_SIGNATURE_REUSED']);
-    expect((await db.apiKey.findUniqueOrThrow({where: {id: keyId}})).lastUsedAt).not.toBeNull();
+    expect([noSig.status, code(noSig), field(noSig)]).toEqual([401, 'E_UNAUTHORIZED', 'X-Signature-Token']);
+    expect((await call('/contacts', sample)).status).toBe(201);
     const notJson = await call('/contacts', undefined, {raw: '{"email": '});
     expect([notJson.status, code(notJson)]).toEqual([400, 'E_INVALID_JSON']);
     expect(code(await call('/contacts', undefined, {raw: '[1,2]'}))).toBe('E_INVALID_JSON');
     const unknown = await call('/nope', {});
     expect([unknown.status, code(unknown)]).toEqual([404, 'E_NOT_FOUND']);
-    expect(await db.dataInRequest.count({where: {path: '/nope'}})).toBe(0);
+    expect(await db.dataInRequest.count({where: {path: {startsWith: '/nope'}}})).toBe(0);
     const get = await call('/contacts', undefined, {method: 'GET'});
     expect([get.status, code(get)]).toEqual([404, 'E_NOT_FOUND']);
   });
@@ -175,7 +123,7 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     expect(created.data).toMatchObject({ok: true, action: 'contacts.upsert', result: {outcome: 'created'}});
     expect(r1.url.endsWith(`/contacts/${r1.id}`)).toBe(true);
     const contact = await db.contact.findUniqueOrThrow({where: {id: r1.id}});
-    expect(contact).toMatchObject({email: EMAIL, title: 'Head of Ops', lifecycleStage: 'LEAD', ownerId: me.id, source: 'API: Website'});
+    expect(contact).toMatchObject({email: EMAIL, title: 'Head of Ops', lifecycleStage: 'LEAD', ownerId: me.id, source: 'API: Data in URL'});
     expect(contact.tags).toEqual(expect.arrayContaining(['trial', 'api-port']));
     expect((contact.custom as Record<string, unknown>)[plan.key]).toBe('Pro');
     const link = await db.contactCompany.findFirstOrThrow({where: {contactId: contact.id}, include: {company: true}});
@@ -185,13 +133,13 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     expect(r1.lists?.[0]).toBe(list.id);
     expect(await db.note.findFirst({where: {contactId: contact.id}})).toMatchObject({body: 'Signed up from the pricing page.', authorId: me.id});
     const act = await db.activity.findFirstOrThrow({where: {contactId: contact.id, type: 'contact_created'}});
-    expect(act.title).toBe('Created by API key Website');
+    expect(act.title).toBe('Created by Data in URL');
     expect((act.data as {source?: {kind: string}}).source?.kind).toBe('api');
     expect(act.actorId).toBe(me.id);
     expect((await db.event.findFirstOrThrow({where: {type: 'contact.created', recordId: contact.id}})).actorId).toBe(me.id);
     const au = await db.auditLog.findFirstOrThrow({where: {action: 'contact.created', recordId: contact.id}});
     expect(au.actorId).toBe(me.id);
-    expect(au.meta).toMatchObject({dataInKey: {id: keyId}, source: {kind: 'api'}});
+    expect(au.meta).toMatchObject({dataInUrl: {id: urlId.slice(4)}, source: {kind: 'api'}});
 
     // Same email: only the sent fields change; null clears; tags are added.
     const upd = await call('/contacts', {email: EMAIL, jobTitle: 'COO', phone: null, tags: ['vip']});
@@ -200,12 +148,12 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     expect(after).toMatchObject({title: 'COO', phone: null, lastName: 'Patel'});
     expect(after.tags).toEqual(expect.arrayContaining(['vip', 'trial']));
     const changed = await db.activity.findFirstOrThrow({where: {contactId: contact.id, type: 'field_changed'}, orderBy: {createdAt: 'desc'}});
-    expect(changed.title).toBe('Updated by API key Website');
+    expect(changed.title).toBe('Updated by Data in URL');
     expect((changed.data as {changes: {field: string; from: unknown; to: unknown}[]}).changes).toContainEqual(expect.objectContaining({field: 'title', from: 'Head of Ops', to: 'COO'}));
     const hist = await ok(own.get(`/site-api/crm/history?entity=contact&id=${contact.id}&take=100`));
     const histRow = hist.rows?.find((r: {field: string; to: unknown}) => r.field === 'title' && r.to === 'COO');
-    expect(histRow?.actor).toMatchObject({kind: 'api', name: 'API: Website'});
-    expect(await db.auditLog.count({where: {action: 'contact.updated', recordId: contact.id, meta: {path: ['dataInKey', 'id'], equals: keyId}}})).toBe(1);
+    expect(histRow?.actor).toMatchObject({kind: 'api', name: 'API: Data in URL'});
+    expect(await db.auditLog.count({where: {action: 'contact.updated', recordId: contact.id, meta: {path: ['dataInUrl', 'id'], equals: urlId.slice(4)}}})).toBe(1);
     const same = await call('/contacts', {email: EMAIL, jobTitle: 'COO'});
     expect([same.status, same.data.result.outcome]).toEqual([200, 'unchanged']);
 
@@ -242,7 +190,7 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     const company = await db.company.findUniqueOrThrow({where: {id: co1.data.result.id}});
     expect(company).toMatchObject({domain: 'acme-port.example', name: 'Acme Port', employees: 120});
     expect(company.tags).toContain('partner');
-    expect(await db.activity.count({where: {companyId: company.id, type: 'company_created', title: 'Created by API key Website'}})).toBe(1);
+    expect(await db.activity.count({where: {companyId: company.id, type: 'company_created', title: 'Created by Data in URL'}})).toBe(1);
     const co2 = await call('/companies', {name: company.name.toUpperCase(), city: 'Berlin'});
     expect([co2.status, co2.data.result.id, co2.data.result.outcome]).toEqual([200, company.id, 'updated']);
     expect(field(await call('/companies', {domain: 'acme-port.example', employees: 'many'}))).toBe('employees');
@@ -272,7 +220,7 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     expect(d1.data.result.contactOutcome).toBe('created');
     expect(await db.dealContact.count({where: {dealId: deal.id, contactId: bea.id}})).toBe(1);
     expect((await db.company.findUniqueOrThrow({where: {id: deal.companyId!}})).name).toBe('Buyer Co');
-    expect(await db.activity.count({where: {dealId: deal.id, type: 'deal_created', title: {startsWith: 'Deal created by API key'}}})).toBe(1);
+    expect(await db.activity.count({where: {dealId: deal.id, type: 'deal_created', title: {startsWith: 'Deal created by Data in URL'}}})).toBe(1);
     expect(await db.event.count({where: {type: 'deal.created', recordId: deal.id}})).toBe(1);
     const d2 = await call('/deals', {title: 'Won deal', contactEmail: buyer, status: 'won'});
     expect(d2.status).toBe(201);
@@ -361,7 +309,7 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     expect(e1.status, JSON.stringify(e1.data)).toBe(201);
     const ev = await db.event.findUniqueOrThrow({where: {id: e1.data.result.eventId}});
     expect(ev.type).toBe('data_in.received');
-    expect(ev.data).toMatchObject({event: 'trial.started', contactId, properties: {seats: 12}, key: {id: keyId}});
+    expect(ev.data).toMatchObject({event: 'trial.started', contactId, properties: {seats: 12}, key: {id: urlId, name: 'Data in URL'}});
     expect(await db.activity.count({where: {contactId, type: 'data_in_event', title: 'Event: trial.started'}})).toBe(1);
     // Jobs run as they are sent here: the automation has run by the time the answer is back.
     let tags: string[] = [];
@@ -379,11 +327,8 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
   it('answers a repeated Idempotency-Key with the stored answer and runs the action once', async () => {
     const idemEmail = 'idem@client-port.io';
     const body = {email: idemEmail, firstName: 'Ida'};
-    // Re-signed with another time (the same body signed in the same second is a reused signature).
-    // One clock reading for both: a second ticking between the calls must not make them equal.
-    const t0 = now();
-    const i1 = await call('/contacts', body, {idem: 'order-1', t: t0});
-    const i2 = await call('/contacts', body, {idem: 'order-1', t: t0 - 1});
+    const i1 = await call('/contacts', body, {idem: 'order-1'});
+    const i2 = await call('/contacts', body, {idem: 'order-1'});
     expect([i1.status, i2.status]).toEqual([201, 201]);
     expect(canon(i2.data)).toBe(canon(i1.data));
     expect(i2.headers.get('idempotent-replayed')).toBe('true');
@@ -397,74 +342,25 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     expect((await call('/contacts', {email: 'fixed@client-port.io'}, {idem: 'bad-1'})).status).toBe(201);
   });
 
-  it('refuses a body over the limit and a key over its rate limit (per key), and audits the change', async () => {
-    const big = await call('/contacts', {email: 'big@client-port.io', note: 'x'.repeat(300 * 1024)});
-    expect([big.status, code(big)]).toEqual([413, 'E_PAYLOAD_TOO_LARGE']);
-    const k2 = await ok(own.post('/site-api/crm/data-in/keys', {name: 'Limited'}), 201);
-    await ok(own.request('PATCH', '/site-api/crm/data-in/settings', {rateLimit: 3}));
-    const limited: Res[] = [];
-    for (let i = 0; i < 4; i++) limited.push(await call('/events', {event: 'ping', properties: {n: n++}}, {key: k2.plain}));
-    expect(limited.map(r => r.status)).toEqual([201, 201, 201, 429]);
-    expect(code(limited[3]!)).toBe('E_RATE_LIMITED');
-    const k3 = await ok(own.post('/site-api/crm/data-in/keys', {name: 'Other'}), 201);
-    expect((await call('/events', {event: 'ping', properties: {n: n++}}, {key: k3.plain})).status).toBe(201);
-    await ok(own.request('PATCH', '/site-api/crm/data-in/settings', {rateLimit: 120}));
-    expect(await db.auditLog.count({where: {action: 'data_in.settings_updated', category: 'settings'}})).toBeGreaterThan(0);
-  });
-
-  it('acts as the key’s creator, refuses it once they are deactivated, and refuses a revoked key', async () => {
-    const {browser: admin2} = await teammate(own, 'admin.two@example.com', 'ADMIN');
-    const adminId = (await db.member.findUniqueOrThrow({where: {userId: await userId('admin.two@example.com')}})).id;
-    const k3 = await ok(admin2.post('/site-api/crm/data-in/keys', {name: 'Admin two'}), 201);
-    const owned = await call('/contacts', {email: 'owned@client-port.io'}, {key: k3.plain});
-    expect(owned.status).toBe(201);
-    expect((await db.contact.findUniqueOrThrow({where: {id: owned.data.result.id}})).ownerId).toBe(adminId);
-    await ok(own.request('PATCH', `/site-api/crm/team/${adminId}`, {active: false}));
-    const inactive = await call('/contacts', {email: 'owned2@client-port.io'}, {key: k3.plain});
-    expect([inactive.status, code(inactive)]).toEqual([403, 'E_KEY_OWNER_INACTIVE']);
-
-    const k2 = await ok(own.post('/site-api/crm/data-in/keys', {name: 'Soon revoked'}), 201);
-    const revoked = await ok(own.delete(`/site-api/crm/data-in/keys/${k2.key.id}`));
-    expect(revoked.key.revokedAt).toBeTruthy();
-    const after = await call('/events', {event: 'ping', properties: {n: n++}}, {key: k2.plain});
-    expect([after.status, code(after)]).toEqual([401, 'E_UNAUTHORIZED']);
-    expect(after.data.error.message).toMatch(/revoked/);
-    expect(await db.auditLog.count({where: {action: 'api_key.revoked', recordId: k2.key.id, category: 'security'}})).toBe(1);
-  });
-
-  it('regenerates the signing secret: old signatures are refused at once, the new secret works', async () => {
-    const oldSecret = SECRET;
-    const regen = await ok(own.post('/site-api/crm/data-in/secret/regenerate', {}));
-    expect(JSON.stringify(regen)).not.toContain(oldSecret);
-    expect(regen.secret.masked.startsWith('crm_sig_')).toBe(true);
-    const oldSig = await call('/events', {event: 'ping', properties: {n: n++}}, {secret: oldSecret});
-    expect([oldSig.status, code(oldSig)]).toEqual([401, 'E_SIGNATURE_INVALID']);
-    SECRET = (await ok(own.post('/site-api/crm/data-in/secret/reveal', {}))).secret;
-    expect(SECRET).not.toBe(oldSecret);
-    expect((await call('/events', {event: 'ping', properties: {n: n++}})).status).toBe(201);
-    expect(await db.auditLog.count({where: {action: 'data_in.secret_regenerated', category: 'security'}})).toBe(1);
-  });
-
-  it('logs requests with their key, records and outcome, filters them, and never keeps keys, secrets or Authorization', async () => {
+  it('logs requests with their sender, records and outcome, filters them, and never keeps tokens', async () => {
     const created = await call('/contacts', maya());
     const contactId = created.data.result.id;
-    await call('/contacts', maya(), {signature: created.sig}); // the same request again: a reused signature
+    await call('/contacts', maya(), {signature: `crm_st_${'x'.repeat(40)}`}); // a wrong signature token: refused, logged
     await call('/contacts', {email: 'big@client-port.io', note: 'x'.repeat(300 * 1024)});
-    await call('/contacts', {email: 'x@client-port.io'}, {key: `crm_live_${'y'.repeat(32)}`});
 
     const logs = await ok(own.get('/site-api/crm/data-in/logs?action=contacts.upsert'));
     expect(logs.rows.length).toBeGreaterThan(0);
     expect(logs.rows.every((r: {action: string}) => r.action === 'contacts.upsert')).toBe(true);
     const createdLog = logs.rows.find((r: {status: number; records: {entity: string; id: string}[]}) => r.status === 201 && r.records.some(x => x.entity === 'contact' && x.id === contactId));
-    const k = await db.apiKey.findUniqueOrThrow({where: {id: keyId}});
-    expect(createdLog.key).toMatchObject({name: 'Website', prefix: k.prefix});
+    expect(createdLog.key).toEqual({name: 'Data in URL', prefix: ACCESS.slice(0, 12)});
+    expect(createdLog.path).toBe('/contacts/{access_token}');
     expect(createdLog.durationMs).toBeGreaterThanOrEqual(0);
     expect(createdLog.response?.ok).toBe(true);
     expect(createdLog.body).toContain(EMAIL.toUpperCase());
     const failed = await ok(own.get('/site-api/crm/data-in/logs?status=failed'));
     expect(failed.rows.length).toBeGreaterThan(0);
     expect(failed.rows.every((r: {status: number}) => r.status >= 400)).toBe(true);
-    expect(failed.rows.some((r: {errorCode: string}) => r.errorCode === 'E_SIGNATURE_REUSED')).toBe(true);
+    expect(failed.rows.some((r: {errorCode: string}) => r.errorCode === 'E_UNAUTHORIZED')).toBe(true);
     const today = new Date().toISOString().slice(0, 10);
     const dated = await ok(own.get(`/site-api/crm/data-in/logs?from=${today}&to=${today}&q=E_PAYLOAD`));
     expect(dated.rows.length).toBeGreaterThanOrEqual(1);
@@ -475,12 +371,12 @@ describe.skipIf(!DATABASE_URL)('Ported: Data in API (integration, real Postgres)
     const pwdLog = await db.dataInRequest.findFirstOrThrow({orderBy: {createdAt: 'desc'}, select: {body: true}});
     expect(pwdLog.body).toContain('[redacted]');
     expect(pwdLog.body).not.toContain('p4ss-should-not-log');
-    const rows = await db.dataInRequest.findMany({select: {body: true, response: true}});
-    const all = JSON.stringify(rows);
-    expect(all).not.toContain(KEY);
-    expect(all).not.toContain(SECRET);
-    expect(all).not.toMatch(/Bearer |authorization/i);
-    // A request without a valid key is answered but never logged (AUDIT P2-10): anyone could fill the log.
-    expect(await db.dataInRequest.count({where: {errorCode: 'E_UNAUTHORIZED'}})).toBe(0);
+    const all = JSON.stringify(await db.dataInRequest.findMany());
+    expect(all).not.toContain(ACCESS);
+    expect(all).not.toContain(SIGNATURE);
+    // A request without a valid access token is answered but never logged (AUDIT P2-10): anyone could fill the log.
+    const before = await db.dataInRequest.count();
+    expect((await call('/contacts', {email: 'x@client-port.io'}, {token: `crm_url_${'y'.repeat(40)}`})).status).toBe(404);
+    expect(await db.dataInRequest.count()).toBe(before);
   });
 });

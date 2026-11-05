@@ -69,12 +69,33 @@ export async function notifyWatchers(
   const followers = settings.recordVisibility === 'owner' ? followRows.filter((f) => isAdmin(f.user) || owners.has(f.userId)) : followRows;
   const name = deal?.title ?? (contact ? [contact.firstName, contact.lastName].filter(Boolean).join(' ') : null) ?? company?.name ?? 'a record';
   const except = new Set(input.except ?? []);
-  const ids = [contact?.ownerId, company?.ownerId, deal?.ownerId, ...followers.map((f) => f.userId)].filter((id) => id && !except.has(id));
-  await notify(db, ids, {
-    ...input,
-    title: typeof input.title === 'function' ? input.title(name) : input.title,
-    link: input.link ?? linkFor(link),
-  });
+  const ids = [contact?.ownerId, company?.ownerId, deal?.ownerId, ...followers.map((f) => f.userId)].filter((id): id is string => !!id && !except.has(id));
+  const title = input.title;
+  if (typeof title !== 'function' || settings.recordVisibility !== 'owner') {
+    await notify(db, ids, {...input, title: typeof title === 'function' ? title(name) : title, link: input.link ?? linkFor(link)});
+    return;
+  }
+  // Owner-only visibility: each person reads the name (and opens the link) of a record they may
+  // see. A note can be on their contact and on someone else's deal (AUDIT-2 L-2).
+  const roles = new Map(followRows.map((f) => [f.userId, f.user.role]));
+  const unknown = ids.filter((id) => !roles.has(id));
+  if (unknown.length) for (const m of await db.member.findMany({where: {id: {in: unknown}}, select: {id: true, role: true}})) roles.set(m.id, m.role);
+  const contactName = contact ? [contact.firstName, contact.lastName].filter(Boolean).join(' ') || 'a contact' : null;
+  const groups = new Map<string, {name: string; link: string | null; ids: string[]}>();
+  for (const id of new Set(ids)) {
+    const role = roles.get(id);
+    const seen =
+      role && isAdmin({role}) ? {name, link: linkFor(link)}
+      : deal && link.dealId && deal.ownerId === id ? {name: deal.title, link: recordLink.deal(link.dealId)}
+      : contact && link.contactId && contact.ownerId === id ? {name: contactName!, link: recordLink.contact(link.contactId)}
+      : company && link.companyId && company.ownerId === id ? {name: company.name, link: recordLink.company(link.companyId)}
+      : null;
+    if (!seen) continue;
+    const key = `${seen.name}\n${seen.link}`;
+    if (!groups.has(key)) groups.set(key, {...seen, ids: []});
+    groups.get(key)!.ids.push(id);
+  }
+  await Promise.all([...groups.values()].map((g) => notify(db, g.ids, {...input, title: title(g.name), link: input.link ?? g.link})));
 }
 
 /**

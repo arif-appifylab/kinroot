@@ -1,7 +1,6 @@
 /**
  * Record writes shared by the inputs that create CRM data outside a signed-in
- * page: incoming webhooks (src/server/lib/incoming-webhooks.ts) and the Data
- * in API (src/server/lib/data-in.ts). Every write keeps the timeline, events
+ * page: the Data in webhook (src/server/crm/lib/data-in.ts). Every write keeps the timeline, events
  * (and so scoring, automations and outgoing webhooks), audit log,
  * notifications, duplicate checks and domain links in step, the way the
  * contact / company / deal routes do. Callers validate first (`contactBody`,
@@ -21,25 +20,21 @@ import {rememberOption} from './settings';
 import {clip, COMPANY_LIMITS, CONTACT_LIMITS, DEAL_LIMITS} from '@/lib/record-limits';
 
 export type Writer = {
-  /** Reads after "Created by" / "Updated by": `incoming webhook Stripe`, `API key Zapier`. */
+  /** Reads after "Created by" / "Updated by": `Data in URL`. */
   by: string;
-  /** Timeline `data.source`: property history shows "Webhook: <name>" / "API: <name>". */
-  source: {kind: 'webhook' | 'api'; name: string};
-  /** Extra timeline data on every entry (e.g. {webhookId}). */
+  /** Timeline `data.source`: property history shows "API: <name>". */
+  source: {kind: 'api'; name: string};
+  /** Extra timeline data on every entry (e.g. {dataInUrl}). */
   data?: Record<string, unknown>;
-  /** Audit meta on every entry (e.g. {source: 'incoming webhook', webhook, webhookId}). */
+  /** Audit meta on every entry (e.g. {source, dataInUrl, action}). */
   meta: Record<string, unknown>;
-  /** The teammate the write acts for (API keys act as their creator); none for webhooks. */
+  /** The teammate the write acts for (the admin who turned the Data in webhook on). */
   actor?: {id: string; name: string; email: string} | null;
-  /** Runs a create at most once (a retried job gets the id of the first run). Default: runs it. */
-  once?: (key: string, create: () => Promise<string>) => Promise<string>;
 };
 
 type Change = {field: string; from: unknown; to: unknown};
 
-const lower = (s: string) => s.trim().toLowerCase();
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-const run = (w: Writer, key: string, create: () => Promise<string>) => (w.once ? w.once(key, create) : create());
 const actorId = (w: Writer) => w.actor?.id ?? null;
 const auditActor = (w: Writer) => (w.actor ? {actor: w.actor} : {});
 const timelineData = (w: Writer, extra: Record<string, unknown> = {}) => ({...extra, source: w.source, ...w.data}) as Prisma.InputJsonValue;
@@ -161,11 +156,8 @@ export async function resolveCompany(db: Db, w: Writer, ref: {name?: string; dom
   if (found) return {id: found.id, name: found.name, created: false};
   const name = ref.name || (ref.domain ? nameFromDomain(ref.domain) : null);
   if (!name) return null;
-  const id = await run(w, `company:${ref.domain ?? lower(name)}`, async () => {
-    const company = await createCompanyRecord(db, w, {name, domain: ref.domain ?? null, website: ref.domain ? `https://${ref.domain}` : null, ownerId});
-    return company.id;
-  });
-  return {id, name, created: true};
+  const company = await createCompanyRecord(db, w, {name, domain: ref.domain ?? null, website: ref.domain ? `https://${ref.domain}` : null, ownerId});
+  return {id: company.id, name, created: true};
 }
 
 // ─── Deals ──────────────────────────────────────────────────────────────────

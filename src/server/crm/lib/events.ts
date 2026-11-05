@@ -9,7 +9,7 @@ import {queueAutomations} from './automation-hook';
 const DELIVERIES_PER_JOB = 20;
 
 type EmitInput = {
-  entity?: 'contact' | 'company' | 'deal' | 'task' | 'note' | 'email' | 'interaction' | 'file' | 'form' | 'list' | 'ticket' | 'automation' | 'report' | 'conversation' | 'incoming_webhook' | 'data_in';
+  entity?: 'contact' | 'company' | 'deal' | 'task' | 'note' | 'email' | 'interaction' | 'file' | 'form' | 'list' | 'ticket' | 'automation' | 'report' | 'conversation' | 'data_in';
   recordId?: string | null;
   actorId?: string | null;
   /** The record (or a summary of the change). Dates become ISO strings. */

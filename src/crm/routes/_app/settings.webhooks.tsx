@@ -17,7 +17,6 @@ import {LoadError} from '@/components/data-table';
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger} from '@/components/ui/menu';
 import {EmptyState, IconBadge, Tabs, TabsList, TabsTrigger} from '@/components/ui/misc';
 import {DataInSettings} from '@/components/webhooks/data-in';
-import {IncomingWebhooks} from '@/components/webhooks/incoming-webhooks';
 import {CodeBlock, copy, Disclosure} from '@/components/webhooks/shared';
 import {api} from '@/lib/api';
 import {pageTitle} from '@/lib/brand';
@@ -26,7 +25,7 @@ import {ago, dateTime} from '@/lib/format';
 import {keys, useApiMutation, useMe} from '@/lib/queries';
 import type {JobsStatus, Webhook, WebhookDelivery} from '@/lib/types';
 import {cn} from '@/lib/utils';
-import {WEBHOOK_SERVICE_NAMES, webhookTarget} from '@/lib/webhook-targets';
+import {WEBHOOK_HINT, WEBHOOK_REFUSED, webhookTarget} from '@/lib/webhook-targets';
 
 export const Route = createFileRoute('/_app/settings/webhooks')({
   head: () => ({meta: [{title: pageTitle('Webhooks')}]}),
@@ -68,10 +67,7 @@ function WebhookSettings() {
         </TabsList>
       </Tabs>
       {tab === 'incoming' ? (
-        <>
-          <DataInSettings />
-          <IncomingWebhooks />
-        </>
+        <DataInSettings />
       ) : (
         <OutgoingWebhooks />
       )}
@@ -93,7 +89,7 @@ function OutgoingWebhooks() {
     <>
       <SettingsSection
         title="Outgoing webhooks"
-        description="Send events to other tools (Zapier, Make, n8n, Slack and more) as they happen. Every request is signed so the receiver can trust it."
+        description="Send events to your automation and chat tools as they happen. Every request is signed so the receiver can trust it."
         actions={<Button size="sm" onClick={() => setEditing('new')}><Plus /> Add webhook</Button>}
       >
         {list.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
@@ -215,7 +211,7 @@ function WebhookDialog({hook, onClose, onCreated, onDeliveries}: {hook: Webhook 
   );
   // Order follows the catalogue, so "first selected" is stable whatever order they were ticked in.
   const f = useFormState({url, description}, {
-    url: [is.required('Enter the webhook URL.'), is.maxLength(2000), (v) => (webhookTarget(v) ? null : `Use a webhook URL from ${WEBHOOK_SERVICE_NAMES}.`)],
+    url: [is.required('Enter the webhook URL.'), is.maxLength(2000), (v) => (webhookTarget(v) ? null : WEBHOOK_REFUSED)],
     description: [is.maxLength(200)],
   });
   const ordered = EVENT_TYPES.filter((t) => events.includes(t));
@@ -232,18 +228,18 @@ function WebhookDialog({hook, onClose, onCreated, onDeliveries}: {hook: Webhook 
           <DialogBody>
             <div className="grid grid-cols-1 gap-6 @4xl:grid-cols-[minmax(0,1fr)_400px]">
               <div className="grid min-w-0 content-start gap-5">
-                <Field label="Endpoint URL" htmlFor={`${ids}-url`} error={f.error('url')} hint={`Webhooks go to ${WEBHOOK_SERVICE_NAMES}.`}>
+                <Field label="Endpoint URL" htmlFor={`${ids}-url`} error={f.error('url')} hint={WEBHOOK_HINT}>
                   <Input
                     id={`${ids}-url`}
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     onBlur={f.blur('url')}
-                    placeholder="https://hooks.zapier.com/hooks/catch/…"
+                    placeholder="https://…"
                     type="url"
                     autoFocus
                   />
                 </Field>
-                <Field label="Description" htmlFor={`${ids}-desc`} hint="Optional, e.g. “Zapier: post won deals to Slack”" error={f.error('description')}>
+                <Field label="Description" htmlFor={`${ids}-desc`} hint="Optional, e.g. “Post won deals to the sales channel”" error={f.error('description')}>
                   <Input id={`${ids}-desc`} value={description} onChange={(e) => setDescription(e.target.value)} onBlur={f.blur('description')} maxLength={200} />
                 </Field>
 

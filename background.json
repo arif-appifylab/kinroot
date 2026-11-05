@@ -75,9 +75,6 @@
     "crm-chat-email-visitor": {
       "retries": 5
     },
-    "crm-incoming-webhook-process": {
-      "retries": 5
-    },
     "crm-tick": {
       "retries": 0,
       "concurrency": 1

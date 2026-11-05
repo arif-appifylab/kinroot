@@ -118,7 +118,7 @@ export async function createInteraction(db: Db, data: Prisma.InteractionUnchecke
 /**
  * A call, meeting or message logged by `author`: createInteraction(), the
  * `interaction.logged` event and follower notifications. Shared by this route
- * and the Data in API.
+ * and the Data in webhook.
  */
 export async function logInteraction(db: Db, data: Omit<Prisma.InteractionUncheckedCreateInput, 'authorId'>, author: {id: string; name: string}) {
   const interaction = await createInteraction(db, {...data, authorId: author.id});

@@ -16,7 +16,7 @@ template's stack and rules. Where a rule forces a visible change, it is listed b
 | 5 | Forms, lists and segments, broadcasts | done |
 | 6 | Tickets + support portal, meetings + booking pages, calendar sync | done |
 | 7 | Lead scoring, reports, dashboards, goals, scheduled reports, automations | done |
-| 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API | done |
+| 8 | Duplicates, import / export, outgoing webhooks, incoming webhooks, Data in API (5 Nov: incoming is now the Data in webhook only, AUDIT-2 OR-ONE-INCOMING) | done |
 | 9 | Public site pages (`/`, `/contact/`, `/demo/`), SEO, tests ported to vitest, build, `review.md` | done |
 | 10 | Kinroot's design everywhere: sign-in, account and admin on the template's backend; template pages removed | done |
 | 11 | Clean-up (job board and payments removed) and the audit (`AUDIT.md`): wave 1, then the rest | done (see AUDIT.md for the few partly done items) |
@@ -193,13 +193,11 @@ Webhooks card only reports status and points there.
 
 - Outgoing webhooks (Settings → Webhooks): only to the services in `src/crm/lib/webhook-targets.ts`, checked
   when saved (error under the field) and again before each delivery (a URL edited in later fails, never fetched).
-  Writes built field by field; the audit log names the service and host (`webhookLabel`), never the hook path.
-- Incoming webhooks: every request proves the sender (secret header or HMAC-SHA256 of the raw body). The key is
-  an owner-added site secret named `INCOMING_…` (`config.ownerSecret`), never stored in Kinroot; the hook keeps
-  only its name (`IncomingWebhook.secretName`, migration `20261102130000`; the old encrypted `secret` column is
-  unused, dropped in a later contract step). New hooks start with a check and a suggested name; requests are
-  refused until the owner adds it. "URL only" is gone. The request log keeps no address headers.
-- Data in API unchanged: its keys are Kinroot's own (hashed, rate limited per hashed address, optional signature).
+  Writes built field by field; the audit log names the host only (`webhookLabel`), never the hook path or a tool's name.
+- Incoming data (5 Nov, owner's decision): ONE method, the Data in webhook (access token in the URL +
+  `X-Signature-Token` header; `src/crm/lib/data-in-url.ts`). The field-mapped incoming webhooks and the Data in
+  API keys + HMAC signatures were removed with their tables (migration `20261105100000_one_incoming_method`;
+  AUDIT-2 OR-ONE-INCOMING). No third-party tool names in the product.
 - Background jobs card: no `CRON_SECRET` / `/jobs/run` instructions (the platform schedules `crm-tick`); "Failed
   (7 days)" counts failed deliveries again; both numbers capped at 100 ("99+").
 - Job handlers load with Kinroot's app (`import '../background'` in `crm/app.ts`): locally and in the Preview, jobs sent
@@ -275,7 +273,8 @@ Webhooks card only reports status and points there.
    link or button that opens the hosted page (no CORS, `X-Frame-Options: DENY`).
 5. Turnstile removed (outside script blocked by the CSP): rate limits + honeypot instead.
 6. Support portal magic link → the site's own sign-in (6-digit code), tickets matched by verified email.
-7. Inbound email and incoming webhooks verify the sender's signature with an owner-added signing secret.
+7. Inbound email verifies the sender's signature with an owner-added signing secret (the Data in webhook
+   checks its own signature token).
 8. No first-run `/setup`: the platform makes the owner. "Load demo data" becomes an owner-only button.
 9. Owner turns on Storage (a pack) for uploads; jobs default to 10 new a minute (batched to fit).
 

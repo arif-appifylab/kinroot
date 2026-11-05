@@ -434,15 +434,29 @@ async function contactCandidates(db: Db, k: ContactKeys, exclude: string[]) {
   return rows.map((r) => r.id);
 }
 
+/**
+ * Company candidates, the same way (AUDIT-2 L-13): every branch is served by a trigram index
+ * (`Company_domain_trgm_idx`, `Company_name_trgm_idx`) and capped, best first. The domain as a
+ * substring of the stored domain (stored as typed by imports: `www.`, a path); the name by pg_trgm
+ * word similarity (`<%`) and by its first word at the start ("Acme" finds "The Acme Holdings Ltd",
+ * whose legal words lower the similarity). Normalised names and the checked domain hold no LIKE
+ * wildcards. A company known only by its website is left to the 6-hourly scan, which reads it.
+ */
 async function companyCandidates(db: Db, k: CompanyKeys, exclude: string[]) {
-  const prefix = k.name.replace(/ /g, '').slice(0, 3);
+  const branches: Prisma.Sql[] = [];
+  if (k.domain && /^[a-z0-9.-]+$/.test(k.domain)) {
+    branches.push(Prisma.sql`SELECT c.id FROM "Company" c WHERE c.domain ILIKE ${`%${k.domain}%`} ORDER BY lower(c.domain) = ${k.domain}::text DESC LIMIT 50`);
+  }
+  if (k.name) {
+    branches.push(Prisma.sql`SELECT c.id FROM "Company" c WHERE ${k.name}::text <% c.name ORDER BY word_similarity(${k.name}::text, c.name) DESC LIMIT 100`);
+    // A 1-2 letter first word would match most names: the similarity branch covers those.
+    const first = k.name.split(' ')[0]!;
+    if (first.length >= 3) branches.push(Prisma.sql`SELECT c.id FROM "Company" c WHERE c.name ILIKE ${`${first}%`} OR c.name ILIKE ${`the ${first}%`} ORDER BY similarity(${k.name}::text, c.name) DESC LIMIT 100`);
+  }
+  if (!branches.length) return [];
   const rows = await db.$queryRaw<{id: string}[]>`
-    SELECT c.id FROM "Company" c
-    WHERE ${notIn(exclude)} AND (
-      (${k.domain}::text IS NOT NULL AND (lower(c.domain) = ${k.domain}
-        OR regexp_replace(regexp_replace(lower(coalesce(c.website, '')), '^https?://(www\\.)?', ''), '[/?#].*$', '') = ${k.domain}))
-      OR (${prefix}::text <> '' AND lower(left(regexp_replace(regexp_replace(lower(c.name), '^the\\s+', ''), '[^a-z0-9]', '', 'g'), 3)) = ${prefix})
-    )
+    SELECT DISTINCT c.id FROM (${Prisma.join(branches.map((b) => Prisma.sql`(${b})`), ' UNION ALL ')}) c
+    WHERE ${notIn(exclude)}
     LIMIT 300`;
   return rows.map((r) => r.id);
 }

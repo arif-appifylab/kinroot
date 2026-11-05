@@ -10,6 +10,7 @@ import {cleanCustom} from '../lib/custom-fields';
 import {forgetPairs, queueDuplicateCheck} from '../lib/duplicates';
 import {emit, emitMany} from '../lib/events';
 import {custom, fieldError, httpUrl, listQuery, notFound, optStr, optText, ownerScope, sortBy, tags, valid} from '../lib/http';
+import {ENTRY_OWNERS, exportedEntry} from '../lib/shown-activity';
 import {COMPANY_LIMITS, copyName} from '@/lib/record-limits';
 import {adoptContactsForDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
@@ -285,9 +286,9 @@ export const companies = new Hono<AppEnv>()
       db.note.findMany({where: {companyId: id}, orderBy: {createdAt: 'asc'}}),
       db.task.findMany({where: {companyId: id}, orderBy: {createdAt: 'asc'}}),
       db.interaction.findMany({where: {companyId: id}, orderBy: {occurredAt: 'asc'}}),
-      db.activity.findMany({where: {companyId: id}, orderBy: {createdAt: 'asc'}, select: {type: true, title: true, data: true, createdAt: true}}),
+      db.activity.findMany({where: {companyId: id}, orderBy: {createdAt: 'asc'}, select: {type: true, title: true, data: true, createdAt: true, contactId: true, companyId: true, dealId: true, ...ENTRY_OWNERS}}),
     ]);
-    const body = JSON.stringify({exportedAt: new Date().toISOString(), company, notes, tasks, interactions, activities}, null, 2);
+    const body = JSON.stringify({exportedAt: new Date().toISOString(), company, notes, tasks, interactions, activities: activities.map((a) => exportedEntry(a, scope))}, null, 2);
     const slug = company.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     await audit(db, c, {action: 'export.json', entity: 'company', recordId: id, label: company.name});
     return new Response(body, {headers: {'content-type': 'application/json; charset=utf-8', 'content-disposition': `attachment; filename="company-${slug}.json"`}});

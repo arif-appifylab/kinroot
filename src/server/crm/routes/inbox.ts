@@ -13,6 +13,7 @@ import {associateByDomain} from '../lib/domains';
 import {checkDuplicates} from '../lib/duplicates';
 import {emit} from '../lib/events';
 import {fieldError, intParam, MAX_PAGE, notFound, ownerScope, shownLink, valid} from '../lib/http';
+import {ENTRY_OWNERS, shownEntry} from '../lib/shown-activity';
 import {mentionedUsers, notify, notifyMentions} from '../lib/notify';
 import {stripQuoted} from '../lib/ticket-mail';
 import {createTicket} from '../lib/tickets';
@@ -263,7 +264,7 @@ export const inbox = new Hono<AppEnv>()
       companyId ? db.company.findFirst({where: {id: companyId, ...owner}, select: {id: true, name: true, domain: true, industry: true}}) : null,
       contact ? db.deal.findMany({where: {status: 'OPEN', contacts: {some: {contactId: contact.id}}, ...owner}, orderBy: {updatedAt: 'desc'}, take: 5, select: {id: true, title: true, value: true, currency: true, status: true, stage: {select: {name: true}}}}) : [],
       contact ? db.ticket.findMany({where: {AND: [scope.tickets ?? {}, {contactId: contact.id}]}, orderBy: {createdAt: 'desc'}, take: 5, select: {id: true, number: true, subject: true, status: true}}) : [],
-      contact ? db.activity.findMany({where: {contactId: contact.id}, orderBy: {createdAt: 'desc'}, take: 6, select: {id: true, type: true, title: true, createdAt: true}}) : [],
+      contact ? db.activity.findMany({where: {contactId: contact.id}, orderBy: {createdAt: 'desc'}, take: 6, select: {id: true, type: true, title: true, createdAt: true, contactId: true, companyId: true, dealId: true, ...ENTRY_OWNERS}}) : [],
     ]);
     const lastIn = newest.find((m) => m.direction === 'INBOUND');
     const replyTo = lastIn && lastIn.fromEmail.includes('@') ? lastIn.fromEmail : (chat?.visitor?.email ?? contact?.email ?? null);
@@ -291,7 +292,8 @@ export const inbox = new Hono<AppEnv>()
         deal,
         deals,
         tickets,
-        activity,
+        // A stored title can name a deal or company this person can't see (AUDIT-2 L-2).
+        activity: activity.map((a) => ({id: a.id, type: a.type, title: shownEntry(a, owner).title, createdAt: a.createdAt})),
         sender: chat?.visitor ? {email: chat.visitor.email ?? '', name: chat.visitor.label} : lastIn ? {email: lastIn.fromEmail, name: lastIn.fromName} : null,
         contactHidden: !!t.contactId && !contact,
       },

@@ -4,7 +4,7 @@ import {z} from 'zod';
 
 import type {Prisma} from '../../../generated/prisma/client';
 import {EVENT_TYPES, eventExample} from '@/lib/events';
-import {WEBHOOK_SERVICE_NAMES, webhookLabel, webhookTarget} from '@/lib/webhook-targets';
+import {WEBHOOK_REFUSED, webhookLabel, webhookTarget} from '@/lib/webhook-targets';
 import {runsJobsLocally} from '../../../platform/background';
 import {config} from '../kit/config';
 import {decryptJson, encryptJson, randomToken} from '../kit/crypto';
@@ -19,7 +19,7 @@ import {strings, withStrings} from '../lib/json-list';
 const eventList = z.array(z.union([z.literal('*'), z.enum(EVENT_TYPES as [string, ...string[]])])).min(1, 'pick at least one event');
 const hookBody = z.object({
   // Only the webhook services written in code (src/crm/lib/webhook-targets.ts): never any URL typed in.
-  url: z.string().trim().max(2000).refine((u) => !!webhookTarget(u), `use a webhook URL from ${WEBHOOK_SERVICE_NAMES}`),
+  url: z.string().trim().max(2000).refine((u) => !!webhookTarget(u), WEBHOOK_REFUSED),
   description: z.string().trim().max(200).nullish(),
   events: eventList,
   active: z.boolean().optional(),

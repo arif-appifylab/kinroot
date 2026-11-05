@@ -50,7 +50,6 @@ import {timeline} from './routes/timeline';
 import {history} from './routes/history';
 import {views} from './routes/views';
 import {webhooks} from './routes/webhooks';
-import {incomingHooksPublic, incomingWebhooks} from './routes/incoming-webhooks';
 import {dataIn, dataInPublic} from './routes/data-in';
 import {dashboards} from './routes/dashboards';
 import {goals} from './routes/goals';
@@ -73,9 +72,9 @@ import {drainBacklog, withOutbox} from './lib/jobs';
  * so it shares the template's guards (`sameOrigin`, `csrf`) and never collides with its routes. Its
  * request size limits are its own (`withBodyLimit` below; the site's 64 KB limit skips `/crm`). Two apps:
  *
- *   crmHooks  mounted BEFORE `csrf`: requests other services send (inbound email, incoming
- *             webhooks, the Data in API) and the tracking pixel / click links. They carry no CSRF
- *             token; each authenticates itself (a token or a signature), as before.
+ *   crmHooks  mounted BEFORE `csrf`: requests other services send (inbound email, the Data in
+ *             webhook) and the tracking pixel / click links. They carry no CSRF token; each
+ *             authenticates itself (a token or a signature), as before.
  *   crmApp    everything else, after the template's guards: public pages' calls (forms, booking,
  *             support, chat, unsubscribe) and the signed-in CRM.
  */
@@ -104,7 +103,7 @@ const onError: ErrorHandler<AppEnv> = (err, c) => {
 };
 
 /** The paths `crmHooks` answers; its middleware runs on these only (the rest of /crm is `crmApp`'s). */
-const HOOK_PATHS = ['/inbound/*', '/t/*', '/public/brand-logo', '/public/hooks/*', '/public/data-in/*'];
+const HOOK_PATHS = ['/inbound/*', '/t/*', '/public/brand-logo', '/public/data-in/*'];
 
 export const crmHooks = new Hono<AppEnv>();
 for (const path of HOOK_PATHS) {
@@ -113,7 +112,6 @@ for (const path of HOOK_PATHS) {
 }
 crmHooks
   .route('/', emailPublic)
-  .route('/public', incomingHooksPublic)
   .route('/public', dataInPublic)
   .onError(onError);
 
@@ -193,7 +191,6 @@ app.route('/forms', forms);
 app.route('/lists', lists);
 app.route('/broadcasts', broadcasts);
 app.route('/webhooks', webhooks);
-app.route('/incoming-webhooks', incomingWebhooks);
 app.route('/data-in', dataIn);
 app.route('/reports', reports);
 app.route('/dashboards', dashboards);

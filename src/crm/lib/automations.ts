@@ -11,7 +11,7 @@
  */
 import {EVENT_GROUPS} from '@/lib/events';
 import type {SegmentRules} from '@/lib/segments';
-import {WEBHOOK_SERVICE_NAMES, webhookTarget} from './webhook-targets';
+import {webhookTarget} from './webhook-targets';
 
 export type AutoObject = 'contact' | 'company' | 'deal' | 'ticket' | 'none';
 export type Target = 'contact' | 'company' | 'deal' | 'ticket';
@@ -174,7 +174,7 @@ export const ENTITY_OF: Record<Exclude<Target, 'ticket'>, 'CONTACT' | 'COMPANY' 
 
 // ─── Triggers ───────────────────────────────────────────────────────────────
 
-export type EventFilterKey = 'field' | 'form' | 'list' | 'pipeline' | 'stage' | 'fromStage' | 'ticketStatus' | 'direction' | 'band' | 'bandDirection' | 'link' | 'kind' | 'webhook' | 'dataInEvent';
+export type EventFilterKey = 'field' | 'form' | 'list' | 'pipeline' | 'stage' | 'fromStage' | 'ticketStatus' | 'direction' | 'band' | 'bandDirection' | 'link' | 'kind' | 'dataInEvent';
 
 export type EventFilter = {
   field?: string; // *.updated: this field changed
@@ -189,8 +189,7 @@ export type EventFilter = {
   bandDirection?: 'up' | 'down';
   linkId?: string; // meeting.*: booking link
   kind?: string; // interaction.logged: CALL / MEETING / …
-  webhookId?: string; // webhook.received: which incoming webhook
-  dataInEvent?: string; // data_in.received: the event name sent to POST /events
+  dataInEvent?: string; // data_in.received: the event name sent to the Data in webhook's /events action
 };
 
 /** What each event can start a run on, and the filters it offers. Events not listed can't trigger automations. */
@@ -242,7 +241,6 @@ export const EVENT_TRIGGERS: Record<string, {objects: AutoObject[]; filters?: Ev
   'email.opened': {objects: ['contact', 'deal']},
   'email.clicked': {objects: ['contact', 'deal']},
   'file.uploaded': {objects: ['contact', 'deal', 'company']},
-  'webhook.received': {objects: ['none', 'contact', 'company', 'deal', 'ticket'], filters: ['webhook']},
   'data_in.received': {objects: ['none', 'contact', 'deal'], filters: ['dataInEvent']},
 };
 
@@ -665,7 +663,7 @@ export function automationProblems(a: AutomationDraft): Problem[] {
         need(s.assignee !== 'user' || s.userIds?.length, 'Pick who to notify');
         break;
       case 'webhook':
-        need(webhookTarget(s.url), `Use a webhook URL from ${WEBHOOK_SERVICE_NAMES}`);
+        need(webhookTarget(s.url), "That address isn't a supported webhook service");
         break;
       case 'wait':
         if (s.waitMode === 'until_date') {

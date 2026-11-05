@@ -287,6 +287,28 @@ describe.skipIf(!DATABASE_URL)('Kinroot AUDIT-2 fixes (integration, real Postgre
     expect(updated.email).toBe('real@audit2-c.io');
   });
 
+  // ─── L-13 (company duplicate hint) ───
+  it('L-13: the company hint finds look-alikes through the trigram indexes', async () => {
+    const [legal, typed, other] = await Promise.all([
+      db.company.create({data: {name: 'The Zorblax Holdings Ltd'}}),
+      db.company.create({data: {name: 'Quintavex Systems', domain: 'www.quintavex-l13.io'}}),
+      db.company.create({data: {name: 'Zorblaxian Foods'}}),
+    ]);
+    try {
+      type Hint = {matches: {id: string; reasons: string[]}[]};
+      const hint = async (body: Json) => ok<Hint>(await post(own, '/duplicates/check', {entity: 'company', ...body})).matches;
+      // Legal words and "The" don't hide the same name; a different name with the same start isn't a match.
+      const byName = await hint({name: 'Zorblax'});
+      expect(byName.find((m) => m.id === legal.id)?.reasons).toContain('company_name');
+      expect(byName.map((m) => m.id)).not.toContain(other.id);
+      // The domain as typed elsewhere (www.) still matches, and a near-identical name too.
+      expect((await hint({name: 'Brand new', domain: 'https://quintavex-l13.io/'})).find((m) => m.id === typed.id)?.reasons).toContain('domain');
+      expect((await hint({name: 'Quintavex System'})).map((m) => m.id)).toContain(typed.id);
+    } finally {
+      await db.company.deleteMany({where: {id: {in: [legal.id, typed.id, other.id]}}});
+    }
+  });
+
   // ─── L-5 (duplicates) ───
   it("L-5: a member can't dismiss a duplicate pair of someone else's records", async () => {
     const a = ok(await post(ben, '/contacts', {firstName: 'Dup', lastName: 'One'}), 201).contact.id as string;

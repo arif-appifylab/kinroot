@@ -14,7 +14,6 @@ import {
   type TriggerKind,
 } from '@/lib/automations';
 import {api} from '@/lib/api';
-import type {IncomingWebhookRow} from '@/lib/incoming-webhooks';
 import {keys, usePipelines} from '@/lib/queries';
 import {TICKET_STATUSES} from '@/lib/tickets';
 import type {FormRow} from '@/lib/types';
@@ -143,9 +142,8 @@ function EventFields({object, trigger, onChange}: {object: AutoObject; trigger: 
       )}
       {filters.includes('band') && <BandFilter filter={f} onChange={setF} />}
       {filters.includes('link') && <LinkFilter value={f.linkId} onChange={(linkId) => setF({linkId})} />}
-      {filters.includes('webhook') && <IncomingWebhookFilter value={f.webhookId} onChange={(webhookId) => setF({webhookId})} />}
       {filters.includes('dataInEvent') && (
-        <Field label="Event name" hint="The event sent to POST /events, e.g. trial.started. Empty: any event.">
+        <Field label="Event name" hint="The event value sent to the Data in webhook’s “Record a custom event” URL, e.g. trial.started. Empty: any event.">
           <Input value={f.dataInEvent ?? ''} maxLength={100} placeholder="trial.started" onChange={(e) => setF({dataInEvent: e.target.value.trim()})} />
         </Field>
       )}
@@ -182,18 +180,6 @@ function FormFilter({value, onChange}: {value?: string; onChange: (v: string) =>
       <NativeSelect value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
         <option value="">Any form</option>
         {forms.data?.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-      </NativeSelect>
-    </Field>
-  );
-}
-
-function IncomingWebhookFilter({value, onChange}: {value?: string; onChange: (v: string) => void}) {
-  const hooks = useQuery({queryKey: keys.incomingWebhooks, queryFn: () => api.get<{rows: IncomingWebhookRow[]}>('/incoming-webhooks'), select: (d) => d.rows, staleTime: 60_000});
-  return (
-    <Field label="Incoming webhook" hint="Set one up in Settings → Webhooks → Incoming.">
-      <NativeSelect value={value ?? ''} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Any incoming webhook</option>
-        {hooks.data?.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
       </NativeSelect>
     </Field>
   );

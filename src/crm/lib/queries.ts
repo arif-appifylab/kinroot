@@ -24,7 +24,6 @@ export const keys = {
   files: ['files'] as const,
   follows: ['follows'] as const,
   webhooks: ['webhooks'] as const,
-  incomingWebhooks: ['incoming-webhooks'] as const,
   dataIn: ['data-in'] as const,
   forms: ['forms'] as const,
   lists: ['lists'] as const,

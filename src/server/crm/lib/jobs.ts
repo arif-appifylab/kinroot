@@ -26,9 +26,7 @@ import {pruneScheduleSends, sendJob as sendScheduledReport} from './report-sched
 import {wakeConversation} from '../inbox/conversations';
 import {emailVisitor} from '../inbox/chat';
 import {pruneRateHits} from './rate-limit';
-import {processIncoming, pruneIncomingRequests} from './incoming-webhooks';
 import {pruneDataIn} from './data-in-prune';
-import {REQUEST_KEEP_DAYS} from '@/lib/incoming-webhooks';
 import type {Db} from '../kit/db';
 import type {JobRun} from '../kit/job-run';
 import {purgeFiles} from '../kit/storage';
@@ -85,7 +83,6 @@ const HANDLERS = {
   'report.send': (db, p, job) => sendScheduledReport(db, String(p.sendId), job),
   'inbox.wake': (db, p) => wakeConversation(db, String(p.threadId)),
   'chat.email_visitor': (db, p) => emailVisitor(db, p),
-  'incoming_webhook.process': (db, p, job) => processIncoming(db, String(p.requestId), job.attempts >= job.maxAttempts),
 } satisfies Record<string, Handler>;
 
 export type JobType = keyof typeof HANDLERS;
@@ -120,7 +117,6 @@ const LABELS: Record<JobType, string> = {
   'report.send': 'Scheduled report email',
   'inbox.wake': 'Snoozed conversation',
   'chat.email_visitor': 'Chat transcript email',
-  'incoming_webhook.process': 'Incoming webhook',
 };
 const LIST_LABELS = new Map(Object.entries(LABELS).map(([type, label]) => [listOf(type as JobType), label]));
 
@@ -511,7 +507,7 @@ export async function runStep<T>(name: string, deadline: number, work: (until: n
  * events (and deliveries) after 90, abandoned form / chat uploads and rate-limit hits after 1,
  * recycle-bin entries after 30 (with their files), audit entries after the retention set in Settings → Audit log,
  * finished automation runs and scheduled report sends after 90, import / export files after 7 (see io-prune.ts),
- * incoming webhook and Data in requests after 30 (Data in idempotency keys after 1, used signatures after 10 minutes),
+ * Data in requests after 30 (Data in idempotency keys after 1),
  * expired automation run locks after a day.
  * Each part is a step of its own within `deadline`; big tables go in chunks.
  */
@@ -540,7 +536,6 @@ export async function pruneJobs(db: Db, deadline = Date.now() + 45_000) {
     ['automations', (until) => pruneAutomations(db, until)],
     ['imports and exports', () => pruneImportExport(db)],
     ['report sends', (until) => pruneScheduleSends(db, until)],
-    ['incoming webhooks', (until) => pruneIncomingRequests(db, REQUEST_KEEP_DAYS, until)],
     ['data in', (until) => pruneDataIn(db, until)],
   ];
   const out: Record<string, unknown> = {};

@@ -55,7 +55,7 @@ export function inScope<T>(work: () => Promise<T>): Promise<T> {
 /** The harness's database client as Kinroot's `Db`. */
 export const crmDb = db as unknown as Db;
 
-/** A request from another service (no session, no CSRF token), e.g. to an incoming webhook URL. */
+/** A request from another service (no session, no CSRF token), e.g. to a Data in webhook URL. */
 export async function outside(path: string, init: {method?: string; headers?: Record<string, string>; body?: string} = {}) {
   return inScope(async () => {
     const pending: Promise<unknown>[] = [];

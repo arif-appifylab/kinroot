@@ -47,8 +47,7 @@ export const SCORE_EVENTS: ScoreEventDef[] = [
   {type: 'deal.won', label: 'Deal won', suggested: 50, detail: 'title', filter: {kind: 'pipeline', key: 'pipelineId', label: 'Pipeline', path: 'pipelineId'}},
   {type: 'deal.lost', label: 'Deal lost', suggested: -20, detail: 'title', filter: {kind: 'pipeline', key: 'pipelineId', label: 'Pipeline', path: 'pipelineId'}},
   {type: 'list.member_added', label: 'Added to a static list', suggested: 10, detail: 'list.name', filter: {kind: 'list', key: 'listId', label: 'List', path: 'list.id'}},
-  {type: 'webhook.received', label: 'Sent in by an incoming webhook', suggested: 10, detail: 'webhook.name'},
-  {type: 'data_in.received', label: 'Custom event from the Data in API', suggested: 10, detail: 'event'},
+  {type: 'data_in.received', label: 'Custom event from the Data in webhook', suggested: 10, detail: 'event'},
 ];
 
 export const scoreEventDef = (type: string | null | undefined) => SCORE_EVENTS.find((e) => e.type === type);

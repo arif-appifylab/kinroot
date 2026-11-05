@@ -14,7 +14,7 @@ import {inboxTick} from '../../src/server/crm/inbox/conversations';
 
 /**
  * The inbox's safety and speed fixes (AUDIT P1-6, P1-7, P2-1, P2-4, P2-12, P2-19, P2-20, P2-22,
- * P3-22): received HTML cleaned in linear time and once, no overlays, replayed webhooks taken once,
+ * P3-22): received HTML cleaned in linear time and once, no overlays, replayed inbound mail webhooks taken once,
  * read-only accounts can't connect mailboxes, email threads follow record and inbox visibility,
  * the badges agree with the inbox counts, and an open conversation's light `/updates`.
  */
@@ -96,7 +96,6 @@ describe.skipIf(!DATABASE_URL)('Inbox safety and speed (integration, real Postgr
   afterEach(() => {
     delete env.RESEND_WEBHOOK_SECRET;
     delete env.MAILGUN_WEBHOOK_SIGNING_KEY;
-    delete env.INCOMING_REPLAY_SECRET;
   });
 
   it('cleans received HTML once at arrival (capped), and older rows when read', async () => {
@@ -145,38 +144,6 @@ describe.skipIf(!DATABASE_URL)('Inbox safety and speed (integration, real Postgr
     const mg = () => outside(`/site-api/crm/inbound/${token}`, {body: form, headers: {'content-type': 'application/x-www-form-urlencoded'}});
     expect((await mg()).json.duplicate).toBeUndefined();
     expect((await mg()).json.duplicate).toBe(true);
-  });
-
-  it('incoming webhooks: an identical body is taken once, a timestamp must be fresh, a signed timestamp works', async () => {
-    const SECRET = 'a-long-shared-secret-for-replays';
-    env.INCOMING_REPLAY_SECRET = SECRET;
-    const hook = (await ok(own.post('/site-api/crm/incoming-webhooks', {name: 'Replay', action: 'automations', secretName: 'INCOMING_REPLAY_SECRET'}), 201)).webhook as {id: string; url: string};
-    const path = new URL(hook.url).pathname;
-    const send = (body: string, headers: Record<string, string> = {}) => outside(path, {body, headers: {'content-type': 'application/json', 'x-webhook-secret': SECRET, ...headers}});
-    const body = JSON.stringify({email: 'replay@northwind-safety.io'});
-    const a = await send(body);
-    const b = await send(body);
-    expect(a.status).toBe(200);
-    expect(a.json.duplicate).toBeUndefined();
-    expect(b.status).toBe(200);
-    expect(b.json.duplicate).toBe(true);
-    // With an Idempotency-Key the sender decides what is a repeat.
-    expect((await send(body, {'idempotency-key': 'k1'})).json.duplicate).toBeUndefined();
-    // A timestamp, when sent, must be within 5 minutes; a new time makes the same body a new request.
-    const stale = await send(body, {'x-webhook-timestamp': String(Math.floor(Date.now() / 1000) - 3600)});
-    expect(stale.status).toBe(401);
-    expect(String(stale.json.error)).toMatch(/X-Webhook-Timestamp/);
-    const fresh = await send(body, {'x-webhook-timestamp': String(Math.floor(Date.now() / 1000))});
-    expect(fresh.status).toBe(200);
-    expect(fresh.json.duplicate).toBeUndefined();
-
-    // HMAC over `<timestamp>.<body>`.
-    await ok(own.request('PATCH', `/site-api/crm/incoming-webhooks/${hook.id}`, {verify: 'hmac', verifyHeader: 'X-Signature', verifyEncoding: 'hex', secretName: 'INCOMING_REPLAY_SECRET'}));
-    const ts = String(Math.floor(Date.now() / 1000));
-    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(SECRET), {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
-    const signed = [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${ts}.${body}`)))].map((x) => x.toString(16).padStart(2, '0')).join('');
-    const h = (await outside(path, {body, headers: {'content-type': 'application/json', 'x-signature': signed, 'x-webhook-timestamp': ts}}));
-    expect(h.status, JSON.stringify(h.json)).toBe(200);
   });
 
   it('a viewer cannot start connecting a Gmail / Outlook mailbox', async () => {

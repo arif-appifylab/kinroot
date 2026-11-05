@@ -36,7 +36,7 @@ import {addToList, isContactInList, removeFromList} from './segments';
 import {assignTicket, changePriority, changeStatus, createTicket} from './tickets';
 import {signPayload} from './webhooks';
 import {memberWithEmail} from './users';
-import {WEBHOOK_SERVICE_NAMES, webhookLabel, webhookTarget} from '@/lib/webhook-targets';
+import {WEBHOOK_REFUSED, webhookLabel, webhookTarget} from '@/lib/webhook-targets';
 import {shownEmail} from './owner-account';
 import {strings} from './json-list';
 
@@ -542,7 +542,7 @@ const EXECUTORS: Record<Step['type'], Executor> = {
   async webhook(ctx, step) {
     // Only to the webhook services written in code (src/crm/lib/webhook-targets.ts), checked again at send time.
     const target = webhookTarget(step.url);
-    if (!target) throw new StepError(`This webhook URL is not one Kinroot can send to. Use a URL from ${WEBHOOK_SERVICE_NAMES}.`);
+    if (!target) throw new StepError(WEBHOOK_REFUSED);
     const url = target.url.href;
     // Summaries name the service, never the URL: run history is read by people who may not see the URL (it works like a password).
     if (ctx.dry) return done(`Would POST the record to ${webhookLabel(url)} (signed)`);

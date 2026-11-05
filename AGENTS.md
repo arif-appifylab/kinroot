@@ -380,8 +380,8 @@ blog, job board, checkout, `/dashboard` portal or `src/portal/` UI kit, Kinroot 
   upgrade adds their files: delete them again).
 - **Public pages** use `src/layouts/CrmPublic.astro` (Kinroot's design, React islands); the app uses
   `src/layouts/Crm.astro`. Styles and tokens: `src/crm/styles.css` (brand colour `--primary`).
-- **Kinroot's API** is `/site-api/crm` (`src/server/crm/app.ts`): `crmHooks` (inbound mail, webhooks,
-  Data in, tracking) is mounted before `csrf`, `crmApp` after. Its guards are in `src/server/crm/kit/`:
+- **Kinroot's API** is `/site-api/crm` (`src/server/crm/app.ts`): `crmHooks` (inbound mail, the Data in
+  webhook, tracking) is mounted before `csrf`, `crmApp` after. Its guards are in `src/server/crm/kit/`:
   the signed-in team member is `c.var.user`, a `Member` with a team role (OWNER > ADMIN > MEMBER >
   VIEWER, `requireRole`). Site roles only decide who may claim the CRM (`site:crm:own`, the site owner).
 - **Record visibility**: with "members see only their own records" on, every read of a record or of
@@ -397,6 +397,16 @@ blog, job board, checkout, `/dashboard` portal or `src/portal/` UI kit, Kinroot 
 - **Background work**: `lib/jobs.ts` (`enqueue`, a send rate set in Settings → Webhooks, a backlog for
   what the platform refused), handlers in `src/server/background.ts`, schedules `crm-tick` /
   `crm-sync` / `crm-prune` in `background.json` (`lib/ticks.ts`).
+- **Incoming data has ONE way in: the Data in webhook** (Settings → Webhooks → Incoming;
+  `src/crm/lib/data-in.ts` catalogue, `src/crm/lib/data-in-url.ts`, `src/server/crm/lib/data-in.ts`
+  `handleDataInUrl`): `POST /site-api/crm/public/data-in/<action>/<access token>` with an
+  `X-Signature-Token` header. A new kind of inbound data is a new catalogue action, never a second
+  method (API keys / HMAC and field-mapped custom webhooks were removed on the owner's request).
+  Automations on inbound data trigger on "Data in webhook event received".
+- **No third-party tool names in the product** (Zapier, Pabbly, Make, n8n, Pipedream, Slack, Teams,
+  Google Chat, Discord, IFTTT…): say "your automation tool". The webhook services Kinroot may send to
+  are named only in `src/crm/lib/webhook-targets.ts` (and its tests); the UI uses `WEBHOOK_HINT` /
+  `WEBHOOK_REFUSED` and shows a hook by its host (`webhookLabel`).
 - **Caches**: the keys and why they are safe are listed in `UPGRADE-0.10.13.md` (U-19).
 - Open work and decisions: `PLAN.md`, `AUDIT.md`. Tests: `tests/integration/crm-*.test.ts` and
   `tests/integration/ported/` (helpers in `tests/integration/support/crm.ts`: `owner()` is the site owner

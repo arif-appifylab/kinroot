@@ -41,7 +41,7 @@ export const app = new Hono()
   // The editor Preview only: auth cookies carried in headers (its gateway drops cookies).
   .use(previewCookies)
   .use(sameOrigin)
-  // Kinroot: what other services send (inbound email, incoming webhooks, Data in API, tracking
+  // Kinroot: what other services send (inbound email, the Data in webhook, tracking
   // links). They carry no CSRF token and authenticate themselves; BEFORE `csrf` for that reason.
   .route('/crm', crmHooks)
   .use(csrf)

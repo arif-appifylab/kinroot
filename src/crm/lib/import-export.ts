@@ -420,8 +420,7 @@ export type ParsedCell = {value?: unknown; warnings?: string[]; newOptions?: str
 /**
  * One non-blank value as its target stores it: numbers, dates, yes / no,
  * options (with the value map and synonyms), lists. A value that can't be
- * read comes back without `value` and with a warning. Shared by CSV imports
- * and incoming webhooks, so both read values the same way.
+ * read comes back without `value` and with a warning. Used by CSV imports.
  */
 export function parseCell(t: ImportTarget, raw: string, opts: {dateOrder: DateOrder; valueMap: ValueMap}): ParsedCell {
   switch (t.kind) {

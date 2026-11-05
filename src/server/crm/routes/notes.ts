@@ -15,7 +15,7 @@ const link = {contactId: z.string().max(40).nullish(), companyId: z.string().max
 
 /**
  * A note by `author` on one or more records: timeline entry, `note.created`,
- * @mention and follower notifications. Shared by this route and the Data in API.
+ * @mention and follower notifications. Shared by this route and the Data in webhook.
  */
 export async function createNote(
   db: Db,

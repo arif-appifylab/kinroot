@@ -435,7 +435,6 @@ model Member {
   conversations        EmailThread[]         @relation("ConversationAssignee")
   conversationComments ConversationComment[]
   channelMessages      ChannelMessage[]      @relation("ChannelMessageSender")
-  apiKeys              ApiKey[]              @relation("ApiKeyCreator")
 }
 
 // ─── Team & auth ────────────────────────────────────────────────────────────
@@ -1251,79 +1250,11 @@ model WebhookDelivery {
   @@index([eventId]) // delivery lookups and the prune's event cascade (AUDIT-2 H-2)
 }
 
-// Incoming webhooks (Settings → Webhooks → Incoming): other tools POST to
-// /site-api/public/hooks/:token and the data becomes CRM records. Shapes of
-// `config` live in src/lib/incoming-webhooks.ts; processing in
-// src/server/lib/incoming-webhooks.ts (a job per request).
-model IncomingWebhook {
-  id             String    @id @default(cuid())
-  name           String    @db.VarChar(100)
-  tokenHash      String    @unique // SHA-256 of the URL token (lookup)
-  token          String // AES-GCM encrypted URL token (to show the URL again)
-  active         Boolean   @default(true)
-  action         String // contact | company | deal | ticket | automations
-  config         Json      @default("{}") // mapping, fixed values, tags, list, owner, mode, skipBlanks, deal / ticket options, idempotency path, rate limit
-  verify         String    @default("none") // none | header | hmac
-  verifyHeader   String?   @db.VarChar(100) // header carrying the shared secret or the signature
-  verifyEncoding String? // hmac: hex | base64
-  secret         String? // unused since phase 8 (the key is an owner secret, see secretName); dropped in a later contract step
-  secretName     String?   @db.VarChar(64) // name of the owner-added site secret holding the shared secret / HMAC key (INCOMING_…)
-  listenUntil    DateTime? // "Listen for a test request": the next request becomes the sample
-  sample         Json? // {payload, contentType, headers, at}
-  sampleAt       DateTime?
-  lastRequestAt  DateTime?
-  lastStatus     String?
-  createdById    String?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-
-  requests IncomingWebhookRequest[]
-}
-
-// One received request (kept 30 days): accepted → processed / failed, or
-// duplicate / rejected / captured. `result` holds what it wrote (and the ids
-// already created, so a retried job never creates them twice).
-model IncomingWebhookRequest {
-  id             String          @id @default(cuid())
-  webhookId      String
-  webhook        IncomingWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
-  status         String // accepted | processed | failed | duplicate | rejected | captured
-  idempotencyKey String?
-  contentType    String?         @db.VarChar(200)
-  size           Int             @default(0)
-  payload        Json? // parsed body (+ query parameters); null for rejected requests
-  headers        Json            @default("{}") // secret-looking values redacted
-  result         Json? // {outcome, entity, recordId, label, contactId, …}
-  error          String?
-  attempts       Int             @default(0)
-  processedAt    DateTime?
-  createdAt      DateTime        @default(now())
-
-  @@unique([webhookId, idempotencyKey])
-  @@index([webhookId, createdAt])
-  @@index([createdAt])
-}
-
-// ─── Data in API (Settings → Webhooks → Incoming) ───────────────────────────
-// Other platforms push data in through /site-api/public/data-in/v1/*, with an
-// API key (Bearer) and an HMAC signature made with the signing secret (the
-// "data-in" Setting row, encrypted). Catalogue: src/lib/data-in.ts.
-
-// Only the SHA-256 of a key is stored; `prefix` is what the UI shows. A key
-// acts as the user who created it (ownership, scope); revoked keys stay listed.
-model ApiKey {
-  id          String    @id @default(cuid())
-  name        String
-  prefix      String
-  keyHash     String    @unique
-  createdById String?
-  createdBy   Member?   @relation("ApiKeyCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  lastUsedAt  DateTime?
-  revokedAt   DateTime?
-  createdAt   DateTime  @default(now())
-
-  requests DataInRequest[]
-}
+// ─── Data in webhook (Settings → Webhooks → Incoming) ───────────────────────
+// Other tools push data in by POSTing JSON to
+// /site-api/crm/public/data-in/<action>/<access token> with the X-Signature-Token
+// header. Both tokens live (hashed and encrypted) in the "data-in" Setting row.
+// Catalogue: src/crm/lib/data-in.ts; handler: src/server/crm/lib/data-in.ts.
 
 // One Data in request (kept 30 days), accepted or refused. Records it touched
 // are kept loosely in `records` ([{entity, id, label}], no foreign keys), so
@@ -1331,10 +1262,8 @@ model ApiKey {
 // and secret-looking body values are redacted.
 model DataInRequest {
   id             String   @id @default(cuid())
-  apiKeyId       String?
-  apiKey         ApiKey?  @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
-  keyName        String?
-  keyPrefix      String?
+  keyName        String? // who sent it: "Data in URL"
+  keyPrefix      String? // the access token's first characters, never the token
   action         String // catalogue key, e.g. contacts.upsert
   method         String
   path           String
@@ -1353,26 +1282,18 @@ model DataInRequest {
   @@index([action, createdAt])
 }
 
-// Idempotency-Key → the stored response, per API key, for 24 hours. A row
-// without a status is a request still running.
+// Idempotency-Key → the stored response, per sender (`url:<id>`), for 24 hours.
+// A row without a status is a request still running.
 model DataInIdempotency {
   id        String   @id @default(cuid())
-  apiKeyId  String
+  scope     String
   key       String
   action    String
   status    Int?
   response  Json?
   createdAt DateTime @default(now())
 
-  @@unique([apiKeyId, key])
-  @@index([createdAt])
-}
-
-// Signatures already used (replay protection), kept for the 5-minute window.
-model DataInSignature {
-  signature String   @id // SHA-256 of the v1 value
-  createdAt DateTime @default(now())
-
+  @@unique([scope, key])
   @@index([createdAt])
 }
 

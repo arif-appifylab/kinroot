@@ -22,7 +22,12 @@ const WEBHOOK_SERVICES: Service[] = [
   {name: 'Pabbly Connect', hosts: ['connect.pabbly.com'], path: /^\/workflow\/sendwebhookdata\/[^/]+/},
 ];
 
-export const WEBHOOK_SERVICE_NAMES = WEBHOOK_SERVICES.map((s) => s.name).join(', ');
+/**
+ * What the product says about the allowed services: never their names (the owner's rule: no
+ * third-party tool names in the product). The list above stays the only place they are named.
+ */
+export const WEBHOOK_HINT = 'Paste the webhook URL from your automation tool.';
+export const WEBHOOK_REFUSED = "That address isn't a supported webhook service.";
 
 /** The service a webhook URL belongs to, or null when Kinroot may not send to it. */
 export function webhookTarget(raw: string | null | undefined): {url: URL; service: string} | null {
@@ -42,10 +47,8 @@ export function webhookTarget(raw: string | null | undefined): {url: URL; servic
   return service ? {url, service: service.name} : null;
 }
 
-/** How a webhook is named where its full URL must not go (the audit log): the path is the service's secret. */
+/** How a webhook is named where its full URL must not go (the audit log, lists): its host only, as the path is the service's secret. */
 export function webhookLabel(raw: string): string {
-  const target = webhookTarget(raw);
-  if (target) return `${target.service} (${target.url.hostname})`;
   try {
     return new URL(raw).hostname;
   } catch {

@@ -64,7 +64,6 @@ const filterSchema = z.object({
   bandDirection: z.enum(['up', 'down']).optional(),
   linkId: id.optional(),
   kind: str(30).optional(),
-  webhookId: id.optional(),
   dataInEvent: str(100).optional(),
 });
 
@@ -215,7 +214,7 @@ function dataOf(input: Body, c: AppContext): Prisma.AutomationUncheckedCreateInp
   };
 }
 
-/** "Send a webhook" URLs work like passwords (Slack, Zapier…): only admins see them, others see the service. */
+/** "Send a webhook" URLs work like passwords: only admins see them, others see the host. */
 const maskSteps = (steps: unknown) => (Array.isArray(steps) ? mapSteps(steps as Step[], (s) => (s.type === 'webhook' && s.url ? {...s, url: webhookLabel(s.url)} : s)) : steps);
 
 const publicAutomation = (a: Automation, admin = true) => {

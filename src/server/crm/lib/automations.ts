@@ -301,7 +301,6 @@ export function filterMatches(filter: EventFilter | undefined, event: Pick<Event
   if (filter.bandDirection && d.direction !== filter.bandDirection) return false;
   if (filter.linkId && d.link?.id !== filter.linkId) return false;
   if (filter.kind && d.kind !== filter.kind) return false;
-  if (filter.webhookId && d.webhookId !== filter.webhookId) return false;
   if (filter.dataInEvent && String(d.event ?? '').toLowerCase() !== filter.dataInEvent.trim().toLowerCase()) return false;
   return true;
 }

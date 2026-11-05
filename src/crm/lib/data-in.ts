@@ -1,42 +1,30 @@
 /**
- * Data in API: the one catalogue of inbound actions other platforms call
- * (`POST /site-api/crm/public/data-in/v1/<path>`), shared by the server (request
- * validation: src/server/lib/data-in.ts builds each zod schema from `fields`)
- * and the UI (Settings → Webhooks → Incoming: field tables, samples, cURL).
- * The docs and the validation come from the same objects, so they can't drift.
+ * Data in: the one catalogue of inbound actions other tools call through the Data in webhook
+ * (`POST /site-api/crm/public/data-in/<path>/<access token>`, src/crm/lib/data-in-url.ts), shared
+ * by the server (request validation: src/server/crm/lib/data-in.ts builds each zod schema from
+ * `fields`) and the UI (Settings → Webhooks → Incoming: parameter tables and samples). The docs
+ * and the validation come from the same objects, so they can't drift.
  *
- * To add an action: an entry in DATA_IN_ACTIONS, a handler in HANDLERS
- * (src/server/lib/data-in.ts) and checks in scripts/test-data-in.mjs.
+ * To add an action: an entry in DATA_IN_ACTIONS and a handler in HANDLERS
+ * (src/server/crm/lib/data-in.ts), with checks in tests/integration/ported/data-in.test.ts.
  */
 
-export const DATA_IN_PATH = '/site-api/crm/public/data-in/v1';
-export const dataInBaseUrl = (origin: string) => `${origin.replace(/\/$/, '')}${DATA_IN_PATH}`;
-
-/** Signatures older or newer than this (seconds) are refused; each one works once within it. */
-export const SIGNATURE_TOLERANCE_SEC = 300;
 export const IDEMPOTENCY_HOURS = 24;
 export const DATA_IN_MAX_BYTES = 256 * 1024;
 export const DATA_IN_LOG_DAYS = 30;
 export const DEFAULT_DATA_IN_RATE_LIMIT = 120;
-/** Visible start of every API key (brand-neutral on purpose); the rest is random. */
-export const API_KEY_PREFIX = 'crm_live_';
-export const SIGNING_SECRET_PREFIX = 'crm_sig_';
 
 // ─── Errors ─────────────────────────────────────────────────────────────────
 
 export const DATA_IN_ERRORS = {
-  E_UNAUTHORIZED: {status: 401, when: 'The Authorization header is missing, or the API key is unknown or revoked.'},
-  E_KEY_OWNER_INACTIVE: {status: 403, when: 'The person who created the API key was deactivated or made read-only. Create a new key.'},
-  E_SIGNATURE_MISSING: {status: 401, when: 'The X-Signature header is missing.'},
-  E_SIGNATURE_INVALID: {status: 401, when: 'X-Signature is not "t=…,v1=…", or v1 is not the HMAC-SHA256 of "<t>.<raw body>" with the signing secret.'},
-  E_SIGNATURE_EXPIRED: {status: 401, when: `t is more than ${SIGNATURE_TOLERANCE_SEC / 60} minutes away from the server's clock.`},
-  E_SIGNATURE_REUSED: {status: 401, when: 'This exact signature was already used. Sign every request again.'},
+  E_UNAUTHORIZED: {status: 401, when: 'The X-Signature-Token header is missing or does not match the current signature token.'},
+  E_KEY_OWNER_INACTIVE: {status: 403, when: 'The admin who turned on the Data in webhook was deactivated or made read-only. Regenerate the URL.'},
   E_INVALID_JSON: {status: 400, when: 'The body is not a JSON object.'},
   E_INVALID_FIELD: {status: 422, when: 'A field is missing, unknown or has the wrong type or value; error.field names it (e.g. "tags.2").'},
   E_NOT_FOUND: {status: 404, when: 'A record the request refers to (by id, email or name) does not exist.'},
   E_IDEMPOTENCY_IN_PROGRESS: {status: 409, when: 'A request with the same Idempotency-Key is still running. Retry in a moment.'},
   E_PAYLOAD_TOO_LARGE: {status: 413, when: `The body is larger than ${DATA_IN_MAX_BYTES / 1024} KB.`},
-  E_RATE_LIMITED: {status: 429, when: 'Too many requests with this key in the last minute. Wait and retry.'},
+  E_RATE_LIMITED: {status: 429, when: 'Too many requests in the last minute. Wait and retry.'},
   E_INTERNAL: {status: 500, when: 'Something went wrong on our side. Safe to retry with the same Idempotency-Key.'},
 } as const;
 
@@ -47,10 +35,6 @@ export type DataInErrorBody = {error: {code: DataInErrorCode; message: string; f
 const COMMON_ERRORS: DataInErrorCode[] = [
   'E_UNAUTHORIZED',
   'E_KEY_OWNER_INACTIVE',
-  'E_SIGNATURE_MISSING',
-  'E_SIGNATURE_INVALID',
-  'E_SIGNATURE_EXPIRED',
-  'E_SIGNATURE_REUSED',
   'E_INVALID_JSON',
   'E_INVALID_FIELD',
   'E_IDEMPOTENCY_IN_PROGRESS',
@@ -85,7 +69,7 @@ export type DataInAction = {
   key: DataInActionKey;
   title: string;
   method: 'POST';
-  /** Relative to the base URL; `{name}` is a path parameter. */
+  /** The action's path (the access token follows it); `{name}` is a path parameter. */
   path: string;
   description: string;
   params?: DataInField[];
@@ -103,7 +87,7 @@ const LIFECYCLE = ['LEAD', 'QUALIFIED', 'OPPORTUNITY', 'CUSTOMER', 'CHURNED', 'O
 const PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT'] as const;
 const KINDS = ['CALL', 'MEETING', 'EMAIL', 'SMS', 'LINKEDIN', 'WHATSAPP', 'POSTAL'] as const;
 
-const owner = (what: string): DataInField => ({name: 'owner', type: 'email', description: `Email of the team member who owns the ${what}. New ${what === 'company' ? 'companies' : `${what}s`} default to the person who created the API key.`});
+const owner = (what: string): DataInField => ({name: 'owner', type: 'email', description: `Email of the team member who owns the ${what}. New ${what === 'company' ? 'companies' : `${what}s`} default to the admin who turned on the Data in webhook.`});
 const tags = (what: string): DataInField => ({name: 'tags', type: 'string[]', max: 50, description: `Tags to add to the ${what}; tags it already has stay.`});
 const custom = (what: string): DataInField => ({name: 'custom', type: 'object', description: `Custom fields of the ${what} by key (Settings → Fields), e.g. {"plan": "Pro"}. null clears one; unknown keys are refused.`});
 const note = (what: string): DataInField => ({name: 'note', type: 'text', max: 20_000, description: `Adds a note to the ${what}.`});
@@ -141,7 +125,7 @@ export const DATA_IN_ACTIONS: DataInAction[] = [
       {name: 'lifecycleStage', type: 'enum', values: LIFECYCLE, description: 'Lifecycle stage.'},
       {name: 'leadStatus', type: 'string', max: 100, nullable: true, description: 'Lead status, e.g. "New".'},
       {name: 'buyingRole', type: 'string', max: 100, nullable: true, description: 'Buying role, e.g. "Decision maker".'},
-      {name: 'source', type: 'string', max: 100, nullable: true, description: 'Where the contact came from. New contacts default to "API: <key name>".'},
+      {name: 'source', type: 'string', max: 100, nullable: true, description: 'Where the contact came from. New contacts default to "API: Data in URL".'},
       {name: 'city', type: 'string', max: 100, nullable: true, description: 'City.'},
       {name: 'country', type: 'string', max: 100, nullable: true, description: 'Country.'},
       {name: 'linkedin', type: 'string', max: 300, nullable: true, description: 'LinkedIn profile URL.'},
@@ -275,7 +259,7 @@ export const DATA_IN_ACTIONS: DataInAction[] = [
     title: 'Add a note',
     method: 'POST',
     path: '/notes',
-    description: 'Adds a note to a contact, company or deal (several links are allowed). It shows on their timelines, written by the person who created the API key.',
+    description: 'Adds a note to a contact, company or deal (several links are allowed). It shows on their timelines, written by the admin who turned on the Data in webhook.',
     fields: [
       {name: 'body', type: 'text', required: true, max: 20_000, description: 'The note (plain text). "@Full Name" mentions notify that teammate.'},
       ...contactRef(false),
@@ -341,7 +325,7 @@ export const DATA_IN_ACTIONS: DataInAction[] = [
     title: 'Record a custom event',
     method: 'POST',
     path: '/events',
-    description: 'Records something that happened in your platform (a trial started, an order shipped) without changing any record. Automations can start on "Data in event received" (filtered by event name) and lead scoring can give points for it.',
+    description: 'Records something that happened in your platform (a trial started, an order shipped) without changing any record. Automations can start on "Data in webhook event received" (filtered by event name) and lead scoring can give points for it.',
     fields: [
       {name: 'event', type: 'string', required: true, max: 100, description: 'Event name, e.g. "trial.started" (letters, digits, dots, dashes and underscores).'},
       ...contactRef(false),
@@ -359,7 +343,7 @@ export const DATA_IN_ACTIONS: DataInAction[] = [
 
 export const dataInAction = (key: string) => DATA_IN_ACTIONS.find((a) => a.key === key);
 
-/** Finds the action for a method + path (relative to the base URL) and its path parameters. */
+/** Finds the action for a method + path (the part before the access token) and its path parameters. */
 export function matchDataInAction(method: string, path: string): {action: DataInAction; params: Record<string, string>; wrongMethod: boolean} | null {
   const clean = path.replace(/\/+$/, '') || '/';
   for (const action of DATA_IN_ACTIONS) {
@@ -381,10 +365,6 @@ export function matchDataInAction(method: string, path: string): {action: DataIn
   return null;
 }
 
-/** The action's path with its parameters filled in (samples, docs). */
-export const actionPath = (action: DataInAction, params: Record<string, string> = action.sampleParams ?? {}) =>
-  action.path.replace(/\{(\w+)\}/g, (_, n: string) => encodeURIComponent(params[n] ?? `{${n}}`));
-
 export const errorsFor = (action: DataInAction) => [
   ...action.errors.map((e) => ({...e, status: DATA_IN_ERRORS[e.code].status as number, common: false})),
   ...COMMON_ERRORS.filter((code) => !action.errors.some((e) => e.code === code)).map((code) => ({code, when: DATA_IN_ERRORS[code].when as string, status: DATA_IN_ERRORS[code].status as number, common: true})),
@@ -405,139 +385,7 @@ export const FIELD_TYPE_LABEL: Record<DataInFieldType, string> = {
   id: 'string (id)',
 };
 
-// ─── Code samples ───────────────────────────────────────────────────────────
-
-const shellQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-
-/** A complete cURL command that signs the body with openssl and sends it. */
-export function curlFor(action: DataInAction, baseUrl: string) {
-  const body = JSON.stringify(action.sample);
-  return [
-    '# Set API_KEY and SIGNING_SECRET first (Settings → Webhooks → Incoming).',
-    `BODY=${shellQuote(body)}`,
-    'T=$(date +%s)',
-    'SIG=$(printf \'%s\' "$T.$BODY" | openssl dgst -sha256 -hmac "$SIGNING_SECRET" | sed \'s/^.* //\')',
-    `curl -X ${action.method} ${shellQuote(baseUrl + actionPath(action))} \\`,
-    '  -H "Authorization: Bearer $API_KEY" \\',
-    '  -H "Content-Type: application/json" \\',
-    '  -H "X-Signature: t=$T,v1=$SIG" \\',
-    '  -H "Idempotency-Key: $(uuidgen)" \\',
-    '  -d "$BODY"',
-  ].join('\n');
-}
-
-export type SigningSample = {key: 'node' | 'php' | 'postman'; label: string; code: string};
-
-export function signingSamples(baseUrl: string): SigningSample[] {
-  return [
-    {
-      key: 'node',
-      label: 'Node.js',
-      code: `// Node 18+. Signs and sends one request to the Data in API.
-import {createHmac, randomUUID} from 'node:crypto';
-
-const BASE_URL = '${baseUrl}';
-const API_KEY = process.env.CRM_API_KEY;
-const SIGNING_SECRET = process.env.CRM_SIGNING_SECRET;
-
-async function send(path, data) {
-  const body = JSON.stringify(data); // sign exactly the bytes you send
-  const t = Math.floor(Date.now() / 1000);
-  const v1 = createHmac('sha256', SIGNING_SECRET).update(\`\${t}.\${body}\`).digest('hex');
-  const res = await fetch(BASE_URL + path, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: \`Bearer \${API_KEY}\`,
-      'X-Signature': \`t=\${t},v1=\${v1}\`,
-      'Idempotency-Key': randomUUID(), // optional: a retry with the same key is not applied twice
-    },
-    body,
-  });
-  const json = await res.json();
-  if (!res.ok) throw new Error(\`\${json.error.code}: \${json.error.message}\`);
-  return json.result;
-}
-
-console.log(await send('/contacts', {email: 'maya.patel@northwind.example', firstName: 'Maya'}));
-`,
-    },
-    {
-      key: 'php',
-      label: 'PHP',
-      code: `<?php
-// Signs and sends one request to the Data in API (PHP 7.4+ with curl).
-const BASE_URL = '${baseUrl}';
-
-function send(string $path, array $data): array
-{
-    $body = json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); // sign exactly what you send
-    $t = time();
-    $v1 = hash_hmac('sha256', $t . '.' . $body, getenv('CRM_SIGNING_SECRET'));
-    $ch = curl_init(BASE_URL . $path);
-    curl_setopt_array($ch, [
-        CURLOPT_POST => true,
-        CURLOPT_POSTFIELDS => $body,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => [
-            'Content-Type: application/json',
-            'Authorization: Bearer ' . getenv('CRM_API_KEY'),
-            'X-Signature: t=' . $t . ',v1=' . $v1,
-            'Idempotency-Key: ' . bin2hex(random_bytes(16)),
-        ],
-    ]);
-    $json = json_decode(curl_exec($ch), true);
-    $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    if ($status >= 400) {
-        throw new RuntimeException($json['error']['code'] . ': ' . $json['error']['message']);
-    }
-    return $json['result'];
-}
-
-print_r(send('/contacts', ['email' => 'maya.patel@northwind.example', 'firstName' => 'Maya']));
-`,
-    },
-    {
-      key: 'postman',
-      label: 'Postman',
-      code: `// Postman: paste into the collection's Scripts → Pre-request tab.
-// Variables: apiKey, signingSecret, baseUrl (= ${baseUrl}), in an environment
-// that is selected (top right) or in the collection's Variables tab.
-// Requests: POST {{baseUrl}}/contacts with Body → raw → JSON.
-const apiKey = (pm.variables.get('apiKey') || '').trim();
-const secret = (pm.variables.get('signingSecret') || '').trim();
-if (!apiKey || !secret) throw new Error('Set apiKey and signingSecret, and select their environment');
-const t = Math.floor(Date.now() / 1000).toString();
-const body = pm.request.body && pm.request.body.raw ? pm.variables.replaceIn(pm.request.body.raw) : '';
-const v1 = CryptoJS.HmacSHA256(t + '.' + body, secret).toString(CryptoJS.enc.Hex);
-pm.request.headers.upsert({key: 'Authorization', value: 'Bearer ' + apiKey});
-pm.request.headers.upsert({key: 'Content-Type', value: 'application/json'});
-pm.request.headers.upsert({key: 'X-Signature', value: 't=' + t + ',v1=' + v1});
-`,
-    },
-  ];
-}
-
 // ─── Admin API shapes (Settings → Webhooks → Incoming) ──────────────────────
-
-export type ApiKeyRow = {
-  id: string;
-  name: string;
-  prefix: string;
-  createdBy: {id: string; name: string; active: boolean} | null;
-  createdAt: string;
-  lastUsedAt: string | null;
-  revokedAt: string | null;
-};
-
-export type DataInOverview = {
-  baseUrl: string;
-  secret: {masked: string; rotatedAt: string | null};
-  rateLimit: number;
-  keys: ApiKeyRow[];
-  stats: {day: number; failed: number};
-};
 
 export type DataInRecord = {entity: 'contact' | 'company' | 'deal' | 'ticket' | 'list' | 'note' | 'interaction' | 'event'; id: string; label: string};
 
@@ -550,7 +398,7 @@ export type DataInLogRow = {
   errorCode: string | null;
   error: string | null;
   durationMs: number;
-  key: {id: string | null; name: string | null; prefix: string | null};
+  key: {name: string | null; prefix: string | null};
   idempotencyKey: string | null;
   replayed: boolean;
   records: DataInRecord[];
