@@ -5,7 +5,7 @@ import {z} from 'zod';
 import type {Prisma} from '../../../generated/prisma/client';
 import type {AppContext, AppEnv} from '../kit/guards';
 import {intParam, notFound, ownerScope, shownLink, valid} from '../lib/http';
-import {shownEntry, titleSearch} from '../lib/shown-activity';
+import {shownEntry, titleSearch, withShownAttendees} from '../lib/shown-activity';
 import {userSelect} from '../lib/users';
 
 const GROUPS: Record<string, string[]> = {
@@ -101,7 +101,7 @@ export const timeline = new Hono<AppEnv>()
     return c.json({
       // An entry's other record (a deal on a contact's feed) shows only when this person may open it,
       // and its stored title is replaced when it names a record they can't (AUDIT-2 L-2).
-      rows: page.map((a) => ({...shownEntry(a, scope), contact: shownLink(a.contact, scope), deal: shownLink(a.deal, scope), email: a.refId ? byId.get(a.refId) ?? null : null})),
+      rows: await withShownAttendees(c.var.db, page.map((a) => ({...shownEntry(a, scope), contact: shownLink(a.contact, scope), deal: shownLink(a.deal, scope), email: a.refId ? byId.get(a.refId) ?? null : null})), scope),
       nextCursor: rows.length > q.take ? page[page.length - 1]!.createdAt.toISOString() : null,
     });
   },

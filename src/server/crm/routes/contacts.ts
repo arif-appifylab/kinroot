@@ -11,7 +11,7 @@ import {cleanCustom} from '../lib/custom-fields';
 import {forgetPairs, queueDuplicateCheck} from '../lib/duplicates';
 import {emit, emitMany} from '../lib/events';
 import {assertVisible, custom, fieldError, httpUrl, intParam, listQuery, notFound, optStr, optText, ownerScope, sortBy, tags, valid} from '../lib/http';
-import {ENTRY_OWNERS, exportedEntry} from '../lib/shown-activity';
+import {ENTRY_OWNERS, exportedEntry, withShownAttendeeIds, withShownAttendees} from '../lib/shown-activity';
 import {CONTACT_LIMITS, copyName} from '@/lib/record-limits';
 import {associateByDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
@@ -91,7 +91,8 @@ export async function contactWhere(db: Db, q: Record<string, string | undefined>
 }
 
 /** What one contact's JSON export holds at most of each kind (AUDIT-2 L-13). */
-const EXPORT_CAP = {notes: 2000, tasks: 2000, interactions: 2000, emails: 500, activities: 5000};
+/** A record's JSON export keeps at most this many of each kind (the most recent). */
+export const EXPORT_CAP = {notes: 2000, tasks: 2000, interactions: 2000, emails: 500, activities: 5000};
 
 export const contacts = new Hono<AppEnv>()
   .get('/', valid('query', listQuery.extend({lifecycleStage: lifecycle.optional(), source: z.string().optional(), companyId: z.string().optional(), noActivityDays: intParam(1, 36_500).optional(), listId: z.string().optional(), scoreBand: z.string().max(30).optional()})), async (c) => {
@@ -373,7 +374,8 @@ export const contacts = new Hono<AppEnv>()
         companies: {create: companies.map((l) => ({companyId: l.companyId, role: l.role, isPrimary: l.isPrimary}))},
       },
     });
-    await logActivity(c.var.db, {type: 'contact_created', title: `Cloned from ${contactName(src)}`, actorId: me.id, contactId: copy.id});
+    // No source name in the title: the copy can later belong to someone who may not see the source.
+    await logActivity(c.var.db, {type: 'contact_created', title: 'Created as a copy of another contact', data: {clonedFromId: src.id}, actorId: me.id, contactId: copy.id});
     await emit(c.var.db, 'contact.created', {recordId: copy.id, actorId: me.id, data: copy});
     await audit(c.var.db, c, {action: 'contact.cloned', entity: 'contact', recordId: copy.id, label: contactName(copy), meta: {from: src.id}});
     return c.json({contact: copy}, 201);
@@ -414,9 +416,9 @@ export const contacts = new Hono<AppEnv>()
         contact,
         notes: keep(notes, cap.notes),
         tasks: keep(tasks, cap.tasks),
-        interactions: keep(interactions, cap.interactions),
+        interactions: await withShownAttendeeIds(db, keep(interactions, cap.interactions), scope),
         emails: keep(emails, cap.emails),
-        activities: keep(activities, cap.activities).map((a) => exportedEntry(a, scope)),
+        activities: await withShownAttendees(db, keep(activities, cap.activities).map((a) => exportedEntry(a, scope)), scope),
         ...(truncated.length ? {truncated: Object.fromEntries(truncated.map((k) => [k, `the most recent ${cap[k]} only`]))} : {}),
       },
       null,

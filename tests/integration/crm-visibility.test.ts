@@ -339,6 +339,30 @@ describe.skipIf(!DATABASE_URL)('Kinroot owner-only visibility (integration, real
     }
   });
 
+  it("names no hidden contact among a meeting's attendees, and a copy never names its source", async () => {
+    // The admin logs a meeting on Ben's contact with Amy's contact attending too.
+    ok(await post(own, '/interactions', {kind: 'MEETING', title: 'Kickoff', contactId: ids.benContact, attendeeIds: [ids.contact]}), 201);
+    const rows = ok<{rows: {type: string; data: {attendees?: {id: string; name: string}[]; attendeesHidden?: number}}[]}>(await get(ben, `/timeline?contactId=${ids.benContact}`)).rows;
+    const meeting = rows.find((r) => Array.isArray(r.data?.attendees))!;
+    expect(meeting.data.attendees!.map((a) => a.id)).toEqual([ids.benContact]);
+    expect(meeting.data.attendeesHidden).toBe(1);
+    expect(JSON.stringify(rows)).not.toContain('Secret');
+    // The admin still sees everyone.
+    const adminRows = ok<{rows: {data: {attendees?: {id: string}[]}}[]}>(await get(own, `/timeline?contactId=${ids.benContact}`)).rows;
+    expect(adminRows.find((r) => Array.isArray(r.data?.attendees))!.data.attendees!.map((a) => a.id).sort()).toEqual([ids.benContact, ids.contact].sort());
+    // The JSON export keeps only the attendees Ben may see.
+    const exported = await ben.get(`${API}/contacts/${ids.benContact}/export`);
+    expect(exported.status).toBe(200);
+    expect(JSON.stringify(exported.json)).not.toContain(ids.contact);
+
+    // A copy's history says it is a copy, without the source's name.
+    const copy = ok<{company: {id: string}}>(await post(ben, `/companies/${ids.benCompany}/clone`), 201).company;
+    const copyRows = ok<{rows: {title: string; data: {clonedFromId?: string}}[]}>(await get(ben, `/timeline?companyId=${copy.id}`)).rows;
+    const created = copyRows.find((r) => r.data?.clonedFromId)!;
+    expect(created.title).toBe('Created as a copy of another company');
+    expect(created.title).not.toContain('Ben Co');
+  });
+
   it('answers validation failures 422 with every field error (P2-32), checks links (P2-13) and numbers (P2-18)', async () => {
     const res = await post(amy, '/contacts', {firstName: '', email: 'not-an-email', linkedin: 'javascript:alert(1)'});
     expect(res.status).toBe(422);

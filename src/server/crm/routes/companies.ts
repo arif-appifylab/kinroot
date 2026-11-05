@@ -10,7 +10,8 @@ import {cleanCustom} from '../lib/custom-fields';
 import {forgetPairs, queueDuplicateCheck} from '../lib/duplicates';
 import {emit, emitMany} from '../lib/events';
 import {custom, fieldError, httpUrl, listQuery, notFound, optStr, optText, ownerScope, sortBy, tags, valid} from '../lib/http';
-import {ENTRY_OWNERS, exportedEntry} from '../lib/shown-activity';
+import {ENTRY_OWNERS, exportedEntry, withShownAttendeeIds, withShownAttendees} from '../lib/shown-activity';
+import {EXPORT_CAP} from './contacts';
 import {COMPANY_LIMITS, copyName} from '@/lib/record-limits';
 import {adoptContactsForDomain} from '../lib/domains';
 import {notify, recordLink} from '../lib/notify';
@@ -267,7 +268,8 @@ export const companies = new Hono<AppEnv>()
     const {id: _id, createdAt: _c, updatedAt: _u, lastActivityAt: _l, domain: _d, ...fields} = src;
     // Domain stays with the original so email-domain matching remains unambiguous.
     const copy = await c.var.db.company.create({data: {...fields, custom: src.custom as Prisma.InputJsonValue, tags: strings(src.tags), name: copyName(src.name, L.name), lastActivityAt: new Date()}});
-    await logActivity(c.var.db, {type: 'company_created', title: `Cloned from ${src.name}`, actorId: me.id, companyId: copy.id});
+    // No source name in the title: the copy can later belong to someone who may not see the source.
+    await logActivity(c.var.db, {type: 'company_created', title: 'Created as a copy of another company', data: {clonedFromId: src.id}, actorId: me.id, companyId: copy.id});
     await emit(c.var.db, 'company.created', {recordId: copy.id, actorId: me.id, data: copy});
     await audit(c.var.db, c, {action: 'company.cloned', entity: 'company', recordId: copy.id, label: copy.name, meta: {from: src.id}});
     return c.json({company: copy}, 201);
@@ -282,13 +284,31 @@ export const companies = new Hono<AppEnv>()
       include: {owner: {select: userSelect}, contacts: {where: {contact: scope}, include: {contact: true}}, deals: {where: scope, include: {stage: true}}},
     });
     if (!company) throw notFound('Company');
+    // Bounded like the contact export: the most recent EXPORT_CAP of each kind, oldest first, and
+    // `truncated` names what was cut.
+    const cap = EXPORT_CAP;
     const [notes, tasks, interactions, activities] = await Promise.all([
-      db.note.findMany({where: {companyId: id}, orderBy: {createdAt: 'asc'}}),
-      db.task.findMany({where: {companyId: id}, orderBy: {createdAt: 'asc'}}),
-      db.interaction.findMany({where: {companyId: id}, orderBy: {occurredAt: 'asc'}}),
-      db.activity.findMany({where: {companyId: id}, orderBy: {createdAt: 'asc'}, select: {type: true, title: true, data: true, createdAt: true, contactId: true, companyId: true, dealId: true, ...ENTRY_OWNERS}}),
+      db.note.findMany({where: {companyId: id}, orderBy: {createdAt: 'desc'}, take: cap.notes + 1}),
+      db.task.findMany({where: {companyId: id}, orderBy: {createdAt: 'desc'}, take: cap.tasks + 1}),
+      db.interaction.findMany({where: {companyId: id}, orderBy: {occurredAt: 'desc'}, take: cap.interactions + 1}),
+      db.activity.findMany({where: {companyId: id}, orderBy: {createdAt: 'desc'}, take: cap.activities + 1, select: {type: true, title: true, data: true, createdAt: true, contactId: true, companyId: true, dealId: true, ...ENTRY_OWNERS}}),
     ]);
-    const body = JSON.stringify({exportedAt: new Date().toISOString(), company, notes, tasks, interactions, activities: activities.map((a) => exportedEntry(a, scope))}, null, 2);
+    const parts = {notes, tasks, interactions, activities};
+    const truncated = (Object.keys(parts) as (keyof typeof parts)[]).filter((k) => parts[k].length > cap[k]);
+    const keep = <T>(rows: T[], n: number) => rows.slice(0, n).reverse();
+    const body = JSON.stringify(
+      {
+        exportedAt: new Date().toISOString(),
+        company,
+        notes: keep(notes, cap.notes),
+        tasks: keep(tasks, cap.tasks),
+        interactions: await withShownAttendeeIds(db, keep(interactions, cap.interactions), scope),
+        activities: (await withShownAttendees(db, keep(activities, cap.activities).map((a) => exportedEntry(a, scope)), scope)),
+        ...(truncated.length ? {truncated: Object.fromEntries(truncated.map((k) => [k, `the most recent ${cap[k]} only`]))} : {}),
+      },
+      null,
+      2,
+    );
     const slug = company.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     await audit(db, c, {action: 'export.json', entity: 'company', recordId: id, label: company.name});
     return new Response(body, {headers: {'content-type': 'application/json; charset=utf-8', 'content-disposition': `attachment; filename="company-${slug}.json"`}});

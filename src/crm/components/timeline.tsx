@@ -523,7 +523,7 @@ function InteractionItem({activity}: {activity: Activity}) {
             </dd>
           </div>
         )}
-        {d.attendees.length > 0 && (
+        {(d.attendees.length > 0 || !!d.attendeesHidden) && (
           <div className="col-span-2">
             <dt className="text-muted-foreground">Attendees</dt>
             <dd className="inline-flex flex-wrap items-center gap-1 font-medium text-slate-800">
@@ -531,9 +531,15 @@ function InteractionItem({activity}: {activity: Activity}) {
               {d.attendees.map((p, i) => (
                 <span key={p.id}>
                   <Link to="/contacts/$contactId" params={{contactId: p.id}} className="hover:text-primary">{p.name}</Link>
-                  {i < d.attendees.length - 1 ? ',' : ''}
+                  {i < d.attendees.length - 1 || d.attendeesHidden ? ',' : ''}
                 </span>
               ))}
+              {!!d.attendeesHidden && (
+                <span className="font-normal text-muted-foreground">
+                  {d.attendees.length ? 'and ' : ''}
+                  {d.attendeesHidden} other{d.attendeesHidden === 1 ? '' : 's'}
+                </span>
+              )}
             </dd>
           </div>
         )}

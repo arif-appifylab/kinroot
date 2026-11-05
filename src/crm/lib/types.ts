@@ -125,6 +125,8 @@ export type InteractionSnapshot = {
   location: string | null;
   occurredAt: string;
   attendees: {id: string; name: string}[];
+  /** Attendees this person may not see (owner-only visibility): counted, never named. */
+  attendeesHidden?: number;
 };
 
 export type ActivityComment = {id: string; body: string; createdAt: string; authorId: string | null; author: UserLite | null};

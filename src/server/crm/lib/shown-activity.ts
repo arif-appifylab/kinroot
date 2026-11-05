@@ -1,4 +1,6 @@
 import type {Prisma} from '../../../generated/prisma/client';
+import type {Db} from '../kit/db';
+import {strings} from './json-list';
 
 /**
  * Timeline entries as a person may see them (AUDIT-2 L-2). An entry's `title` was written when it
@@ -126,4 +128,46 @@ export function shownEntry<T extends EntryLinks & {type: string; title: string; 
 export function exportedEntry<T extends EntryLinks & {type: string; title: string; data: Prisma.JsonValue; createdAt: Date}>(a: T, scope: {ownerId?: string}) {
   const s = shownEntry(a, scope);
   return {type: s.type, title: s.title, data: s.data, createdAt: s.createdAt};
+}
+
+// ─── Meeting attendees ───────────────────────────────────────────────────────
+
+/** Of these contact ids, the ones this person may see (null: all of them, no owner-only visibility). */
+async function visibleContacts(db: Db, ids: string[], scope: {ownerId?: string}): Promise<Set<string> | null> {
+  if (!scope.ownerId) return null;
+  const unique = [...new Set(ids)];
+  if (!unique.length) return new Set();
+  const rows = await db.contact.findMany({where: {id: {in: unique}, ownerId: scope.ownerId}, select: {id: true}});
+  return new Set(rows.map((r) => r.id));
+}
+
+type Attendee = {id: string; name: string};
+const attendeesOf = (data: Prisma.JsonValue | undefined): Attendee[] | null => {
+  const list = data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>).attendees : null;
+  return Array.isArray(list) ? list.filter((a): a is Attendee => !!a && typeof (a as Attendee).id === 'string') : null;
+};
+
+/**
+ * Meeting entries keep a snapshot of their attendees' names (`data.attendees`). Under owner-only
+ * visibility, attendees this person may not see are left out and only counted (`attendeesHidden`),
+ * so a meeting on a visible record never names another member's contacts. One query for the page.
+ */
+export async function withShownAttendees<T extends {data?: Prisma.JsonValue}>(db: Db, entries: T[], scope: {ownerId?: string}): Promise<T[]> {
+  if (!scope.ownerId) return entries;
+  const visible = await visibleContacts(db, entries.flatMap((e) => attendeesOf(e.data)?.map((a) => a.id) ?? []), scope);
+  if (!visible) return entries;
+  return entries.map((e) => {
+    const list = attendeesOf(e.data);
+    if (!list) return e;
+    const shown = list.filter((a) => visible.has(a.id));
+    if (shown.length === list.length) return e;
+    return {...e, data: {...(e.data as Record<string, unknown>), attendees: shown, attendeesHidden: list.length - shown.length} as Prisma.JsonValue};
+  });
+}
+
+/** Interactions in an export: only the attendee ids this person may see. One query for all of them. */
+export async function withShownAttendeeIds<T extends {attendeeIds: Prisma.JsonValue}>(db: Db, rows: T[], scope: {ownerId?: string}): Promise<T[]> {
+  const visible = await visibleContacts(db, rows.flatMap((r) => strings(r.attendeeIds)), scope);
+  if (!visible) return rows;
+  return rows.map((r) => ({...r, attendeeIds: strings(r.attendeeIds).filter((id) => visible.has(id))}));
 }

@@ -8,6 +8,8 @@ changed yet.
 
 **Status (5 Nov):** all fixed: 39 done (L-13's custom date triggers accepted, with the reason on its row). Plus the owner's requests at the end.
 
+**Found in the last review, fixed (5 Nov):** the company JSON export is capped like the contact export (most recent 2000 notes / tasks / meetings, 5000 entries, `truncated` says what was cut); a meeting's attendees that the viewer may not see are left out and only counted ("and 2 others") on the timeline and in exports; a copied contact or company's history says "Created as a copy of another…" instead of naming the source (`tests/integration/crm-visibility.test.ts`).
+
 Checked and fine (summary of the reviewers' "no finding" areas): managed files identical to the
 template; every route guarded, viewers can't write, admin areas admin-only; owner scope in the `where`
 for records, attachments, search, reports, exports (except where listed); no unsafe SQL, no array binds;
